@@ -21,6 +21,12 @@ disabled. This is an unofficial implementation and is not affiliated with,
 endorsed by, or supported by Siemens AG. Test against an isolated controller
 before using it in production or safety-relevant environments.
 
+Some older PLCs advertise only their SessionKey family instead of a complete
+public-key fingerprint. The synchronous `Client` tries the bounded set of
+bundled keys from that family on fresh sessions and caches the confirmed key
+for the PLC. Set `allow_legacy_key_fallback=False` on `connect()` when key
+probing must be disabled.
+
 ## Development
 
 ```bash
