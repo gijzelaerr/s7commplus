@@ -28,7 +28,6 @@ python -m pip install -e '.[test]'
 pytest
 ruff check s7commplus tests
 ruff format --check s7commplus tests
-mypy s7commplus tests
 ```
 
 The session-authentication implementation derives from HarpoS7; its MIT

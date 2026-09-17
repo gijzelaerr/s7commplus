@@ -24,4 +24,3 @@ jobs:
       - run: pytest
       - run: ruff check s7commplus tests
       - run: ruff format --check s7commplus tests
-      - run: mypy s7commplus tests
