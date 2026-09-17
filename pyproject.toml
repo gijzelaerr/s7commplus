@@ -36,7 +36,14 @@ Repository = "https://github.com/gijzelaerr/s7commplus"
 Issues = "https://github.com/gijzelaerr/s7commplus/issues"
 
 [tool.setuptools.package-data]
-s7commplus = ["py.typed", "session_auth/**/*.bin", "zlib_dicts/*.xml"]
+s7commplus = [
+    "py.typed",
+    "session_auth/**/*.bin",
+    "session_auth/ARCHITECTURE.md",
+    "session_auth/LICENSE-HarpoS7",
+    "session_auth/artifacts.json",
+    "zlib_dicts/*.xml",
+]
 
 [tool.setuptools.packages.find]
 include = ["s7commplus*"]
