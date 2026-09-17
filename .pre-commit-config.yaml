@@ -1,0 +1,39 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.bin$'
+      - id: end-of-file-fixer
+        exclude: '\.bin$'
+      - id: check-ast
+      - id: check-shebang-scripts-are-executable
+      - id: check-json
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-xml
+        exclude: ^s7commplus/zlib_dicts/
+      - id: check-yaml
+      - id: check-illegal-windows-names
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: check-builtin-literals
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: detect-private-key
+      - id: forbid-submodules
+      - id: mixed-line-ending
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: 'v1.19.1'
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-setuptools, types-click]
+        files: ^s7commplus
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 'v0.14.10'
+    hooks:
+      - id: ruff
+      - id: ruff-format
+exclude: "s7commplus/protocol.py"

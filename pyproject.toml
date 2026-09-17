@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "s7commplus"
+version = "0.1.0"
+description = "Pure Python S7CommPlus client and server emulator for Siemens S7-1200/1500 PLCs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Gijs Molenaar", email = "gijsmolenaar@gmail.com"}]
+keywords = ["s7commplus", "s7", "siemens", "plc", "industrial-automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Hardware",
+]
+dependencies = ["cryptography>=41"]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio", "pytest-cov", "hypothesis", "mypy", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/gijzelaerr/s7commplus"
+Repository = "https://github.com/gijzelaerr/s7commplus"
+Issues = "https://github.com/gijzelaerr/s7commplus/issues"
+
+[tool.setuptools.package-data]
+s7commplus = ["py.typed", "session_auth/**/*.bin", "zlib_dicts/*.xml"]
+
+[tool.setuptools.packages.find]
+include = ["s7commplus*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "conformance: protocol conformance tests",
+    "e2e: end-to-end tests requiring a real PLC connection",
+]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
