@@ -41,6 +41,10 @@ s7commplus = ["py.typed", "session_auth/**/*.bin", "zlib_dicts/*.xml"]
 [tool.setuptools.packages.find]
 include = ["s7commplus*"]
 
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
