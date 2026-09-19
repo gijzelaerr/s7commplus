@@ -160,8 +160,10 @@ class TestClientServerIntegration:
         client = S7CommPlusClient()
         client.connect("127.0.0.1", port=TEST_PORT)
         try:
-            # LIDs are (1-based offset, size): temperature at 0, pressure at 4
-            results = client.read_symbolic_multi([(0x8A0E0001, [1, 4]), (0x8A0E0001, [5, 4])])
+            # LIDs are (ClassicBlob marker, 0-based offset, size): temperature at 0, pressure at 4
+            results = client.read_symbolic_multi(
+                [(0x8A0E0001, [Ids.LID_OMS_STB_CLASSIC_BLOB, 0, 4]), (0x8A0E0001, [Ids.LID_OMS_STB_CLASSIC_BLOB, 4, 4])]
+            )
             assert len(results) == 2
             assert results[0] is not None and results[1] is not None
             assert abs(struct.unpack(">f", results[0])[0] - 23.5) < 0.001
@@ -381,7 +383,7 @@ class TestAsyncClientServerIntegration:
             await client.connect("127.0.0.1", port=TEST_PORT)
             # Write 4 bytes to DB1 via symbolic access (access_area for DB1)
             access_area = 0x8A0E0001
-            await client.write_symbolic(access_area, [1, 4], struct.pack(">f", 55.5))
+            await client.write_symbolic(access_area, [Ids.LID_OMS_STB_CLASSIC_BLOB, 0, 4], struct.pack(">f", 55.5))
             # Read back via db_read to verify
             data = await client.db_read(1, 0, 4)
             value = struct.unpack(">f", data)[0]
