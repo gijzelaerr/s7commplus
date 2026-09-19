@@ -48,8 +48,13 @@ s7commplus = [
 [tool.setuptools.packages.find]
 include = ["s7commplus*"]
 
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
     "conformance: protocol conformance tests",
