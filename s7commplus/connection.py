@@ -284,20 +284,26 @@ def _set_s7_groups(ctx: ssl.SSLContext) -> None:
     )
 
 
-def _verify_v3_hmac(protected: bytes, session_key: bytes) -> bytes:
+def _verify_v3_hmac(protected: bytes, verifier: bytes | hmac.HMAC) -> bytes:
     """Verify and remove the V3 HMAC prefix from application data."""
-    from .error import S7ConnectionError
+    from .error import S7IntegrityError
 
     if not protected:
-        raise S7ConnectionError("Empty V3 frame")
+        raise S7IntegrityError("Empty authenticated V3 frame")
     digest_length = protected[0]
-    if digest_length != hashlib.sha256().digest_size or len(protected) < 1 + digest_length:
-        raise S7ConnectionError(f"Invalid V3 HMAC length: {digest_length}")
+    if digest_length != hashlib.sha256().digest_size:
+        raise S7IntegrityError(f"Invalid V3 HMAC digest length: {digest_length}")
+    if len(protected) < 1 + digest_length:
+        raise S7IntegrityError("Truncated V3 HMAC digest")
     received_digest = protected[1 : 1 + digest_length]
     application_data = protected[1 + digest_length :]
-    expected_digest = hmac.new(session_key[:24], application_data, hashlib.sha256).digest()
+    if isinstance(verifier, bytes):
+        expected_digest = hmac.new(verifier[:24], application_data, hashlib.sha256).digest()
+    else:
+        verifier.update(application_data)
+        expected_digest = verifier.digest()
     if not hmac.compare_digest(received_digest, expected_digest):
-        raise S7ConnectionError("Invalid V3 HMAC")
+        raise S7IntegrityError("S7CommPlus response integrity check failed")
     return bytes(application_data)
 
 
@@ -946,6 +952,11 @@ class S7CommPlusConnection:
         self._notification_frames.clear()
         self._iso_conn.disconnect()
 
+    def _invalidate_integrity_failure(self) -> None:
+        """Discard authenticated state without writing to an untrusted stream."""
+        self._session_ready = False
+        self.disconnect()
+
     def send_request(self, function_code: int, payload: bytes = b"", integrity_tail: int = 4, reassemble: bool = False) -> bytes:
         """Serialize one request/response exchange on the connection."""
         with self._request_lock:
@@ -1066,15 +1077,25 @@ class S7CommPlusConnection:
         version, data_length, consumed = decode_header(response_frame)
         logger.debug(f"  Frame header: version=V{version}, data_length={data_length}, header_size={consumed}")
 
+        if self._session_key is not None and version != ProtocolVersion.V3:
+            from .error import S7IntegrityError
+
+            self._invalidate_integrity_failure()
+            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
+
         response = response_frame[consumed : consumed + data_length]
 
         # V3 responses have a hash-length byte + HMAC prefix before the payload.
         if version == ProtocolVersion.V3:
-            if self._session_key is None:
-                from .error import S7ConnectionError
+            from .error import S7ConnectionError, S7IntegrityError
 
+            if self._session_key is None:
                 raise S7ConnectionError("V3 response received without a session key")
-            response = _verify_v3_hmac(response, self._session_key)
+            try:
+                response = _verify_v3_hmac(response, self._session_key)
+            except S7IntegrityError:
+                self._invalidate_integrity_failure()
+                raise
             logger.debug("  V3 HMAC verified")
 
         logger.debug(f"  Response data ({len(response)} bytes): {response.hex(' ')}")
@@ -1112,6 +1133,23 @@ class S7CommPlusConnection:
 
         return resp_payload
 
+    def _verified_incoming_data(self, frame: bytes) -> bytes:
+        """Return application data after authenticating the complete frame."""
+        from .error import S7IntegrityError
+
+        version, data_length, consumed = decode_header(frame)
+        data = bytes(frame[consumed : consumed + data_length])
+        if self._session_key is None:
+            return data
+        if version != ProtocolVersion.V3:
+            self._invalidate_integrity_failure()
+            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
+        try:
+            return _verify_v3_hmac(data, self._session_key)
+        except S7IntegrityError:
+            self._invalidate_integrity_failure()
+            raise
+
     def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
         """Receive the next response, queueing notifications and consuming non-fatal SystemEvents."""
         from .error import S7ConnectionError, S7ProtocolError
@@ -1129,16 +1167,17 @@ class S7CommPlusConnection:
                 if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
                     raise S7ProtocolError("Too many S7CommPlus SystemEvents while waiting for a response")
                 continue
-            if data_length < 10:
+            data = self._verified_incoming_data(response_frame)
+            if len(data) < 10:
                 return response_frame
-            opcode = _incoming_frame_opcode(response_frame)
+            opcode = data[0]
             if opcode == Opcode.NOTIFICATION:
                 self._notification_frames.append(response_frame)
                 continue
             if opcode not in (Opcode.RESPONSE, Opcode.RESPONSE2):
                 raise S7ProtocolError(f"Unexpected S7CommPlus opcode 0x{opcode:02X} while waiting for a response")
             if expected_sequence is not None:
-                sequence = _incoming_response_sequence(response_frame)
+                sequence = int.from_bytes(data[7:9], "big")
                 if _is_stale_response_sequence(sequence, expected_sequence):
                     stale_responses += 1
                     logger.warning(
@@ -1176,7 +1215,8 @@ class S7CommPlusConnection:
 
             raise S7ConnectionError("Not connected")
         frame = self._notification_frames.popleft() if self._notification_frames else self._recv_s7_data()
-        if not self._is_notification_frame(frame):
+        data = self._verified_incoming_data(frame)
+        if not data or data[0] != Opcode.NOTIFICATION:
             from .error import S7ConnectionError
 
             raise S7ConnectionError("Expected an S7CommPlus notification")
@@ -1196,7 +1236,7 @@ class S7CommPlusConnection:
         of every fragment until the trailer is seen. Works for single-PDU responses
         too (one fragment immediately followed by the trailer).
         """
-        from .error import S7ConnectionError
+        from .error import S7ConnectionError, S7IntegrityError
 
         buf = bytearray(initial_data)
 
@@ -1216,6 +1256,11 @@ class S7CommPlusConnection:
             if buf[0] != 0x72:
                 raise S7ConnectionError("Expected S7CommPlus fragment header (0x72)")
             fragment_version = buf[1]
+            if self._session_key is not None and fragment_version != ProtocolVersion.V3:
+                self._invalidate_integrity_failure()
+                raise S7IntegrityError(
+                    f"Authenticated response used unauthenticated frame version V{fragment_version}; reconnect"
+                )
             if expected_version is None:
                 expected_version = fragment_version
             elif fragment_version != expected_version:
@@ -1238,7 +1283,13 @@ class S7CommPlusConnection:
             fragment_data = bytes(buf[:frag_len])
             del buf[:frag_len]
             if fragment_version == ProtocolVersion.V3:
-                fragment_data = self._verify_v3_hmac(fragment_data, digest_state)
+                if digest_state is None:
+                    raise S7ConnectionError("V3 response received without a session key")
+                try:
+                    fragment_data = _verify_v3_hmac(fragment_data, digest_state)
+                except S7IntegrityError:
+                    self._invalidate_integrity_failure()
+                    raise
             data.extend(fragment_data)
             fragments += 1
             if fragments > self._MAX_REASSEMBLED_FRAGMENTS or len(data) > self._MAX_REASSEMBLED_BYTES:
