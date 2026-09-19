@@ -748,9 +748,11 @@ class TestReassembledPayload:
     def test_v3_session_key_hmac_is_stripped_from_each_fragment(self) -> None:
         conn = self._conn_yielding([])
         conn._session_key = bytes(24)
+        digest_state = hmac.new(conn._session_key, digestmod=hashlib.sha256)
 
         def v3_frag(data: bytes) -> bytes:
-            digest = hmac.new(conn._session_key, data, hashlib.sha256).digest()
+            digest_state.update(data)
+            digest = digest_state.digest()
             protected = bytes([len(digest)]) + digest + data
             return bytes([0x72, ProtocolVersion.V3, 0, len(protected)]) + protected
 
