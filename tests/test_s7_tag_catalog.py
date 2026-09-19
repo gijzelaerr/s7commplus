@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from snap7.error import S7ConnectionError
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.catalog import ArrayDimension, SymbolCatalog, SymbolicTag
 from s7commplus.client import S7CommPlusClient, _build_multi_symbolic_write_payload
+from s7commplus.error import S7ConnectionError
 from s7commplus.protocol import DataType, ProtocolVersion
 from s7commplus.typeinfo import Softdatatype
 from s7commplus.vlq import encode_uint32_vlq, encode_uint64_vlq
