@@ -242,7 +242,7 @@ def _parse_source_part(part: ET.Element, seen: set[int]) -> list[Member]:
     return members
 
 
-def _build_member(m: ET.Element, section: str, subparts: list, seen: set[int]) -> Member:
+def _build_member(m: ET.Element, section: str, subparts: list[ET.Element], seen: set[int]) -> Member:
     """Build a :class:`Member`, expanding a structured type via ``SubPartIndex``."""
     member = Member(
         name=m.get("Name", ""),

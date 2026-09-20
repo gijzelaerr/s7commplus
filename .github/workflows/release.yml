@@ -1,0 +1,60 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: >-
+          python -c "import os, pathlib, tomllib; version = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'];
+          tag = os.environ['RELEASE_TAG']; assert tag == f'v{version}', f'release tag {tag!r} does not match package version v{version}'"
+      - run: python -m pip install '.[test,docs]' build twine
+      - run: pytest
+      - run: mypy s7commplus
+      - run: ruff check s7commplus tests
+      - run: ruff format --check s7commplus tests
+      - run: sphinx-build -W --keep-going -b html docs docs/_build/html
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Verify wheel contents
+        run: >-
+          python -c "import glob, zipfile; names = zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist();
+          required = ('s7commplus/py.typed', 's7commplus/session_auth/LICENSE-HarpoS7');
+          assert all(item in names for item in required); assert any(item.endswith('.bin') for item in names);
+          assert any(item.startswith('s7commplus/zlib_dicts/') and item.endswith('.xml') for item in names)"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish:
+    name: Publish distribution to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/s7commplus
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

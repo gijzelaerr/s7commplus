@@ -129,7 +129,7 @@ def _wstring(value: str) -> bytes:
     return encode_uint32_vlq(len(encoded)) + encoded
 
 
-def _udint_array(values: list[int], flags: int = 0x20) -> bytes:
+def _udint_array(values: Sequence[int], flags: int = 0x20) -> bytes:
     return (
         bytes([flags, DataType.UDINT]) + encode_uint32_vlq(len(values)) + b"".join(encode_uint32_vlq(value) for value in values)
     )
@@ -397,19 +397,19 @@ def _decode_associated_value(blob: _Blob) -> object | None:
         if root_id == _SOFTDATATYPE_CHAR:
             return value[:1].decode("latin-1", errors="replace")
         if root_id == _SOFTDATATYPE_SINT:
-            return struct.unpack(">b", value)[0]
+            return int(struct.unpack(">b", value)[0])
         if root_id in (_SOFTDATATYPE_WORD, _SOFTDATATYPE_UINT):
-            return struct.unpack(">H", value)[0]
+            return int(struct.unpack(">H", value)[0])
         if root_id == _SOFTDATATYPE_INT:
-            return struct.unpack(">h", value)[0]
+            return int(struct.unpack(">h", value)[0])
         if root_id in (_SOFTDATATYPE_DWORD, _SOFTDATATYPE_UDINT):
-            return struct.unpack(">I", value)[0]
+            return int(struct.unpack(">I", value)[0])
         if root_id == _SOFTDATATYPE_DINT:
-            return struct.unpack(">i", value)[0]
+            return int(struct.unpack(">i", value)[0])
         if root_id == _SOFTDATATYPE_REAL:
-            return struct.unpack(">f", value)[0]
+            return float(struct.unpack(">f", value)[0])
         if root_id == _SOFTDATATYPE_LREAL:
-            return struct.unpack(">d", value)[0]
+            return float(struct.unpack(">d", value)[0])
         if root_id == _SOFTDATATYPE_WCHAR:
             return value[:2].decode("utf-16-be", errors="replace")
     except (IndexError, struct.error):

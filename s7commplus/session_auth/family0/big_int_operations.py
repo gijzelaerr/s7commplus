@@ -22,6 +22,8 @@ FINALIZE_DESTINATION_SIZE = 0x06 * 4
 FINALIZE_SOURCE_SIZE = 0x05 * 4
 
 _U32 = 0xFFFFFFFF
+ReadableBuffer = bytes | bytearray | memoryview
+WritableBuffer = bytearray | memoryview
 
 
 def _carry_helper(a: int, b: int) -> int:
@@ -34,15 +36,15 @@ def _carry_helper(a: int, b: int) -> int:
     return 1 if (a & _U32) < (b & _U32) else 0
 
 
-def _to_uints(buf: bytes | bytearray, count: int) -> list[int]:
+def _to_uints(buf: ReadableBuffer, count: int) -> list[int]:
     return list(struct.unpack(f"<{count}I", bytes(buf[: count * 4])))
 
 
-def _write_uints(buf: bytearray, values: list[int]) -> None:
+def _write_uints(buf: WritableBuffer, values: list[int]) -> None:
     struct.pack_into(f"<{len(values)}I", buf, 0, *(v & _U32 for v in values))
 
 
-def prepare(destination: bytearray, source: bytes) -> None:
+def prepare(destination: WritableBuffer, source: ReadableBuffer) -> None:
     """Prepare 6 source uints into 5 destination uints.
 
     Reads 24 bytes from ``source`` (six little-endian uint32s) and
@@ -96,7 +98,7 @@ def prepare(destination: bytearray, source: bytes) -> None:
     _write_uints(destination, dst)
 
 
-def finalize(destination: bytearray, source: bytes) -> None:
+def finalize(destination: WritableBuffer, source: ReadableBuffer) -> None:
     """Finalize 5 source uints into 6 destination uints.
 
     Reads 20 bytes from ``source`` (five uint32s) and writes 24
@@ -123,7 +125,7 @@ def finalize(destination: bytearray, source: bytes) -> None:
     _write_uints(destination, dst)
 
 
-def prepare_finalize(buffer: bytearray) -> None:
+def prepare_finalize(buffer: WritableBuffer) -> None:
     """In-place ``Prepare`` followed by ``Finalize`` on the same buffer.
 
     Reads 6 uints from ``buffer`` and writes 6 uints back, fusing the
@@ -175,7 +177,7 @@ def prepare_finalize(buffer: bytearray) -> None:
     _write_uints(buffer, out)
 
 
-def rotate_right_30(buffer: bytearray) -> None:
+def rotate_right_30(buffer: WritableBuffer) -> None:
     """Rotate the 6-uint buffer right by 30 bits."""
     ds = _to_uints(buffer, 6)
     ds[5] = (ds[4] >> 0x1E) & _U32
@@ -185,7 +187,7 @@ def rotate_right_30(buffer: bytearray) -> None:
     _write_uints(buffer, ds)
 
 
-def rotate_left_31(buffer: bytearray) -> None:
+def rotate_left_31(buffer: WritableBuffer) -> None:
     """Rotate the leading 4 uints left by 31 bits with a custom
     polynomial reduction on overflow."""
     ds = _to_uints(buffer, 4)

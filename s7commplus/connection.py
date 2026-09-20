@@ -51,6 +51,7 @@ from types import TracebackType
 from typing import Any, Optional, Type
 
 from .transport import ISOTCPConnection
+from .session_auth.keys import KeyFamily
 
 from .codec import decode_header, encode_header, encode_object_qualifier, parse_create_object_attributes
 from .legitimation import (
@@ -114,7 +115,7 @@ def _incoming_response_sequence(frame: bytes) -> int:
         data = data[1 + hash_length :]
     if len(data) < 10:
         raise S7ConnectionError("Response too short")
-    return struct.unpack_from(">H", data, 7)[0]
+    return int(struct.unpack_from(">H", data, 7)[0])
 
 
 def _is_stale_response_sequence(sequence: int, expected_sequence: int) -> bool:
@@ -208,7 +209,7 @@ def _system_event_return_value(payload: bytes) -> Optional[int]:
         raise S7ProtocolError(f"Malformed S7CommPlus SystemEvent Struct: {payload.hex()}")
 
     offset = 24  # fixed-width PValue header + Struct id
-    scalar_sizes = {
+    scalar_sizes: dict[int, int] = {
         DataType.BOOL: 1,
         DataType.USINT: 1,
         DataType.UINT: 2,
@@ -532,7 +533,7 @@ class S7CommPlusConnection:
         # HMAC packet integrity after authentication.
         self._session_key: Optional[bytes] = None
         self._session_auth_public_key: bytes = b""
-        self._session_auth_family: int = 0
+        self._session_auth_family = KeyFamily.S7_1500
 
         # V2+ IntegrityId tracking
         self._integrity_id_read: int = 0
@@ -935,7 +936,7 @@ class S7CommPlusConnection:
         self._session_challenge = None
         self._session_key = None
         self._session_auth_public_key = b""
-        self._session_auth_family = 0
+        self._session_auth_family = KeyFamily.S7_1500
         self._with_integrity_id = False
         self._integrity_id_read = 0
         self._integrity_id_write = 0
@@ -1697,7 +1698,6 @@ class S7CommPlusConnection:
             from .error import S7ConnectionError
 
             raise S7ConnectionError("Post-auth legitimation failed: no session key")
-
         legit_blob = solve_legitimate_challenge_real_plc(
             legit_challenge,
             self._session_auth_public_key,

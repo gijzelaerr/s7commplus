@@ -26,8 +26,16 @@ before using it in production or safety-relevant environments.
 ```bash
 python -m pip install -e '.[test]'
 pytest
+mypy s7commplus
 ruff check s7commplus tests
 ruff format --check s7commplus tests
+```
+
+Documentation is built by Read the Docs and validated in CI:
+
+```bash
+python -m pip install -e '.[docs]'
+sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
 The session-authentication implementation derives from HarpoS7; its MIT

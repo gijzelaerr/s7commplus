@@ -108,7 +108,8 @@ integration test pass.
 Install the project and development tools:
 
 ```bash
-python -m pip install -e '.[test]'
+python -m pip install -e '.[test,docs]'
+python -m pip install build twine
 ```
 
 Run the complete local check before every commit:
@@ -118,8 +119,16 @@ pytest
 mypy s7commplus
 ruff check s7commplus tests
 ruff format --check s7commplus tests
+sphinx-build -W --keep-going -b html docs docs/_build/html
+python -m build
+twine check dist/*
 pre-commit run --all-files
 ```
+
+GitHub Releases whose tags match the package version (for example, `v0.1.0`
+for version `0.1.0`) publish the validated wheel and source distribution to
+PyPI through trusted publishing. The ``pypi`` GitHub environment and the PyPI
+trusted publisher must both be configured before the first release.
 
 Useful focused commands:
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import struct
+from typing import cast
 
 from ._generated import monolith1, monolith2, monolith8, monolith11
 from . import transform7, transform13
@@ -30,7 +31,7 @@ def _monolith1_loop(buf: bytearray) -> None:
         result = monolith1.execute(buf, bytes(src))
 
 
-def execute(destination: bytearray, public_key: bytes, transform1: bytes) -> None:
+def execute(destination: bytearray | memoryview, public_key: bytes, transform1: bytes) -> None:
     if len(destination) < DESTINATION_SIZE:
         raise ValueError(f"destination too small ({len(destination)}, need {DESTINATION_SIZE})")
     if len(public_key) < PUBLIC_KEY_LENGTH:
@@ -65,14 +66,14 @@ def execute(destination: bytearray, public_key: bytes, transform1: bytes) -> Non
     # We allocate 92 bytes so it can also serve as Monolith11 destination
     m8_buf = bytearray(20 + 72)
     m8v = memoryview(m8_buf)
-    monolith8.execute(m8v[20:], bytes(t7_dst))
+    monolith8.execute(cast(bytearray, m8v[20:]), bytes(t7_dst))
 
     # Monolith11: src=120 bytes, dst=20 bytes
     m11_src = bytearray(0x1E * 4)
     m11v = memoryview(m11_src)
 
     # Transform13 output → m11_src[0x3C:]
-    transform13.execute(m11v[0x3C:], bytes(m8_buf[20:]))
+    transform13.execute(cast(bytearray, m11v[0x3C:]), bytes(m8_buf[20:]))
 
     # transform1 data → m11_src[0:0x3C]
     m11_src[:0x3C] = transform1[:0x3C]
