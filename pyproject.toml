@@ -29,7 +29,7 @@ dependencies = ["cryptography>=41"]
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio", "pytest-cov", "hypothesis", "mypy", "ruff"]
-docs = ["sphinx>=7.2"]
+docs = ["sphinx>=7.2", "furo>=2024.8.6"]
 
 [project.urls]
 Homepage = "https://github.com/gijzelaerr/s7commplus"

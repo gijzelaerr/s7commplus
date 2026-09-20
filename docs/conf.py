@@ -8,5 +8,12 @@ extensions = [
 ]
 
 autodoc_typehints = "description"
-html_theme = "alabaster"
+autodoc_member_order = "bysource"
+html_theme = "furo"
+html_title = "s7commplus documentation"
+html_theme_options = {
+    "source_repository": "https://github.com/gijzelaerr/s7commplus/",
+    "source_branch": "master",
+    "source_directory": "docs/",
+}
 exclude_patterns = ["_build"]
