@@ -574,7 +574,7 @@ def _tcom_size(obj: PObject | None) -> int:
     if not raw or len(raw) < 4:
         # Stored big-endian u32; pad/parse defensively.
         return int.from_bytes(raw, "big") if raw else 0
-    return struct.unpack_from(">I", raw, 0)[0]
+    return int(struct.unpack_from(">I", raw, 0)[0])
 
 
 def _find_type_object(objects: list[PObject], relation_id: int) -> PObject | None:

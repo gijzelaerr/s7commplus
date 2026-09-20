@@ -15,16 +15,18 @@ from . import big_int_operations as _bio
 DESTINATION_SIZE = _bio.FINALIZE_DESTINATION_SIZE
 #: Operands are always 6 uints (24 bytes) — input to ``prepare``.
 SOURCE_SIZE = _bio.PREPARE_SOURCE_SIZE
+ReadableBuffer = bytes | bytearray | memoryview
+WritableBuffer = bytearray | memoryview
 
 
-def _prepared(buf: bytes) -> bytes:
+def _prepared(buf: ReadableBuffer) -> bytes:
     """Run ``prepare`` and return the 20-byte result."""
     out = bytearray(_bio.PREPARE_DESTINATION_SIZE)
     _bio.prepare(out, buf)
     return bytes(out)
 
 
-def _to_int(buf: bytes) -> int:
+def _to_int(buf: ReadableBuffer) -> int:
     return int.from_bytes(buf, byteorder="little", signed=False)
 
 
@@ -63,7 +65,7 @@ def _final_compress(buf: bytearray) -> None:
     buf[:4] = leading.to_bytes(4, byteorder="little", signed=False)
 
 
-def _finalize_compressed(buf: bytearray, destination: bytearray) -> None:
+def _finalize_compressed(buf: bytearray, destination: WritableBuffer) -> None:
     """Run two compression passes plus an optional FinalCompress, then
     Finalize."""
     needs_more, length = _compress(buf)
@@ -76,7 +78,7 @@ def _finalize_compressed(buf: bytearray, destination: bytearray) -> None:
     _bio.finalize(destination, bytes(buf))
 
 
-def big_int_addition(destination: bytearray, source1: bytes, source2: bytes) -> None:
+def big_int_addition(destination: WritableBuffer, source1: ReadableBuffer, source2: ReadableBuffer) -> None:
     """``BigIntAddition.Execute`` — destination = source1 + source2 (mod p)."""
     if len(destination) < DESTINATION_SIZE:
         raise ValueError(f"destination must be at least {DESTINATION_SIZE} bytes")
@@ -128,7 +130,7 @@ def _signed_byte_count(value: int) -> int:
     return max(1, ((-value - 1).bit_length() + 8) // 8)
 
 
-def big_int_subtraction(destination: bytearray, minuend: bytes, subtrahend: bytes) -> None:
+def big_int_subtraction(destination: WritableBuffer, minuend: ReadableBuffer, subtrahend: ReadableBuffer) -> None:
     """``BigIntSubtraction.Execute`` — destination = minuend - subtrahend.
 
     Mirrors the upstream's quirky negative-result handling: subtract an
@@ -167,7 +169,7 @@ def big_int_subtraction(destination: bytearray, minuend: bytes, subtrahend: byte
     _bio.finalize(destination, bytes(diff_bytes[:diff_length]))
 
 
-def big_int_multiplication(destination: bytearray, source1: bytes, source2: bytes) -> None:
+def big_int_multiplication(destination: WritableBuffer, source1: ReadableBuffer, source2: ReadableBuffer) -> None:
     """``BigIntMultiplication.Execute`` — destination = source1 * source2."""
     if len(destination) < DESTINATION_SIZE:
         raise ValueError(f"destination must be at least {DESTINATION_SIZE} bytes")
@@ -182,7 +184,7 @@ def big_int_multiplication(destination: bytearray, source1: bytes, source2: byte
     _finalize_compressed(buf, destination)
 
 
-def big_int_square(destination: bytearray, source: bytes) -> None:
+def big_int_square(destination: WritableBuffer, source: ReadableBuffer) -> None:
     """``BigIntSquare.Execute`` — destination = source ** 2."""
     if len(destination) < DESTINATION_SIZE:
         raise ValueError(f"destination must be at least {DESTINATION_SIZE} bytes")

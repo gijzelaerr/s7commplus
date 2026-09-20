@@ -408,7 +408,8 @@ class S7CommPlusAsyncClient:
         self._tls_active = True
 
         try:
-            self._oms_secret = self._ssl_object.export_keying_material("EXPERIMENTAL_OMS", 32, None)
+            exporter = getattr(self._ssl_object, "export_keying_material")
+            self._oms_secret = bytes(exporter("EXPERIMENTAL_OMS", 32, None))
             logger.debug("OMS exporter secret extracted from TLS session")
         except (AttributeError, ssl.SSLError) as e:
             logger.warning(f"Could not extract OMS exporter secret: {e}")

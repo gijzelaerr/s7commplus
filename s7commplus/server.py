@@ -413,7 +413,7 @@ class S7CommPlusServer:
                 tls["in"].write(raw)
                 while True:
                     try:
-                        return tls["obj"].read(65536)
+                        return bytes(tls["obj"].read(65536))
                     except ssl.SSLWantReadError:
                         more = self._recv_s7commplus_frame(client_sock)
                         if more is None:

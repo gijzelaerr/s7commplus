@@ -52,7 +52,7 @@ class RealPlcAuthenticator:
 
     def write_metadata(
         self,
-        blob: bytearray,
+        blob: bytearray | memoryview,
         public_key: bytes,
         family: KeyFamily,
     ) -> int:
@@ -60,7 +60,7 @@ class RealPlcAuthenticator:
             raise ValueError(f"{family.name} is not supported by this authenticator")
         return write_metadata(blob, public_key, bytes(self._key2), family)
 
-    def write_seed(self, blob: bytearray, public_key: bytes) -> int:
+    def write_seed(self, blob: bytearray | memoryview, public_key: bytes) -> int:
         t1 = bytearray(pre_seed_transform.DESTINATION_SIZE)
         pre_seed_transform.execute(t1, bytes(self._key1))
         seed_transform.execute(blob, public_key, bytes(t1))
@@ -72,7 +72,7 @@ class RealPlcAuthenticator:
 
         return offset
 
-    def encrypt_full_blocks(self, blob: bytearray, challenge: bytes) -> int:
+    def encrypt_full_blocks(self, blob: bytearray | memoryview, challenge: bytes) -> int:
         offset = 0
 
         # Copy starting IV
@@ -102,7 +102,7 @@ class RealPlcAuthenticator:
 
         return offset
 
-    def encrypt_final_block(self, blob: bytearray) -> int:
+    def encrypt_final_block(self, blob: bytearray | memoryview) -> int:
         leftover = self.key2_leftover_length
         leftover_start = len(self._key2) - leftover
 
@@ -157,7 +157,7 @@ class RealPlcAuthenticator:
     def _aes_ecb_encrypt(self, plaintext: bytes) -> bytes:
         cipher = Cipher(algorithms.AES(bytes(self._challenge_key)), modes.ECB())
         enc = cipher.encryptor()
-        return enc.update(plaintext[:16]) + enc.finalize()
+        return bytes(enc.update(plaintext[:16]) + enc.finalize())
 
     def _update_checksum(self, ct_block: bytes) -> None:
         self._checksum = bytearray(_xor_bytes(bytes(self._checksum), ct_block[:16]))

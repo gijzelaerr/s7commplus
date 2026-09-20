@@ -87,7 +87,7 @@ def get_public_key_flags(family: KeyFamily) -> int:
 
 
 def write_metadata(
-    blob: bytearray,
+    blob: bytearray | memoryview,
     public_key: bytes,
     symmetric_key: bytes,
     family: KeyFamily,
