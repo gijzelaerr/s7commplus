@@ -1803,17 +1803,17 @@ class S7CommPlusConnection:
         logger.debug(f"=== SetupSession === sending ({len(frame)} bytes): {frame.hex(' ')}")
         self._send_s7_data(frame)
 
-        # Receive response
-        response_frame = self._recv_s7_data()
+        # Session setup can receive a SystemEvent before the reply. Route it
+        # through the same dispatcher as ordinary requests so a fatal event
+        # cannot be mistaken for a successful SetMultiVariables response.
+        response_frame = self._recv_response_frame(seq_num)
         logger.debug(f"=== SetupSession === received ({len(response_frame)} bytes): {response_frame.hex(' ')}")
 
         version, data_length, consumed = decode_header(response_frame)
         response = response_frame[consumed : consumed + data_length]
-
         if len(response) < 10:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("SetupSession response too short")
+        _validate_response_header(response, FunctionCode.SET_MULTI_VARIABLES, seq_num)
 
         resp_func = struct.unpack_from(">H", response, 3)[0]
         logger.debug(f"SetupSession response: function=0x{resp_func:04X}")

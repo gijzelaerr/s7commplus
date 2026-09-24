@@ -1424,6 +1424,58 @@ class TestSessionKeyDescriptors:
 
 
 class TestAtomicSessionSetup:
+    @pytest.mark.parametrize("negotiated_version", [ProtocolVersion.V1, ProtocolVersion.V2])
+    def test_setup_request_preserves_existing_wire_layout(self, negotiated_version: ProtocolVersion) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._protocol_version = negotiated_version
+        conn._session_id = 7
+        conn._server_session_version = bytes.fromhex("000401")
+        conn._try_session_key_auth = MagicMock(return_value=None)
+        conn._send_s7_data = MagicMock()
+        response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.SET_MULTI_VARIABLES, 0, 0, 0x34)
+        conn._recv_s7_data = MagicMock(
+            return_value=encode_header(ProtocolVersion.V2, len(response) + 1) + response + b"\x00" + bytes.fromhex("72020000")
+        )
+
+        assert conn._setup_session()
+        qualifier = (
+            "000004e88969001200000000896a001300896b000400000000"
+            if negotiated_version == ProtocolVersion.V1
+            else "000004e88969001200000000896a001300896b00040000"
+        )
+        request = bytes.fromhex("310000054200000000000000073400000007010182320100040100" + qualifier + "00000000")
+        conn._send_s7_data.assert_called_once_with(
+            encode_header(ProtocolVersion.V2, len(request)) + request + bytes.fromhex("72020000")
+        )
+
+    def test_fatal_system_event_during_setup_is_not_success(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._protocol_version = ProtocolVersion.V1
+        conn._session_id = 7
+        conn._server_session_version = bytes.fromhex("000401")
+        conn._try_session_key_auth = MagicMock(return_value=None)
+        conn._send_s7_data = MagicMock()
+        fatal = bytes(16) + bytes.fromhex("0000001700009d6c")
+        fatal += struct.pack(">I", 40305) + bytes.fromhex("00000009") + (-1).to_bytes(8, "big", signed=True)
+        conn._recv_s7_data = MagicMock(return_value=encode_header(ProtocolVersion.SYSTEM_EVENT, len(fatal)) + fatal)
+
+        with pytest.raises(S7ProtocolError, match="Fatal S7CommPlus SystemEvent"):
+            conn._setup_session()
+        assert not conn._session_setup_ok
+
+    def test_unrelated_response_cannot_complete_setup(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._protocol_version = ProtocolVersion.V1
+        conn._session_id = 7
+        conn._server_session_version = bytes.fromhex("000401")
+        conn._try_session_key_auth = MagicMock(return_value=None)
+        conn._send_s7_data = MagicMock()
+        response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 0, 0x34) + b"\x00"
+        conn._recv_s7_data = MagicMock(return_value=encode_header(ProtocolVersion.V2, len(response)) + response)
+
+        with pytest.raises(S7ProtocolError, match="Response function mismatch"):
+            conn._setup_session()
+
     def test_rejected_setup_does_not_activate_generated_key(self) -> None:
         from s7commplus.session_auth.keys import KeyFamily, get_public_key
 
