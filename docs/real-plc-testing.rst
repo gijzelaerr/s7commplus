@@ -84,3 +84,24 @@ PLC configuration changes—not merely with age.
 For a release candidate, prioritize both an S7-1200 and S7-1500 on representative
 firmware and security modes. Hosted CI covers supported Python versions without
 hardware; real-PLC evidence stays in issues.
+
+Field notes for hardware sessions
+---------------------------------
+
+Two wire behaviors worth knowing before debugging against real hardware,
+from independent TIA Portal capture analysis against a PLCSIM S7-1500:
+
+SystemEvent frames (protocol byte 0x72 with version byte 0xFE) show up in two
+shapes. A short frame with no payload content is an end of stream marker for
+the current response. A content bearing frame is a real event, for example the
+diagnostic slot tables an S7-1500 pushes after a diagnostic subscription
+create or after the final session teardown. Response collection should only
+treat the short shape as a terminator, otherwise it truncates valid responses
+that arrive behind such an event.
+
+Expect the PLC to push traffic you did not ask for while a subscription
+exists. A fresh S7-1500 session with the diagnostic subscription registered
+produces CPU state notifications on one rid and event state notifications on
+another, plus SystemEvents around session lifecycle changes. A capture tool
+that only pairs requests with responses will show these as unsolicited noise.
+They are normal.
