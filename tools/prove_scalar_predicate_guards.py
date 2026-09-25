@@ -16,6 +16,7 @@ import operator
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from types import CodeType
 from typing import Any
 
 from tools import predict_scalar_defects as predictor
@@ -28,10 +29,27 @@ WIDTH = 162  # Signed sums/differences of uint160 values fit without overflow.
 
 def compile_guard(z3: Any, name: str, inputs: dict[str, Any], module: ModuleType = predictor) -> Any:
     """Compile the actual tiny Python guard AST, rejecting unfamiliar syntax."""
-    tree = ast.parse(inspect.getsource(getattr(module, name)))
+    target = getattr(module, name)
+    tree = ast.parse(inspect.getsource(target))
     function = tree.body[0]
     if not isinstance(function, ast.FunctionDef) or not isinstance(function.body[-1], ast.Return):
         raise ValueError("guard must be a function ending in return")
+    # inspect can read an edited file beneath an already imported function.
+    # Never certify that new AST as though it were the loaded runtime code.
+    compiled = compile(tree, inspect.getsourcefile(target) or "<guard>", "exec", dont_inherit=True)
+    candidates = [value for value in compiled.co_consts if isinstance(value, CodeType) and value.co_name == function.name]
+    runtime = target.__code__
+    if len(candidates) != 1:
+        raise ValueError("predicate source/runtime mismatch")
+    source = candidates[0]
+    if (
+        function.name != runtime.co_name
+        or source.co_code != runtime.co_code
+        or source.co_names != runtime.co_names
+        or source.co_varnames != runtime.co_varnames
+        or tuple((type(value), value) for value in source.co_consts) != tuple((type(value), value) for value in runtime.co_consts)
+    ):
+        raise ValueError("predicate source/runtime mismatch; reload after editing source")
     body = function.body
     if isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
         body = body[1:]
@@ -43,6 +61,18 @@ def compile_guard(z3: Any, name: str, inputs: dict[str, Any], module: ModuleType
             return inputs[node.id]
         if isinstance(node, ast.Name) and node.id == "MODULUS":
             return getattr(module, "MODULUS")
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in inputs
+            and not node.args
+            and not node.keywords
+            and z3.is_bool(inputs[node.func.id])
+        ):
+            # A declared zero-argument Boolean callback is represented by
+            # its result. This checks the returned predicate, not Python
+            # short-circuit execution or callback side effects.
+            return inputs[node.func.id]
         if isinstance(node, ast.Constant) and type(node.value) is int:
             return node.value
         if (
