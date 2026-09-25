@@ -680,7 +680,9 @@ def skip_typed_value(data: bytes, offset: int, datatype: int, flags: int) -> int
             offset = skip_typed_value(data, offset, sub_type, sub_flags)
         return offset
     else:
-        # Unknown type — can't skip reliably.
+        # Unknown type, cannot skip reliably. Callers stop walking here. When
+        # this fires on real traffic, capture the frame: a new datatype shows
+        # up first as a gap in this function.
         return offset
 
 

@@ -513,7 +513,12 @@ def parse_alarm_notification(frame: bytes, language_ids: Sequence[LanguageId | i
         raise ValueError("Expected S7CommPlus notification opcode")
     offset = 1
     subscription_id = struct.unpack_from(">I", data, offset)[0]
-    offset += 10  # subscription id plus three unknown UInt16 fields
+    # Three u16 after the subscription id. Independent TIA captures show the
+    # constant pattern 04 00 00 00 00 00 (first u16 = 4, then two zeros) on
+    # two different subscription objects, so it is a marker, not a counter.
+    # The grammar after these bytes differs between alarm notifications and
+    # event/data notifications; see docs/subscriptions-alarms.rst.
+    offset += 10
     credit_tick = data[offset]
     offset += 1
     sequence_number, offset = _read_vlq32(data, offset)
