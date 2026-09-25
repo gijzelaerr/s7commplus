@@ -211,6 +211,7 @@ _S7_PREFERRED_GROUPS = ("X25519",)
 
 _MAX_SYSTEM_EVENTS_PER_RESPONSE = 16
 _MAX_STALE_RESPONSES_PER_REQUEST = 16
+_MAX_QUEUED_NOTIFICATION_FRAMES = 1000
 _SYSTEM_EVENT_RETURN_VALUE_ID = 40305
 _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL = 25 * 60.0
 
@@ -589,7 +590,8 @@ class S7CommPlusConnection:
 
         # Password for post-auth legitimation (V1-initial PLCs)
         self._connect_password: str = ""
-        self._notification_frames: deque[bytes] = deque()
+        self._notification_frames: deque[bytes] = deque(maxlen=_MAX_QUEUED_NOTIFICATION_FRAMES)
+        self._notification_frame_overflows = 0
         # Reentrant because integrity failures disconnect from inside a
         # serialized request. Disconnect itself also takes this lock so a
         # renewal cannot race transport teardown.
@@ -1045,6 +1047,7 @@ class S7CommPlusConnection:
         self._integrity_id_write = 0
         self._protection_level = None
         self._notification_frames.clear()
+        self._notification_frame_overflows = 0
         self._iso_conn.disconnect()
 
     def _invalidate_integrity_failure(self) -> None:
@@ -1116,6 +1119,30 @@ class S7CommPlusConnection:
         """Serialize one request/response exchange on the connection."""
         with self._request_lock:
             return self._send_request(function_code, payload, integrity_tail, reassemble)
+
+    def send_subscription_credit(self, subscription_id: int, credit_limit: int) -> None:
+        """Replenish finite notification credits without waiting for a reply."""
+        if not 1 <= credit_limit <= 255:
+            raise ValueError("credit_limit must be between 1 and 255")
+        value = bytes([0x00, DataType.INT]) + struct.pack(">h", credit_limit)
+        payload = _build_set_variable_payload(subscription_id, Ids.SUBSCRIPTION_CREDIT_LIMIT, value)
+        with self._request_lock:
+            if not (self._connected or self._session_ready):
+                raise S7ConnectionError("Not connected")
+            sequence = self._next_sequence_number()
+            header = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.SET_VARIABLE, 0, sequence, self._session_id, 0x74)
+            integrity = encode_uint32_vlq(self._integrity_id_write) if self._with_integrity_id else b""
+            request = header + payload[:-4] + integrity + payload[-4:]
+            version = ProtocolVersion.V3 if self._session_key is not None else self._protocol_version
+            if self._session_key is not None:
+                digest = hmac.new(self._session_key[:24], request, hashlib.sha256).digest()
+                body = b"\x20" + digest + request
+            else:
+                body = request
+            frame = encode_header(version, len(body)) + body + struct.pack(">BBH", 0x72, version, 0)
+            self._send_s7_data(frame)
+            if self._with_integrity_id:
+                self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
 
     def _send_request(self, function_code: int, payload: bytes, integrity_tail: int, reassemble: bool) -> bytes:
         """Send an S7CommPlus request and receive the response.
@@ -1327,6 +1354,8 @@ class S7CommPlusConnection:
                 return response_frame
             opcode = data[0]
             if opcode == Opcode.NOTIFICATION:
+                if len(self._notification_frames) == self._notification_frames.maxlen:
+                    self._notification_frame_overflows += 1
                 self._notification_frames.append(response_frame)
                 continue
             if opcode not in (Opcode.RESPONSE, Opcode.RESPONSE2):

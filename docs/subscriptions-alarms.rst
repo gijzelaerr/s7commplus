@@ -4,8 +4,9 @@ Subscriptions and alarms
 Data subscriptions
 ------------------
 
-The synchronous client can subscribe to symbolic variables using access
-sequences returned by ``browse``:
+Both clients subscribe to symbolic variables using access sequences from
+``browse`` or ``SymbolicTag`` objects from ``refresh_tag_catalog()``. Tags retain
+datatype and reference metadata for decoded notifications:
 
 .. code-block:: python
 
@@ -16,19 +17,48 @@ sequences returned by ``browse``:
        variables = client.browse()
        sequences = [item["access_sequence"] for item in variables[:2]]
 
-       subscription_id = client.create_subscription(sequences, cycle_ms=100)
+       subscription_id = client.create_subscription(sequences, cycle_ms=100, queue_size=100)
        try:
-           notification = client.receive_subscription_notification()
+           notification = client.receive_subscription_notification(subscription_id)
            print(notification.values)
+           print(notification.decoded_values)
            print(notification.errors)
+           print(client.subscription_diagnostics(subscription_id))
        finally:
            client.delete_subscription(subscription_id)
 
-For explicit symbol CRCs, sub-areas, or stable reference IDs, construct
-``SubscriptionItem`` instances instead of passing strings.
+Raw bytes remain in ``values``. Known scalar catalog tags are decoded in
+``decoded_values``; unknown, structured, array, and truncated values remain
+bytes. Explicit ``SubscriptionItem`` values can set symbol CRCs, sub-areas,
+and stable reference IDs.
 
-Receiving a notification blocks. Run that call in a worker appropriate for
-your application and arrange cancellation by closing the connection.
+The synchronous client also provides ``iter_subscription_notifications`` and
+callbacks. The async client provides an async iterator and a queue-like view:
+
+.. code-block:: python
+
+   from s7commplus import AsyncClient
+
+   async with AsyncClient() as client:
+       await client.connect("192.168.1.10", use_tls=True)
+       catalog = await client.refresh_tag_catalog()
+       subscription_id = await client.create_subscription(list(catalog)[:2])
+       try:
+           queue = client.subscription_queue(subscription_id)
+           notification = await queue.get(timeout=10.0)
+           print(notification.decoded_values)
+       finally:
+           await client.delete_subscription(subscription_id)
+
+Finite notification credits are replenished as updates arrive. Queue and
+sequence-loss counters are available through ``subscription_diagnostics``.
+On disconnect or reconnect, local subscriptions are cleared and must be
+created again. The synchronous receiver blocks; arrange cancellation by
+closing the connection.
+
+The PLC's DeleteObject operation targets the session subscription container.
+Deleting one data or alarm subscription therefore clears every subscription
+created by that client; recreate the others if they are still needed.
 
 Active alarms
 -------------
@@ -66,5 +96,6 @@ The asyncio alarm receiver additionally accepts a timeout:
 
    notification = await client.receive_alarm_notification(timeout=10.0)
 
-Do not run alarm and data-subscription receive loops concurrently on the same
-connection. Mixed notification dispatch is not currently supported.
+Alarm and data notifications are routed to their respective receivers when
+the client encounters them on the same connection. Keep one active receive
+loop per client so two readers do not consume the same transport stream.
