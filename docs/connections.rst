@@ -146,6 +146,44 @@ Access is refused after connection
    write every object. Check ``protection_level`` and authenticate if required.
 
 Unexpected disconnect after symbolic access
-   Some firmware resets a session after particular symbolic reads. The
-   high-level browse path retries once on a fresh connection, but applications
-   should still treat disconnects as recoverable failures.
+   Independent TIA Portal capture analysis traces a PLC reset right after
+   mixed reads, writes, or subscriptions to two request counter problems,
+   not a broken request:
+
+   1. Counter jumps. Each request carries a KeyQualifier / IntegrityId counter
+      in the payload. Reads use the read counter, writes use the write counter.
+      If a request carries a value that is ahead of the session's real counter
+      (for example a captured TIA request replayed verbatim), the PLC resets
+      the TCP connection on the spot. The library maintains both counters per
+      connection, so this only bites when raw captured payloads are replayed.
+   2. Writes on the subscription session. TIA never writes symbols over the
+      connection that carries the cyclic subscription. It opens a third short
+      lived session, writes there, and tears it down. Doing a
+      SetVarSubStreamed write on a subscription session gets the connection
+      reset even when every byte of the request is correct.
+
+   The high-level browse path retries once on a fresh connection, but
+   applications should still treat disconnects as recoverable failures.
+
+Request counters (IntegrityId)
+------------------------------
+
+For V2 and newer sessions, every request carries a running counter value in
+the payload. The library splices it in before the trailing fill bytes and
+keeps one counter per direction:
+
+- read functions (Explore, GetMultiVariables, GetVarSubStreamed) use the read
+  counter
+- write functions (SetVariable, SetMultiVariables, CreateObject, DeleteObject)
+  use the write counter
+
+The counters start at 0 on a fresh session and increment after each request.
+The PLC tracks them and rejects jumps, so never replay a captured payload with
+its captured counter value on a live session. When building payloads by hand,
+leave a 4 byte fill at the tail and let ``send_request`` splice the counter
+(the ``integrity_tail`` parameter). TIA puts the counter in the same place, so
+a correctly spliced request is byte compatible with the portal.
+
+On the wire the counter value equals TIA's KeyQualifier. In TIA captures it
+just looks bigger because the portal session has done more requests before
+yours.
