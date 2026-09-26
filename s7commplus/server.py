@@ -1168,7 +1168,11 @@ class S7CommPlusServer:
         response = bytearray()
         response += self._build_response_header(FunctionCode.GET_VAR_SUBSTREAMED, seq_num)
         response += encode_uint64_vlq(0)  # ReturnValue: success
-        response += bytes([0x00])  # protocol-defined unknown byte
+        # Byte after the ReturnValue. A golden real PLC GVS response carries a
+        # 00 here, so the emulator mirrors it. Not a constant across function
+        # codes: independent capture analysis notes a golden SetVarSubStreamed
+        # response carries 0x0d there instead.
+        response += bytes([0x00])
 
         # Return the session challenge as a USInt array, matching real PLCs.
         if self._session_challenge is not None:

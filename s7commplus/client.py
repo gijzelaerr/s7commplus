@@ -1551,7 +1551,9 @@ def _build_explore_request(explore_id: int, attribute_ids: list[int]) -> bytes:
     payload += struct.pack(">I", explore_id)  # ExploreId (fixed UInt32, not VLQ)
     payload += encode_uint32_vlq(0)  # ExploreRequestId (0 = none)
     payload += bytes([1])  # ExploreChildsRecursive
-    payload += bytes([1])  # unknown flag — the protocol always carries 1 here
+    payload += bytes([1])  # flag between ChildsRecursive and Parents. TIA
+    # sends 1 on the device tree explore and 0 on the event tree / pair
+    # explores; 1 is fine here since this always builds an attribute explore.
     payload += bytes([0])  # ExploreParents
     payload += bytes([0])  # number of following filter objects (none)
     payload += encode_uint32_vlq(len(attribute_ids))  # AddressList count

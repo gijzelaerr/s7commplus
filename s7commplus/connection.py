@@ -434,7 +434,12 @@ def _build_set_variable_payload(in_object_id: int, address: int, value: bytes) -
     payload += encode_uint32_vlq(address)
     payload += value
     payload += encode_object_qualifier()
-    payload += bytes([0x00])  # protocol-defined unknown byte
+    # Byte after the ObjectQualifier in this plain SetVariable. Real PLCs
+    # accept it (this legitimation path is field proven). Independent capture
+    # analysis notes TIA's own SetMultiVariables carries no extra byte between
+    # the KeyQualifier value and the 4 byte fill; the PLC parser tolerates
+    # both shapes.
+    payload += bytes([0x00])
     payload += struct.pack(">I", 0)  # fill; IntegrityId is inserted before it
     return payload
 
@@ -1542,7 +1547,10 @@ class S7CommPlusConnection:
         # RequestValue: ValueUDInt(0) = DatatypeFlags(0x00) + Datatype.UDInt(0x04) + VLQ(0)
         request += bytes([0x00, DataType.UDINT]) + encode_uint32_vlq(0)
 
-        # Unknown padding (always 0)
+        # u32 zero between RequestValue and the request object. Confirmed
+        # against a golden TIA session CreateObject frame from independent
+        # capture analysis: RequestId 285, ValueUDInt(0), then this u32
+        # padding, all constant 0.
         request += struct.pack(">I", 0)
 
         # RequestObject: PObject for NullServerSession
