@@ -112,7 +112,20 @@ def test_frontend_unknown_or_invalid_timeout_fails_closed() -> None:
 
 def test_loaded_function_constants_must_match_the_inspected_ast() -> None:
     function = rules.square_lift
-    constants = tuple(8 if type(value) is int and value == 7 else value for value in function.__code__.co_consts)
+    original = function.__code__.co_consts
+
+    def tamper(value: object) -> object:
+        if type(value) is int:
+            return value + 1
+        if isinstance(value, str):
+            return value + " "
+        return value
+
+    constants = tuple(tamper(value) for value in original)
+    # CPython 3.14+ loads small integer literals via LOAD_SMALL_INT, which never
+    # touches co_consts; square_lift's only always-present constant is its
+    # docstring, so tampering must not rely on an int literal surviving there.
+    assert constants != original, "no co_consts entry available to tamper with"
     stale = FunctionType(function.__code__.replace(co_consts=constants), function.__globals__, function.__name__)
     backend = Backend()
     with patch.object(rules, "square_lift", stale), pytest.raises(ValueError, match="source/runtime mismatch"):
