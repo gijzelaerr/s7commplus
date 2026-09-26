@@ -64,7 +64,9 @@ For a custom certificate setup, append paths that exist only on the test host:
    --plc-tls-ca /secure/plc-ca.pem
 
 The runner writes JUnit XML and schema-versioned JSON beneath
-``real-plc-results/``. Review both artifacts before publishing them. Add
+``real-plc-results/``. It replaces the tester machine's JUnit ``hostname``
+attribute with ``redacted`` after pytest finishes. Review both artifacts for
+other identifying or sensitive content before publishing them. Add
 ``--allow-write`` only after confirming DB2 is disposable scratch space.
 
 Result policy

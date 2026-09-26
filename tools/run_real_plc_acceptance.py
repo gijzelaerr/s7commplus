@@ -6,8 +6,18 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pytest
+
+
+def redact_junit_hostname(path: Path) -> None:
+    """Remove the tester machine name before the JUnit report is shared."""
+    tree = ET.parse(path)
+    for suite in tree.getroot().iter("testsuite"):
+        if "hostname" in suite.attrib:
+            suite.set("hostname", "redacted")
+    tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,7 +98,10 @@ def main() -> int:
         pytest_args.append("--allow-plc-write")
     if args.allow_admin:
         pytest_args.append("--allow-plc-admin")
-    return pytest.main(pytest_args)
+    result = pytest.main(pytest_args)
+    if junit.exists():
+        redact_junit_hostname(junit)
+    return result
 
 
 if __name__ == "__main__":
