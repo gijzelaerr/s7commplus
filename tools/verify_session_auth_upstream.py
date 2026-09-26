@@ -161,6 +161,17 @@ def verify(upstream_root: Path, output_dir: Path | None = None) -> list[str]:
         errors.append("upstream data mismatch: _constants.py:TRANSFORM7_DATA_HEX")
     if _shared_data() != struct.pack(f"<{len(shared_data)}I", *shared_data):
         errors.append("upstream data mismatch: SHARED_DATA")
+    from s7commplus.session_auth.keys import _PUBLIC_KEYS
+
+    for (family, key_id), value in _PUBLIC_KEYS.items():
+        relative = f"HarpoS7.PublicKeys/Keys/{int(family):02X}/{key_id}.bin"
+        try:
+            original = (upstream_root / relative).read_bytes()
+        except OSError as exc:
+            errors.append(f"cannot read upstream public key {relative}: {exc}")
+        else:
+            if original != value:
+                errors.append(f"upstream public-key mismatch: {relative}")
     return errors
 
 

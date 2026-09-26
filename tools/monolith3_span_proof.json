@@ -1,0 +1,1045 @@
+{
+  "scope": "Monolith3 virtual span: boundary=L bit 0, payload=(L>>1) mod 2^168; decoded doubled-pair equality modulo 2^168",
+  "source_sha256": "abce73deb408a12e2a3b86f6a83a37ebd9be1cb31cd8fe8b20366fffe0e6c3ad",
+  "gate_model_sha256": {
+    "monolith5_model.json": "cc850745da473531447c2460d79332e60f582217f70588c3864b268ee6f13cff",
+    "monolith5_gate_model.json": "b56f42806cc326aa9d74636960039019b69c417703e05a91a665b5469e8d7cae"
+  },
+  "z3_version": "4.16.0",
+  "translation_controls": 8,
+  "backend": "shared local integer carry columns (four-bit exact bounded encoding)",
+  "solver_budget_per_stage_ms": 10000,
+  "requested_payload_bits": 168,
+  "checked_payload_bits": 168,
+  "wrap_balance_bound_proved": true,
+  "plain_truncation_proved": true,
+  "full_proof": true,
+  "stages": [
+    {
+      "stage": "boundary_exclusive",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.000655
+    },
+    {
+      "stage": "initial_column",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025377
+    },
+    {
+      "stage": "column_1",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029433
+    },
+    {
+      "stage": "column_2",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027265
+    },
+    {
+      "stage": "column_3",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031893
+    },
+    {
+      "stage": "column_4",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028125
+    },
+    {
+      "stage": "column_5",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02659
+    },
+    {
+      "stage": "column_6",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024122
+    },
+    {
+      "stage": "column_7",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028196
+    },
+    {
+      "stage": "column_8",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031704
+    },
+    {
+      "stage": "column_9",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030432
+    },
+    {
+      "stage": "column_10",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029998
+    },
+    {
+      "stage": "column_11",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029235
+    },
+    {
+      "stage": "column_12",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027529
+    },
+    {
+      "stage": "column_13",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025705
+    },
+    {
+      "stage": "column_14",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031369
+    },
+    {
+      "stage": "column_15",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029908
+    },
+    {
+      "stage": "column_16",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036471
+    },
+    {
+      "stage": "column_17",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028458
+    },
+    {
+      "stage": "column_18",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028404
+    },
+    {
+      "stage": "column_19",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026551
+    },
+    {
+      "stage": "column_20",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032361
+    },
+    {
+      "stage": "column_21",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025271
+    },
+    {
+      "stage": "column_22",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028375
+    },
+    {
+      "stage": "column_23",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034658
+    },
+    {
+      "stage": "column_24",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026949
+    },
+    {
+      "stage": "column_25",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026796
+    },
+    {
+      "stage": "column_26",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02569
+    },
+    {
+      "stage": "column_27",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024699
+    },
+    {
+      "stage": "column_28",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028314
+    },
+    {
+      "stage": "column_29",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028838
+    },
+    {
+      "stage": "column_30",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028968
+    },
+    {
+      "stage": "column_31",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.035435
+    },
+    {
+      "stage": "column_32",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.035296
+    },
+    {
+      "stage": "column_33",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033616
+    },
+    {
+      "stage": "column_34",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029503
+    },
+    {
+      "stage": "column_35",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024761
+    },
+    {
+      "stage": "column_36",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020614
+    },
+    {
+      "stage": "column_37",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024348
+    },
+    {
+      "stage": "column_38",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021264
+    },
+    {
+      "stage": "column_39",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02198
+    },
+    {
+      "stage": "column_40",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028686
+    },
+    {
+      "stage": "column_41",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02959
+    },
+    {
+      "stage": "column_42",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02976
+    },
+    {
+      "stage": "column_43",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031305
+    },
+    {
+      "stage": "column_44",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031825
+    },
+    {
+      "stage": "column_45",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031789
+    },
+    {
+      "stage": "column_46",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022166
+    },
+    {
+      "stage": "column_47",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024644
+    },
+    {
+      "stage": "column_48",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030953
+    },
+    {
+      "stage": "column_49",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036512
+    },
+    {
+      "stage": "column_50",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030621
+    },
+    {
+      "stage": "column_51",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03362
+    },
+    {
+      "stage": "column_52",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.035085
+    },
+    {
+      "stage": "column_53",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031906
+    },
+    {
+      "stage": "column_54",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032695
+    },
+    {
+      "stage": "column_55",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027125
+    },
+    {
+      "stage": "column_56",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024034
+    },
+    {
+      "stage": "column_57",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023555
+    },
+    {
+      "stage": "column_58",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027542
+    },
+    {
+      "stage": "column_59",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023389
+    },
+    {
+      "stage": "column_60",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023552
+    },
+    {
+      "stage": "column_61",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024743
+    },
+    {
+      "stage": "column_62",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026571
+    },
+    {
+      "stage": "column_63",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034302
+    },
+    {
+      "stage": "column_64",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.037505
+    },
+    {
+      "stage": "column_65",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02866
+    },
+    {
+      "stage": "column_66",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024555
+    },
+    {
+      "stage": "column_67",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023255
+    },
+    {
+      "stage": "column_68",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025081
+    },
+    {
+      "stage": "column_69",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02726
+    },
+    {
+      "stage": "column_70",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024975
+    },
+    {
+      "stage": "column_71",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025313
+    },
+    {
+      "stage": "column_72",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025003
+    },
+    {
+      "stage": "column_73",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024691
+    },
+    {
+      "stage": "column_74",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022568
+    },
+    {
+      "stage": "column_75",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023306
+    },
+    {
+      "stage": "column_76",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024146
+    },
+    {
+      "stage": "column_77",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023587
+    },
+    {
+      "stage": "column_78",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021726
+    },
+    {
+      "stage": "column_79",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02407
+    },
+    {
+      "stage": "column_80",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023171
+    },
+    {
+      "stage": "column_81",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024007
+    },
+    {
+      "stage": "column_82",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026421
+    },
+    {
+      "stage": "column_83",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02522
+    },
+    {
+      "stage": "column_84",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025303
+    },
+    {
+      "stage": "column_85",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021393
+    },
+    {
+      "stage": "column_86",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022132
+    },
+    {
+      "stage": "column_87",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023433
+    },
+    {
+      "stage": "column_88",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024439
+    },
+    {
+      "stage": "column_89",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027897
+    },
+    {
+      "stage": "column_90",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026567
+    },
+    {
+      "stage": "column_91",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023607
+    },
+    {
+      "stage": "column_92",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025773
+    },
+    {
+      "stage": "column_93",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027852
+    },
+    {
+      "stage": "column_94",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024945
+    },
+    {
+      "stage": "column_95",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025683
+    },
+    {
+      "stage": "column_96",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025474
+    },
+    {
+      "stage": "column_97",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021062
+    },
+    {
+      "stage": "column_98",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021866
+    },
+    {
+      "stage": "column_99",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020673
+    },
+    {
+      "stage": "column_100",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023477
+    },
+    {
+      "stage": "column_101",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023694
+    },
+    {
+      "stage": "column_102",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023578
+    },
+    {
+      "stage": "column_103",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023216
+    },
+    {
+      "stage": "column_104",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025135
+    },
+    {
+      "stage": "column_105",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.0219
+    },
+    {
+      "stage": "column_106",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021911
+    },
+    {
+      "stage": "column_107",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021511
+    },
+    {
+      "stage": "column_108",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024149
+    },
+    {
+      "stage": "column_109",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.019749
+    },
+    {
+      "stage": "column_110",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023716
+    },
+    {
+      "stage": "column_111",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02619
+    },
+    {
+      "stage": "column_112",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023587
+    },
+    {
+      "stage": "column_113",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021487
+    },
+    {
+      "stage": "column_114",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024475
+    },
+    {
+      "stage": "column_115",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026153
+    },
+    {
+      "stage": "column_116",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022383
+    },
+    {
+      "stage": "column_117",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.019735
+    },
+    {
+      "stage": "column_118",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020665
+    },
+    {
+      "stage": "column_119",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022693
+    },
+    {
+      "stage": "column_120",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021948
+    },
+    {
+      "stage": "column_121",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020507
+    },
+    {
+      "stage": "column_122",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.01938
+    },
+    {
+      "stage": "column_123",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020266
+    },
+    {
+      "stage": "column_124",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020091
+    },
+    {
+      "stage": "column_125",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.019855
+    },
+    {
+      "stage": "column_126",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026617
+    },
+    {
+      "stage": "column_127",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027426
+    },
+    {
+      "stage": "column_128",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028183
+    },
+    {
+      "stage": "column_129",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032872
+    },
+    {
+      "stage": "column_130",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033923
+    },
+    {
+      "stage": "column_131",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036674
+    },
+    {
+      "stage": "column_132",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029723
+    },
+    {
+      "stage": "column_133",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026676
+    },
+    {
+      "stage": "column_134",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028517
+    },
+    {
+      "stage": "column_135",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034688
+    },
+    {
+      "stage": "column_136",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029925
+    },
+    {
+      "stage": "column_137",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027218
+    },
+    {
+      "stage": "column_138",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027022
+    },
+    {
+      "stage": "column_139",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028285
+    },
+    {
+      "stage": "column_140",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030919
+    },
+    {
+      "stage": "column_141",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027603
+    },
+    {
+      "stage": "column_142",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025988
+    },
+    {
+      "stage": "column_143",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023766
+    },
+    {
+      "stage": "column_144",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026584
+    },
+    {
+      "stage": "column_145",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029932
+    },
+    {
+      "stage": "column_146",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03043
+    },
+    {
+      "stage": "column_147",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.038608
+    },
+    {
+      "stage": "column_148",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031748
+    },
+    {
+      "stage": "column_149",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024998
+    },
+    {
+      "stage": "column_150",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026595
+    },
+    {
+      "stage": "column_151",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026898
+    },
+    {
+      "stage": "column_152",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029213
+    },
+    {
+      "stage": "column_153",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02726
+    },
+    {
+      "stage": "column_154",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029012
+    },
+    {
+      "stage": "column_155",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02652
+    },
+    {
+      "stage": "column_156",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03156
+    },
+    {
+      "stage": "column_157",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030172
+    },
+    {
+      "stage": "column_158",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026709
+    },
+    {
+      "stage": "column_159",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025839
+    },
+    {
+      "stage": "column_160",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024157
+    },
+    {
+      "stage": "column_161",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020418
+    },
+    {
+      "stage": "column_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.019784
+    },
+    {
+      "stage": "column_163",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.018471
+    },
+    {
+      "stage": "column_164",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.018772
+    },
+    {
+      "stage": "column_165",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.018794
+    },
+    {
+      "stage": "column_166",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.018495
+    },
+    {
+      "stage": "column_167",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.019666
+    },
+    {
+      "stage": "wrap_balance_bound",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.014311
+    },
+    {
+      "stage": "plain_high_bits_pair_invariant",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.000494
+    }
+  ]
+}

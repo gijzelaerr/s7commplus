@@ -18,10 +18,26 @@
   ],
   "artifacts": [
     {
+      "path": "s7commplus/session_auth/family0/_generated/__init__.py",
+      "category": "human-maintained-glue",
+      "upstream_source": "Python package boundary; not mechanically generated from upstream.",
+      "generation": "Handwritten package glue; manifest checks exact bytes.",
+      "size": 925,
+      "sha256": "5e9e86800a13af6e24ee70fb2039f45a6178f111e03a7c6646de3cd590939e41"
+    },
+    {
+      "path": "s7commplus/session_auth/family0/_generated/data/__init__.py",
+      "category": "human-maintained-glue",
+      "upstream_source": "HarpoS7.Family0/Data/SharedData.cs:Data and packaged Family-0 resources",
+      "generation": "Handwritten loaders with vendored SHARED_DATA; tools/verify_session_auth_upstream.py checks the shared literal values. Manifest checks exact bytes.",
+      "size": 3686,
+      "sha256": "3249d47435c17c666dea2dce0140a25b674796dd99920d2a07e36373b33aca23"
+    },
+    {
       "path": "s7commplus/session_auth/family0/_generated/data/_constants.py",
       "category": "generated-source-data",
-      "upstream_source": "HarpoS7 Family-0 constant collections",
-      "generation": "Mechanically converted from HarpoS7 Family-0 constant collections; regeneration tooling is not yet vendored, so checksum verification is authoritative.",
+      "upstream_source": "HarpoS7.Family0/Data/{Transform1Data,Transform7Data}.cs and HarpoS7/Fingerprint/{FingerprintConsts,ContextMutator}.cs",
+      "generation": "Extracted from pinned C# collections; tools/verify_session_auth_upstream.py verifies every value. Manifest checks exact Python bytes.",
       "size": 25016,
       "sha256": "97f356b6e9fd3ea65885a2273bfe79d58b7b766bb938bf0146bf79bde10e4ded"
     },
@@ -44,16 +60,16 @@
     {
       "path": "s7commplus/session_auth/family0/_generated/data/transform12_big_int_data.bin",
       "category": "generated-binary-data",
-      "upstream_source": "HarpoS7.Family0/Transforms/Transform12 big-integer constants",
-      "generation": "Extracted deterministically from HarpoS7 Family-0 constant collections; regeneration tooling is not yet vendored, so checksum verification is authoritative.",
+      "upstream_source": "HarpoS7.Family0/Data/Transform12Data.cs:BigIntData",
+      "generation": "Extracted from the pinned C# array; tools/verify_session_auth_upstream.py verifies exact bytes and regenerates with --output-dir.",
       "size": 18432,
       "sha256": "86cc998ecacd0a38336d91a2cab4a51e9bfcb15b48013e96f6dc588d5ba0c74b"
     },
     {
       "path": "s7commplus/session_auth/family0/_generated/data/transform12_metadata.bin",
       "category": "generated-binary-data",
-      "upstream_source": "HarpoS7.Family0/Transforms/Transform12 operation metadata",
-      "generation": "Extracted deterministically from HarpoS7 Family-0 constant collections; regeneration tooling is not yet vendored, so checksum verification is authoritative.",
+      "upstream_source": "HarpoS7.Family0/Data/Blobs/Transform12Metadata.bin",
+      "generation": "Copied byte-for-byte from the pinned upstream resource, including its trailing byte; tools/verify_session_auth_upstream.py verifies and regenerates with --output-dir.",
       "size": 243625,
       "sha256": "7ea948feba35610247a876f8251855f0c87dbbafcdc1bffebb1c3b44d66e29dd"
     },
@@ -146,6 +162,14 @@
       "sha256": "2e71af79a2d605c640679f6a8199dddafff89583ff1ebe8b6de8fcda5c0754a7"
     },
     {
+      "path": "s7commplus/session_auth/family0/_generated/nine/__init__.py",
+      "category": "human-maintained-glue",
+      "upstream_source": "Python package boundary; not mechanically generated from upstream.",
+      "generation": "Handwritten package glue; manifest checks exact bytes.",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
       "path": "s7commplus/session_auth/family0/_generated/nine/part1.py",
       "category": "generated-source",
       "upstream_source": "HarpoS7.Family0/Monoliths/Nine/Part1.cs",
@@ -234,6 +258,14 @@
       "sha256": "ee99d46920456badad30de31be7d2163334b1cbc4402966bc2e2170a5c3a3c39"
     },
     {
+      "path": "s7commplus/session_auth/family0/_generated/ten/__init__.py",
+      "category": "human-maintained-glue",
+      "upstream_source": "Python package boundary; not mechanically generated from upstream.",
+      "generation": "Handwritten package glue; manifest checks exact bytes.",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
       "path": "s7commplus/session_auth/family0/_generated/ten/part1.py",
       "category": "generated-source",
       "upstream_source": "HarpoS7.Family0/Monoliths/Ten/Part1.cs",
@@ -257,5 +289,163 @@
       "size": 249062,
       "sha256": "9ddfc61dc18ca516a135f287de37ff5aeabba0600a13d03df0c987d79ec38692"
     }
-  ]
+  ],
+  "embedded_public_keys": [
+    {
+      "fingerprint": "00:0448ACCBD5A0BFD2",
+      "size": 40,
+      "sha256": "869158302ec04bcfda0d59975947ba4b51d7f7a1dd95fabf569d367a25050870",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/0448ACCBD5A0BFD2.bin"
+    },
+    {
+      "fingerprint": "00:181B7B0847D11694",
+      "size": 40,
+      "sha256": "b9c6274c0939fa745dc962ebfc159165447ba5332cff7a5f25e7c21d0be9bf70",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/181B7B0847D11694.bin"
+    },
+    {
+      "fingerprint": "00:1B580465BB0551B2",
+      "size": 40,
+      "sha256": "16eddc493bd4c6edc6c8f8d7d80f3c2606c6f5c8470c6feef5c9c6c557dc86a5",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/1B580465BB0551B2.bin"
+    },
+    {
+      "fingerprint": "00:2C1DD211E529278D",
+      "size": 40,
+      "sha256": "2ea515c209a0bf24a0c5b8f97100b459e45263361c8411cb6cccad8bc3ca03a9",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/2C1DD211E529278D.bin"
+    },
+    {
+      "fingerprint": "00:580B8A122D42D1C0",
+      "size": 40,
+      "sha256": "1b127a1049edec36e265f8ee1959d87190b0d9317f0cc10e029c9c74be3d2b90",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/580B8A122D42D1C0.bin"
+    },
+    {
+      "fingerprint": "00:60CDAAA33E0B5D20",
+      "size": 40,
+      "sha256": "c05abd2d5e71ce5ab6b415f9cd04a360e6c3c36ceeeb7639f3d755a4aa36530a",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/60CDAAA33E0B5D20.bin"
+    },
+    {
+      "fingerprint": "00:65227E2580029B7F",
+      "size": 40,
+      "sha256": "3b2ad3ba86936ca60707c75479c5fe4d3836d4807e3bde6f7ac8c349c9d34a98",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/65227E2580029B7F.bin"
+    },
+    {
+      "fingerprint": "00:6BA412F7F1D965AA",
+      "size": 40,
+      "sha256": "7796acc916787529a052d5499256fc2e31d4879457ffd4e1a8b611b3b3fa255c",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/6BA412F7F1D965AA.bin"
+    },
+    {
+      "fingerprint": "00:99E4632334CC7993",
+      "size": 40,
+      "sha256": "59421adabc56807e97db6f2da5a231ff300ea303b01ea498ea3a210c2067273e",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/99E4632334CC7993.bin"
+    },
+    {
+      "fingerprint": "00:ACD68E9BF9901F8B",
+      "size": 40,
+      "sha256": "02895a1d0748483cb166eb5baf4018c94ba4468306f51872c2ee7c6c8d6db880",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/ACD68E9BF9901F8B.bin"
+    },
+    {
+      "fingerprint": "00:C4F47B876DA76D52",
+      "size": 40,
+      "sha256": "cce1127d03109845cf28d924526c66fcf02c4ee5ebace1afd6d546aa98552fc5",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/C4F47B876DA76D52.bin"
+    },
+    {
+      "fingerprint": "00:D3F9CD55A57FE4EB",
+      "size": 40,
+      "sha256": "01f1a578d01cfa887e95abac9b73e1ff4a1f296d62ef7af78829d4673b841b31",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/D3F9CD55A57FE4EB.bin"
+    },
+    {
+      "fingerprint": "00:E69E7A996524AFAC",
+      "size": 40,
+      "sha256": "e3fc5c317e7963583510f0cfb99e31cf5045e28fd0bc921bb5db59e13ef26a4b",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/00/E69E7A996524AFAC.bin"
+    },
+    {
+      "fingerprint": "01:A95850575DF7B3DE",
+      "size": 40,
+      "sha256": "d48a22d89b779d17ea5e6f1ba46c6a7fa3ba3d1a1894ed337e613ad76961b4ef",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/01/A95850575DF7B3DE.bin"
+    },
+    {
+      "fingerprint": "01:AC9BE476CB324E65",
+      "size": 40,
+      "sha256": "4b188dff7fc60b925e046b0d87a30cd3bae2b27ef90ecc1d448db4c5db8845e9",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/01/AC9BE476CB324E65.bin"
+    },
+    {
+      "fingerprint": "01:BD426B091F08731A",
+      "size": 40,
+      "sha256": "269b2d139b1ea9e3db852c3a9c54cd7b80e8b300ec7dd76d209727ec946d63ab",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/01/BD426B091F08731A.bin"
+    },
+    {
+      "fingerprint": "03:09013727CCBFBF3C",
+      "size": 64,
+      "sha256": "1f33751f8d6b22e43572c7e6ae2c95396e2f1f106edb7f2f3af1669af62a078b",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/09013727CCBFBF3C.bin"
+    },
+    {
+      "fingerprint": "03:4964E2F77A386F64",
+      "size": 64,
+      "sha256": "ced2829786715761d371166c126b48d03965edd62df7ab74007567bc53077915",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/4964E2F77A386F64.bin"
+    },
+    {
+      "fingerprint": "03:5A9B6B015F48D284",
+      "size": 64,
+      "sha256": "fe64ca4c6ebbd6fae3838978a680419aa6a44548a85ac3f9617a45b186576f42",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/5A9B6B015F48D284.bin"
+    },
+    {
+      "fingerprint": "03:950840E428F7C7FA",
+      "size": 64,
+      "sha256": "72956aa142a6fb0b269dc142b7a753afb1ce595d890ade12e7a6dcc67ebf93c6",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/950840E428F7C7FA.bin"
+    },
+    {
+      "fingerprint": "03:AE5147B429BBA96C",
+      "size": 64,
+      "sha256": "162599b469c75ab24ac5aec1f6984d013d583d79a76c931cb40cbd3296b97f02",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/AE5147B429BBA96C.bin"
+    },
+    {
+      "fingerprint": "03:B07654AC9CAA4ACA",
+      "size": 64,
+      "sha256": "5bcca1e3df0c980893f9ed223acccb0f8d16c7aa0c488aba79fc21bf9fbc46c9",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/B07654AC9CAA4ACA.bin"
+    },
+    {
+      "fingerprint": "03:CE331E08538A26B9",
+      "size": 64,
+      "sha256": "528ad0abde7770f5b72f28c04bb5d6ee27fbfc5a31a6b8674dca11b81dcafe0e",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/CE331E08538A26B9.bin"
+    },
+    {
+      "fingerprint": "03:D61B355B59D711A9",
+      "size": 64,
+      "sha256": "d5d72e59ffb91caf47365244d0e0b9b267c6ad54710124bf6bc9156747bd6074",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/D61B355B59D711A9.bin"
+    },
+    {
+      "fingerprint": "03:E90B455D3CC46013",
+      "size": 64,
+      "sha256": "00fe71da2ef75f7089274891f6a173ffe803427e6aed5428c38f11518f57955c",
+      "upstream_source": "HarpoS7.PublicKeys/Keys/03/E90B455D3CC46013.bin"
+    }
+  ],
+  "binary_formats": {
+    "fp_data1.bin": "20 little-endian uint32 lengths followed by concatenated little-endian uint16 arrays.",
+    "fp_data2.bin": "20 little-endian uint32 lengths followed by concatenated little-endian uint16 arrays; includes the pinned repair.",
+    "transform12_big_int_data.bin": "768 canonical 24-byte packed integer rows; six little-endian uint32 lanes per row.",
+    "transform12_metadata.bin": "60,906 complete little-endian uint32 opcode words and one retained trailing byte; see tools/decompile_transform12.py."
+  }
 }

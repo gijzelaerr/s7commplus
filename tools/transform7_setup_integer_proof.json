@@ -1,0 +1,172 @@
+{
+  "scope": "input-only exact representatives of setup slots 46/48/70/94 for every legal unsigned-160-bit X/Y/R; runtime unchanged",
+  "dependencies": {
+    "carry_save": {
+      "file": "monolith_carry_save_proof.json",
+      "sha256": "748812aba552af04418842f5e110ceedc47e1b5c767c246a156b8047fef7494b",
+      "scope": "all 1012 individual source obligations; solver-run record, not a certificate"
+    },
+    "setup_invariant": {
+      "file": "transform7_setup_invariant_proof.json",
+      "sha256": "b4d9ec77afbfd07cadf29fb2899fc7f11c074601fdc1d986ef2716063d1ff477",
+      "scope": "all 23 calls satisfy the upper encoding/range premises"
+    },
+    "decoded_addition": {
+      "file": "monolith4_carry_proof.json",
+      "sha256": "a7645e358e52e2b63245f07a712d814ade7f20d6fa58d20e7d3e0171d84c34d1",
+      "scope": "complete decoded local-carry kernel theorem; solver-run record, not a certificate"
+    }
+  },
+  "source_sha256": {
+    "integer_model": "07a5d6ef84244a67f037fe3a6b4a786c9ee6693143819d9e3aaf027318ad0c8a",
+    "merge_wrapper": "19b4dfe5f11f175add7626cf5f527fe70e91108cbd4ccf96455fce95004d7eea",
+    "span_decoder": "fb0692dd4e45339ac3866547a2df53366d5f606c13503915308fe3083e0c6f18",
+    "shared_integer_model": "a450c74e99068a00768e992a69562ce0b5da80f642a31b5e6475d6a45139d82e"
+  },
+  "merge_model_sha256": "ed129fb2f49f89b08fdc57d0a81e2aadc1d67d3e58a683b7a81ac7b6c482becc",
+  "method": "individual generated-source bit theorems, inherited reachable premises, symbolic recipe provenance, and source-derived exact prepare/merge equations",
+  "final_carry_correction_retained": true,
+  "slot94_exact_representative": "X",
+  "full_setup_model_established": true,
+  "topology_checks": [
+    {
+      "call": 0,
+      "monolith": 3,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": true
+    },
+    {
+      "call": 1,
+      "monolith": 3,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": true
+    },
+    {
+      "call": 2,
+      "monolith": 3,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": true
+    },
+    {
+      "call": 3,
+      "monolith": 3,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": true
+    },
+    {
+      "call": 4,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 5,
+      "monolith": 5,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 6,
+      "monolith": 3,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": true
+    },
+    {
+      "call": 7,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 8,
+      "monolith": 6,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 9,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 10,
+      "monolith": 6,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 11,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 12,
+      "monolith": 6,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 13,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 14,
+      "monolith": 6,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 15,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 16,
+      "monolith": 5,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 17,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 18,
+      "monolith": 6,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 19,
+      "monolith": 4,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 20,
+      "monolith": 5,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    },
+    {
+      "call": 21,
+      "monolith": 3,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": true
+    },
+    {
+      "call": 22,
+      "monolith": 5,
+      "encoded_provenance_checked": true,
+      "plain_expression_checked": false
+    }
+  ],
+  "limits": "solver-run/compositional accounting, not an independently checked certificate, whole Transform7 rewrite, or new hardware validation"
+}

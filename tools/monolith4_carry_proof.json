@@ -1,0 +1,1374 @@
+{
+  "scope": "source carry induction; generalized-cone SAT is not a source counterexample",
+  "abstraction": false,
+  "backend": "Z3 SAT tactic over the unsimplified demanded-bit source DAG",
+  "stage_range": [
+    0,
+    169
+  ],
+  "solver_budget_per_stage_ms": 30000,
+  "retain_lemmas": false,
+  "source_sha256": "fbf5ff95a92e887cf4d73b129826a7405bbc779fa1bef0f4eafd5e44bfec267a",
+  "gate_model_sha256": {
+    "monolith5_model.json": "cc850745da473531447c2460d79332e60f582217f70588c3864b268ee6f13cff",
+    "monolith5_gate_model.json": "b56f42806cc326aa9d74636960039019b69c417703e05a91a665b5469e8d7cae"
+  },
+  "z3_version": "4.16.0",
+  "translation_controls": 8,
+  "proved_payload_prefix_bits": 168,
+  "full_proof": true,
+  "stages": [
+    {
+      "stage": "boundary",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.054611
+    },
+    {
+      "stage": "initial_carry",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.025633
+    },
+    {
+      "stage": "carry_0_to_1",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.028697
+    },
+    {
+      "stage": "carry_1_to_2",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.035613
+    },
+    {
+      "stage": "carry_2_to_3",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.051237
+    },
+    {
+      "stage": "carry_3_to_4",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.070994
+    },
+    {
+      "stage": "carry_4_to_5",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.090545
+    },
+    {
+      "stage": "carry_5_to_6",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.077982
+    },
+    {
+      "stage": "carry_6_to_7",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.150863
+    },
+    {
+      "stage": "carry_7_to_8",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.233618
+    },
+    {
+      "stage": "carry_8_to_9",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.355251
+    },
+    {
+      "stage": "carry_9_to_10",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.436811
+    },
+    {
+      "stage": "carry_10_to_11",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.325561
+    },
+    {
+      "stage": "carry_11_to_12",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.50362
+    },
+    {
+      "stage": "carry_12_to_13",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.420483
+    },
+    {
+      "stage": "carry_13_to_14",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.42797
+    },
+    {
+      "stage": "carry_14_to_15",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.330663
+    },
+    {
+      "stage": "carry_15_to_16",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.545319
+    },
+    {
+      "stage": "carry_16_to_17",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.777454
+    },
+    {
+      "stage": "carry_17_to_18",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.768132
+    },
+    {
+      "stage": "carry_18_to_19",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.550601
+    },
+    {
+      "stage": "carry_19_to_20",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.82468
+    },
+    {
+      "stage": "carry_20_to_21",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.789077
+    },
+    {
+      "stage": "carry_21_to_22",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.499739
+    },
+    {
+      "stage": "carry_22_to_23",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.092978
+    },
+    {
+      "stage": "carry_23_to_24",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.691023
+    },
+    {
+      "stage": "carry_24_to_25",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 0.976775
+    },
+    {
+      "stage": "carry_25_to_26",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.178561
+    },
+    {
+      "stage": "carry_26_to_27",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.122231
+    },
+    {
+      "stage": "carry_27_to_28",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.064683
+    },
+    {
+      "stage": "carry_28_to_29",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.11127
+    },
+    {
+      "stage": "carry_29_to_30",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.208447
+    },
+    {
+      "stage": "carry_30_to_31",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.058241
+    },
+    {
+      "stage": "carry_31_to_32",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.109039
+    },
+    {
+      "stage": "carry_32_to_33",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.289799
+    },
+    {
+      "stage": "carry_33_to_34",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.348237
+    },
+    {
+      "stage": "carry_34_to_35",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.100795
+    },
+    {
+      "stage": "carry_35_to_36",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.154541
+    },
+    {
+      "stage": "carry_36_to_37",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.617141
+    },
+    {
+      "stage": "carry_37_to_38",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.230498
+    },
+    {
+      "stage": "carry_38_to_39",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.348048
+    },
+    {
+      "stage": "carry_39_to_40",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.61551
+    },
+    {
+      "stage": "carry_40_to_41",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.806641
+    },
+    {
+      "stage": "carry_41_to_42",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.640017
+    },
+    {
+      "stage": "carry_42_to_43",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.840997
+    },
+    {
+      "stage": "carry_43_to_44",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.070702
+    },
+    {
+      "stage": "carry_44_to_45",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.011886
+    },
+    {
+      "stage": "carry_45_to_46",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.763778
+    },
+    {
+      "stage": "carry_46_to_47",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.714879
+    },
+    {
+      "stage": "carry_47_to_48",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 1.96546
+    },
+    {
+      "stage": "carry_48_to_49",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.218414
+    },
+    {
+      "stage": "carry_49_to_50",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.212707
+    },
+    {
+      "stage": "carry_50_to_51",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.057364
+    },
+    {
+      "stage": "carry_51_to_52",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.105081
+    },
+    {
+      "stage": "carry_52_to_53",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.182188
+    },
+    {
+      "stage": "carry_53_to_54",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.171716
+    },
+    {
+      "stage": "carry_54_to_55",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.894415
+    },
+    {
+      "stage": "carry_55_to_56",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.305314
+    },
+    {
+      "stage": "carry_56_to_57",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.223976
+    },
+    {
+      "stage": "carry_57_to_58",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.246747
+    },
+    {
+      "stage": "carry_58_to_59",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.232164
+    },
+    {
+      "stage": "carry_59_to_60",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.773033
+    },
+    {
+      "stage": "carry_60_to_61",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.36355
+    },
+    {
+      "stage": "carry_61_to_62",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.938831
+    },
+    {
+      "stage": "carry_62_to_63",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.70677
+    },
+    {
+      "stage": "carry_63_to_64",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.831397
+    },
+    {
+      "stage": "carry_64_to_65",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.935177
+    },
+    {
+      "stage": "carry_65_to_66",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.18394
+    },
+    {
+      "stage": "carry_66_to_67",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.925899
+    },
+    {
+      "stage": "carry_67_to_68",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.327001
+    },
+    {
+      "stage": "carry_68_to_69",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.732192
+    },
+    {
+      "stage": "carry_69_to_70",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.283647
+    },
+    {
+      "stage": "carry_70_to_71",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.58442
+    },
+    {
+      "stage": "carry_71_to_72",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.56368
+    },
+    {
+      "stage": "carry_72_to_73",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.95681
+    },
+    {
+      "stage": "carry_73_to_74",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.398263
+    },
+    {
+      "stage": "carry_74_to_75",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.402239
+    },
+    {
+      "stage": "carry_75_to_76",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.086217
+    },
+    {
+      "stage": "carry_76_to_77",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.233173
+    },
+    {
+      "stage": "carry_77_to_78",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.40848
+    },
+    {
+      "stage": "carry_78_to_79",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.91058
+    },
+    {
+      "stage": "carry_79_to_80",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.552821
+    },
+    {
+      "stage": "carry_80_to_81",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.199134
+    },
+    {
+      "stage": "carry_81_to_82",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.25477
+    },
+    {
+      "stage": "carry_82_to_83",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.617156
+    },
+    {
+      "stage": "carry_83_to_84",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.692108
+    },
+    {
+      "stage": "carry_84_to_85",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.760608
+    },
+    {
+      "stage": "carry_85_to_86",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.491889
+    },
+    {
+      "stage": "carry_86_to_87",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.141058
+    },
+    {
+      "stage": "carry_87_to_88",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.317179
+    },
+    {
+      "stage": "carry_88_to_89",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.938308
+    },
+    {
+      "stage": "carry_89_to_90",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.457373
+    },
+    {
+      "stage": "carry_90_to_91",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.597311
+    },
+    {
+      "stage": "carry_91_to_92",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.76794
+    },
+    {
+      "stage": "carry_92_to_93",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.252027
+    },
+    {
+      "stage": "carry_93_to_94",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.160879
+    },
+    {
+      "stage": "carry_94_to_95",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.871638
+    },
+    {
+      "stage": "carry_95_to_96",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.426757
+    },
+    {
+      "stage": "carry_96_to_97",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.508962
+    },
+    {
+      "stage": "carry_97_to_98",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.96013
+    },
+    {
+      "stage": "carry_98_to_99",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.65684
+    },
+    {
+      "stage": "carry_99_to_100",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 2.97077
+    },
+    {
+      "stage": "carry_100_to_101",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.815661
+    },
+    {
+      "stage": "carry_101_to_102",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.530543
+    },
+    {
+      "stage": "carry_102_to_103",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.03335
+    },
+    {
+      "stage": "carry_103_to_104",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.268561
+    },
+    {
+      "stage": "carry_104_to_105",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.138268
+    },
+    {
+      "stage": "carry_105_to_106",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.503863
+    },
+    {
+      "stage": "carry_106_to_107",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.327857
+    },
+    {
+      "stage": "carry_107_to_108",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.348788
+    },
+    {
+      "stage": "carry_108_to_109",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.145042
+    },
+    {
+      "stage": "carry_109_to_110",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.01224
+    },
+    {
+      "stage": "carry_110_to_111",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 3.9003
+    },
+    {
+      "stage": "carry_111_to_112",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.792267
+    },
+    {
+      "stage": "carry_112_to_113",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.052863
+    },
+    {
+      "stage": "carry_113_to_114",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.648013
+    },
+    {
+      "stage": "carry_114_to_115",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.942868
+    },
+    {
+      "stage": "carry_115_to_116",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.626376
+    },
+    {
+      "stage": "carry_116_to_117",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.215885
+    },
+    {
+      "stage": "carry_117_to_118",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.27544
+    },
+    {
+      "stage": "carry_118_to_119",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.374645
+    },
+    {
+      "stage": "carry_119_to_120",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.651349
+    },
+    {
+      "stage": "carry_120_to_121",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.705237
+    },
+    {
+      "stage": "carry_121_to_122",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.988197
+    },
+    {
+      "stage": "carry_122_to_123",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.828044
+    },
+    {
+      "stage": "carry_123_to_124",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.921105
+    },
+    {
+      "stage": "carry_124_to_125",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.931471
+    },
+    {
+      "stage": "carry_125_to_126",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.023293
+    },
+    {
+      "stage": "carry_126_to_127",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.874135
+    },
+    {
+      "stage": "carry_127_to_128",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.021498
+    },
+    {
+      "stage": "carry_128_to_129",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.716693
+    },
+    {
+      "stage": "carry_129_to_130",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.844592
+    },
+    {
+      "stage": "carry_130_to_131",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.95552
+    },
+    {
+      "stage": "carry_131_to_132",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.568133
+    },
+    {
+      "stage": "carry_132_to_133",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.877385
+    },
+    {
+      "stage": "carry_133_to_134",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.149718
+    },
+    {
+      "stage": "carry_134_to_135",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.505532
+    },
+    {
+      "stage": "carry_135_to_136",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.339928
+    },
+    {
+      "stage": "carry_136_to_137",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.72631
+    },
+    {
+      "stage": "carry_137_to_138",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.137958
+    },
+    {
+      "stage": "carry_138_to_139",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.293309
+    },
+    {
+      "stage": "carry_139_to_140",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.277225
+    },
+    {
+      "stage": "carry_140_to_141",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.971503
+    },
+    {
+      "stage": "carry_141_to_142",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.82932
+    },
+    {
+      "stage": "carry_142_to_143",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.433178
+    },
+    {
+      "stage": "carry_143_to_144",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.747656
+    },
+    {
+      "stage": "carry_144_to_145",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.857733
+    },
+    {
+      "stage": "carry_145_to_146",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.263689
+    },
+    {
+      "stage": "carry_146_to_147",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.085856
+    },
+    {
+      "stage": "carry_147_to_148",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.337739
+    },
+    {
+      "stage": "carry_148_to_149",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.392842
+    },
+    {
+      "stage": "carry_149_to_150",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.735711
+    },
+    {
+      "stage": "carry_150_to_151",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.034564
+    },
+    {
+      "stage": "carry_151_to_152",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.921098
+    },
+    {
+      "stage": "carry_152_to_153",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.255056
+    },
+    {
+      "stage": "carry_153_to_154",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 4.785529
+    },
+    {
+      "stage": "carry_154_to_155",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.428381
+    },
+    {
+      "stage": "carry_155_to_156",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.324094
+    },
+    {
+      "stage": "carry_156_to_157",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.827756
+    },
+    {
+      "stage": "carry_157_to_158",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.570267
+    },
+    {
+      "stage": "carry_158_to_159",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.418768
+    },
+    {
+      "stage": "carry_159_to_160",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.340037
+    },
+    {
+      "stage": "carry_160_to_161",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.719432
+    },
+    {
+      "stage": "carry_161_to_162",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.601024
+    },
+    {
+      "stage": "carry_162_to_163",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.821236
+    },
+    {
+      "stage": "carry_163_to_164",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.373654
+    },
+    {
+      "stage": "carry_164_to_165",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 6.662303
+    },
+    {
+      "stage": "carry_165_to_166",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 7.047008
+    },
+    {
+      "stage": "carry_166_to_167",
+      "result": "unsat",
+      "independent_cut_signals": 0,
+      "refinements": 0,
+      "proved": true,
+      "elapsed_seconds": 5.825015
+    }
+  ]
+}

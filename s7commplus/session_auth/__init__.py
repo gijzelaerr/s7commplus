@@ -9,10 +9,11 @@ The legacy-challenge handshake is what V1-initial S7-1200 firmware
 (and pre-V17 TIA Portal) require for full S7CommPlus operation —
 without it, ``browse()`` and other CommPlus data ops fail.
 
-This first slice ports only the public-key store. Subsequent slices
-will add the AES/SHA primitives, the proprietary "monolith" transforms,
-and the auth orchestration that produces the 216-byte
-``SecurityKeyEncryptedKey`` blob.
+The package contains the public-key store, AES/SHA primitives, Family-0
+transforms, and authentication orchestration for the 180-byte real-PLC
+``SecurityKeyEncryptedKey`` blob. Family 03 keys/metadata are catalogued,
+but its separate PLCSIM authentication implementation is not provided.
+See ``MAINTAINER_GUIDE.md`` for stable boundaries and verification commands.
 
 References:
 

@@ -1,0 +1,289 @@
+{
+  "scope": "reachable setup ranges from generated-source bit DAGs; NOT whole encoded runtime equivalence",
+  "source_sha256": {
+    "transform7.py": "c9331525e8b0fe3a9e8d0edaad0c933a231907a8019054d52101afca1cfab28a",
+    "big_int_operations.py": "e3d52aaac624a6b4158dde9c2ab2b6e7aadbfc036595c468f2ae0ff661024ab5",
+    "monolith3.py": "abce73deb408a12e2a3b86f6a83a37ebd9be1cb31cd8fe8b20366fffe0e6c3ad",
+    "monolith4.py": "fbf5ff95a92e887cf4d73b129826a7405bbc779fa1bef0f4eafd5e44bfec267a",
+    "monolith5.py": "a302ea9a3fa83684d6bace727af36471fe58ec3ca33f4ae41ae52398bc0fd2da",
+    "monolith6.py": "f68e729e3d4e51b23243b741a9db1203072c8598f35b794866eeac5bfc81f154",
+    "monolith_wrappers.py": "4afa64f5d5183ca7fbc31f770dba7f3f6562da13162f61fd798fec8c45d9b1c8"
+  },
+  "data_sha256": "cebe9d5f0c1cb8238a6d7d4ef11559157554991eb2e49f22feec1f88ae129ec4",
+  "z3_version": "4.16.0",
+  "translation_controls": 8,
+  "solver_budget_per_stage_ms": 30000,
+  "expected_stages": 29,
+  "retained_lemmas": "earlier UNSAT queries and integer consequences of the pinned Monolith3/4/6 kernel theorems; only ancestor-call facts; no sampled invariant is assumed",
+  "kernel_dependencies": {
+    "3": {
+      "file": "monolith3_span_proof.json",
+      "sha256": "c69bf1fa0f1820b661172bca16c7a8c9bad95dee1c9e1ad357fad20939801650",
+      "scope": "complete decoded local-carry kernel theorem; solver-run record, not a certificate"
+    },
+    "4": {
+      "file": "monolith4_carry_proof.json",
+      "sha256": "a7645e358e52e2b63245f07a712d814ade7f20d6fa58d20e7d3e0171d84c34d1",
+      "scope": "complete decoded local-carry kernel theorem; solver-run record, not a certificate"
+    },
+    "6": {
+      "file": "monolith6_span_proof.json",
+      "sha256": "bd72564e398bde70af27c54515802b40595c059612141bfb931721a31f546c18",
+      "scope": "complete decoded local-carry kernel theorem; solver-run record, not a certificate"
+    }
+  },
+  "full_proof": false,
+  "zero_wrap_calls": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    11,
+    12,
+    13,
+    21,
+    22
+  ],
+  "completed_premerge_slots": [
+    46,
+    94
+  ],
+  "slot94_exact_input_identity_proved": true,
+  "stages": [
+    {
+      "stage": "call_0_plain_below_2_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.001572,
+      "method": "generated-source SAT query"
+    },
+    {
+      "stage": "call_0_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.000615,
+      "method": "generated-source SAT query",
+      "maximum_payload": 970426534199370720937031119634798939104288093260,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_1_plain_below_2_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.000496,
+      "method": "generated-source SAT query"
+    },
+    {
+      "stage": "call_1_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.000613,
+      "method": "generated-source SAT query",
+      "maximum_payload": 970426534199370720937031119634798939104288093260,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_2_plain_below_2_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.00083,
+      "method": "generated-source SAT query"
+    },
+    {
+      "stage": "call_2_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.003461,
+      "method": "generated-source SAT query",
+      "maximum_payload": 1215964085765136819570357976175540979380110318106,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_3_plain_below_2_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.00313,
+      "method": "generated-source SAT query"
+    },
+    {
+      "stage": "call_3_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.057266,
+      "method": "generated-source SAT query",
+      "maximum_payload": 1338732861548019868887021404445911999518021430529,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_4_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "elapsed_seconds": 0.000291,
+      "method": "integer bound via complete Monolith4 decoded-addition theorem",
+      "maximum_payload": 1338732861548019868887021404445911999518021430530,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_5_packed_streams_below_2_167",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 1.683864,
+      "method": "generated-source SAT query",
+      "maximum_payload": 3408216541761491196875885225249965508864009132525,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_6_plain_below_2_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036726,
+      "method": "generated-source SAT query"
+    },
+    {
+      "stage": "call_6_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.239212,
+      "method": "generated-source SAT query",
+      "maximum_payload": 1400117249439461393545353118581097509586976986741,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_7_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "elapsed_seconds": 0.000236,
+      "method": "integer bound via complete Monolith4 decoded-addition theorem",
+      "maximum_payload": 479351431067838523670377406553314858552643643569,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_8_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023774,
+      "method": "generated-source SAT query",
+      "maximum_payload": 1090264391966330351854625471273127653742449004147,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_9_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "elapsed_seconds": 0.000287,
+      "method": "integer bound via complete Monolith4 decoded-addition theorem",
+      "maximum_payload": 1400117249439461393545353118581097509586976986742,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_10_top_payload_bit_zero",
+      "result": "unknown",
+      "proved": false,
+      "elapsed_seconds": 31.903716,
+      "method": "generated-source SAT query",
+      "reason": "timeout"
+    },
+    {
+      "stage": "call_11_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "elapsed_seconds": 0.000289,
+      "method": "integer bound via complete Monolith4 decoded-addition theorem",
+      "maximum_payload": 970426534199370720937031119634798939104288093261,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_12_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 5.840674,
+      "method": "generated-source SAT query",
+      "maximum_payload": 1458570719314979499804615756084240714156182341416,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_13_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "elapsed_seconds": 0.000293,
+      "method": "integer bound via complete Monolith4 decoded-addition theorem",
+      "maximum_payload": 1458570719314979499804615756084240714156182341417,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_14_top_payload_bit_zero",
+      "result": "unknown",
+      "proved": false,
+      "elapsed_seconds": 30.105036,
+      "method": "generated-source SAT query",
+      "reason": "timeout"
+    },
+    {
+      "stage": "call_15_decoded_addition_bound",
+      "result": "skipped_unproved_dependency",
+      "proved": false,
+      "reason": "span does not have an established reachable bound"
+    },
+    {
+      "stage": "call_16_packed_streams_below_2_167",
+      "result": "skipped_unproved_dependency",
+      "proved": false,
+      "reason": "span does not have an established reachable bound"
+    },
+    {
+      "stage": "call_17_decoded_addition_bound",
+      "result": "skipped_unproved_dependency",
+      "proved": false,
+      "reason": "span does not have an established reachable bound"
+    },
+    {
+      "stage": "call_18_top_payload_bit_zero",
+      "result": "skipped_unproved_dependency",
+      "proved": false,
+      "reason": "span does not have an established reachable bound"
+    },
+    {
+      "stage": "call_19_decoded_addition_bound",
+      "result": "skipped_unproved_dependency",
+      "proved": false,
+      "reason": "span does not have an established reachable bound"
+    },
+    {
+      "stage": "call_20_packed_streams_below_2_167",
+      "result": "skipped_unproved_dependency",
+      "proved": false,
+      "reason": "span does not have an established reachable bound"
+    },
+    {
+      "stage": "call_21_plain_below_2_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.092904,
+      "method": "generated-source SAT query"
+    },
+    {
+      "stage": "call_21_top_payload_bit_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.075649,
+      "method": "generated-source SAT query",
+      "maximum_payload": 1826877046663628647754606040895353774569915678708,
+      "zero_wrap_derived": true
+    },
+    {
+      "stage": "call_22_packed_streams_below_2_167",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.079923,
+      "method": "generated-source SAT query",
+      "maximum_payload": 2557627865329080106856448457253495284397881950174,
+      "zero_wrap_derived": true
+    }
+  ]
+}

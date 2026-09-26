@@ -32,7 +32,7 @@ PLC                                          Client
  │  │    180-byte SecurityKeyEncryptedKey blob │ │
  │  │ 4. Derive 24-byte session_key via       │ │
  │  │    HMAC-SHA256(key2, fingerprint ||      │ │
- │  │    challenge)                            │ │
+ │  │    challenge[2:18])[:24]                  │ │
  │  └─────────────────────────────────────────┘ │
  │                                              │
  │◄──── SetupSession ───────────────────────────│  V2 framing
@@ -41,16 +41,19 @@ PLC                                          Client
  │                                              │
  │──── response: success ──────────────────────►│
  │                                              │
- │  ══ data operations now work (V3+HMAC) ══    │
+ │  ══ subsequent frames use V3+HMAC ══════    │
  │                                              │
- │◄──── GET_VAR_SUB addr 303 (challenge) ───────│  (optional, only if
- │◄──── SET_VAR_SUB addr 1846 (solved blob) ────│   password provided)
+ │◄──── SET_VARIABLE addr 323 = USINT(5) ───────│  activation
+ │◄──── GET_VAR_SUB addr 303 (challenge) ───────│  legitimation, also
+ │◄──── SET_VAR_SUB addr 1846 (solved blob) ────│  with empty password
  │                                              │
 ```
 
-After SetupSession, all data frames use **V3 framing** with HMAC-SHA256
-(keyed by the first 24 bytes of the session key). No intermediate
-activation sequence is needed — data reads work immediately.
+After a successful SessionKey SetupSession, the current synchronous connection
+uses **V3 framing** with HMAC-SHA256 keyed by the 24-byte session key. It calls
+`_session_activate()` and then `_post_auth_legitimation()`, including with an
+empty password, before reporting a connected client. This documents the
+implemented call path, not a guarantee for every PLC/firmware combination.
 
 Legacy SessionKeys are renewed every 25 minutes by default, before the PLC's
 key expiry window. Renewal reads a fresh challenge from address 303 and writes
@@ -65,10 +68,9 @@ low-level connection method). Pass `None` to disable automatic renewal. This
 timer applies only to legacy V1-initial SessionKey sessions; TLS sessions do not
 start it.
 
-Note: TIA Portal sends SET_VARIABLE attr 323 + finalize reads before
-data operations, but this is TIA-specific behavior. The HarpoS7
-reference implementation skips it, and V1-initial PLCs reject the
-SET_VARIABLE with a connection reset (GH-710).
+Activation and firmware-specific failures require protocol evidence, not
+changes to the arithmetic models. The CPU1515/FW2.9 investigation is tracked
+in issue #34; do not infer a universal framing/activation change from this map.
 
 ## Module map
 
@@ -79,6 +81,7 @@ session_auth/
 ├── __init__.py              Public API re-exports
 ├── ARCHITECTURE.md          This file
 ├── keys.py                  Public-key store (fingerprint → 40/64-byte key)
+├── legacy_auth.py           180-byte blob + 24-byte SessionKey entry point
 ├── key_derivation.py        SHA-256 KDFs (challenge key, seed key+IV, session key)
 ├── legitimate.py            Post-auth challenge solver (DEADBEEF blob builder)
 ├── blob_metadata.py         SecurityKeyEncryptedKey blob header/metadata
@@ -131,7 +134,8 @@ changing the generated implementation.
 ## Artifact provenance and verification
 
 [`artifacts.json`](artifacts.json) is the authoritative inventory for every
-generated Python module and binary runtime table. It pins HarpoS7 v1.1.0 to
+Python module inside `_generated/`, including handwritten glue, every binary
+runtime table, and all embedded public keys. It pins HarpoS7 v1.1.0 to
 commit `b4ba7fab14bcca4274e69a4d6524a5a61fcd329d` and records each artifact's
 classification, upstream source, generation method, byte size, and SHA-256.
 The `fp_data2.bin` table includes the one-element `Data2Collection[1]` repair
@@ -142,13 +146,20 @@ The original MIT license is in `LICENSE-HarpoS7`.
 Run the complete deterministic check from the repository root:
 
 ```bash
-python tools/verify_session_auth_artifacts.py
+python -m tools.verify_session_auth
 ```
 
-The command fails on a missing, changed, or newly unmanifested artifact and is
-also run by pre-commit CI. To independently derive and compare the four binary
-tables and inlined constant values from a local checkout of the pinned HarpoS7
-source, run:
+The command checks runtime artifacts, the shared-data loader, public keys, and
+the complete known-answer fixture inventory. The runtime inventory check also
+runs in pre-commit; the complete check runs in CI. To independently derive and
+compare programs, all four binary tables, inlined constants, public keys and
+fixtures against a local pinned HarpoS7 checkout, run this one offline workflow:
+
+```bash
+python -m tools.verify_session_auth --upstream-root /path/to/HarpoS7
+```
+
+The individual binary/constant verifier is still available for regeneration:
 
 ```bash
 python tools/verify_session_auth_upstream.py --upstream-root /path/to/HarpoS7
@@ -215,14 +226,37 @@ boundary, and reproduction commands. The generated runtime code is unchanged.
 
 For Monolith5, fixed shifts make the bitwise-only method inapplicable. A
 symbolic ROBDD/ANF recovery yields an exact, compact analysis-only model with
-32 nine-input lane functions and a two-stream combination formula. See
+32 nine-input lane functions and a two-stream combination formula. Every lane
+function further separates into three identical choose/majority span gates
+and one symmetric combine. See
 [`MONOLITH5_ANALYSIS.md`](MONOLITH5_ANALYSIS.md) for the formula, proof boundary,
 and reproduction command. The generated runtime code is unchanged.
+
+The same per-bit symbolic approach also recovers an exact decision model for
+all 1,152 Monolith7 output bits, alongside smaller readable models for words
+3–5 and 15–17. See [`MONOLITH7_ANALYSIS.md`](MONOLITH7_ANALYSIS.md) for coverage,
+shared conditional-selection/majority cores, size tradeoffs, and verification.
+
+Transform12's dispatched opcode tape can be decompiled into versioned packed
+arithmetic equations and sliced across block boundaries. The 89 stages of its
+second phase have identical branch alternatives and form a fixed two-input
+arithmetic program. See [`TRANSFORM12_ANALYSIS.md`](TRANSFORM12_ANALYSIS.md)
+for exact coverage and the distinction between tape equivalence and arithmetic
+or curve interpretation.
+
+[`MODEL_BENCHMARKS.md`](MODEL_BENCHMARKS.md) compares the recovered evaluators
+with generated code at the byte interface. Monolith11 is a promising runtime
+candidate; the current Monolith5 and full Monolith7 analysis evaluators are
+slower. The generated runtime is unchanged.
 
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
 but it needs a separate authentication implementation. The Family-0
 `RealPlcAuthenticator` supports only families 00 and 01; family 03 cannot be
 enabled by changing its family check or blob length.
+
+[`MAINTAINER_GUIDE.md`](MAINTAINER_GUIDE.md) maps the stable handwritten
+interfaces, source/fixture evidence, failure triage, model limits and issue #1
+acceptance criteria. Start there before navigating generated programs.
 
 ### Review boundary
 
@@ -251,14 +285,14 @@ RealPlcAuthenticator(key1=random_24B, key2=random_24B)
 │   │   ├── Transform7 (EC scalar mul)
 │   │   ├── Monolith1.Loop → Monolith2 → Monolith8
 │   │   └── Transform13 → Monolith11
-│   └── AES-ECB encrypt seed with derived key
+│   └── Derive challenge/checksum AES keys and the checksum LUT
 │
 ├── encrypt_full_blocks(dst, challenge)
-│   └── HarpoAesCtr(challenge_key, key2[:16])
-│       └── AES-CTR encrypt challenge blocks + checksum
+│   └── AES-ECB(challenge_key, IV) XOR challenge[2:18], then key2 blocks
+│       └── RotateLeft31 counter update and checksum accumulation
 │
 └── encrypt_final_block(dst)
-    └── HarpoAesCtr final block + PKCS-style padding
+    └── Encrypt key2 leftover, zero-pad only for checksum, append encrypted checksum
 ```
 
 ## References

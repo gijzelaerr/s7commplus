@@ -104,6 +104,7 @@ def _make_deterministic_urandom(fill_sequence: list[int]):
     return mock_urandom
 
 
+@pytest.mark.parametrize("implementation", ["runtime", "reference"])
 @pytest.mark.parametrize(
     "expected_blob_hex, expected_session_key_hex, challenge_hex, public_key_hex, fill_seq, family",
     [
@@ -158,6 +159,7 @@ def test_authenticate_real_plc_vector(
     public_key_hex: str,
     fill_seq: list[int],
     family: KeyFamily,
+    implementation: str,
 ) -> None:
     expected_blob = bytes.fromhex(expected_blob_hex.replace(" ", ""))
     expected_session_key = bytes.fromhex(expected_session_key_hex.replace(" ", ""))
@@ -166,7 +168,18 @@ def test_authenticate_real_plc_vector(
 
     mock_urandom = _make_deterministic_urandom(fill_seq)
 
-    with patch("os.urandom", mock_urandom):
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("os.urandom", mock_urandom))
+        if implementation == "reference":
+            from s7commplus.session_auth.family0 import transform7
+            from tools.transform7_reference import model
+
+            def independent(destination, prng1, prng2, source):
+                destination[:72] = model(bytes(prng1), bytes(prng2), bytes(source)).destination
+
+            stack.enter_context(patch.object(transform7, "execute", independent))
         from s7commplus.session_auth.legacy_auth import authenticate_real_plc
 
         blob, session_key = authenticate_real_plc(challenge, public_key, family)

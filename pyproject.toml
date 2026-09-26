@@ -30,6 +30,7 @@ dependencies = ["cryptography>=41"]
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio", "pytest-bdd>=8.1,<9", "pytest-cov", "hypothesis", "mypy", "ruff"]
 docs = ["sphinx>=7.2", "furo>=2024.8.6"]
+analysis = ["z3-solver>=4.13,<5"]
 
 [project.urls]
 Homepage = "https://github.com/gijzelaerr/s7commplus"
@@ -42,8 +43,12 @@ s7commplus = [
     "py.typed",
     "session_auth/**/*.bin",
     "session_auth/ARCHITECTURE.md",
+    "session_auth/MAINTAINER_GUIDE.md",
     "session_auth/MONOLITH5_ANALYSIS.md",
+    "session_auth/MONOLITH7_ANALYSIS.md",
     "session_auth/MONOLITH11_ANALYSIS.md",
+    "session_auth/TRANSFORM12_ANALYSIS.md",
+    "session_auth/MODEL_BENCHMARKS.md",
     "session_auth/LICENSE-HarpoS7",
     "session_auth/artifacts.json",
     "zlib_dicts/*.xml",

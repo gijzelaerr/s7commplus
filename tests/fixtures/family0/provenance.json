@@ -1,0 +1,530 @@
+{
+  "schema_version": 1,
+  "upstream_revision": "b4ba7fab14bcca4274e69a4d6524a5a61fcd329d",
+  "license": "MIT",
+  "scope": "Vendored upstream known-answer fixtures; not new PLC captures or hardware validation.",
+  "files": [
+    {
+      "path": "tests/fixtures/family0/bit_operations/finalize_dst.bin",
+      "size": 24,
+      "sha256": "4b1a0d55fd033876d2d510fb14d309931dcfce8c123fbba28717b621437e8537",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/BitOperations/finalize_dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/bit_operations/finalize_src.bin",
+      "size": 20,
+      "sha256": "594fbc9694b5ed8d1ac73a7c1735e1c4ed04c314b677a5d976be4e91ddf6bc6a",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/BitOperations/finalize_src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/bit_operations/mixed_dst.bin",
+      "size": 24,
+      "sha256": "1ec81435c2080fedbdb5f7aac76613b1ad8ba2cfd5b268e9460c545314162cb3",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/BitOperations/mixed_dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/bit_operations/mixed_src.bin",
+      "size": 24,
+      "sha256": "1ec81435c2080fedbdb5f7aac76613b1ad8ba2cfd5b268e9460c545314162cb3",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/BitOperations/mixed_src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/bit_operations/prep_dst.bin",
+      "size": 20,
+      "sha256": "4f0c8a01418d393ec7c64d1b558bb591165cfae0adcd19bcea6528eb1c4d5b3e",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/BitOperations/prep_dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/bit_operations/prep_src.bin",
+      "size": 24,
+      "sha256": "0afb62f51fd89483a859192a2e9d4d60cc378f7383a1e02aa53a347877c66969",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/BitOperations/prep_src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith1-dst.bin",
+      "size": 72,
+      "sha256": "a0da86426b3e83d606f110f96ffe18648a8edfe6e5d833fca96e6e9ba13f2fa6",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith1-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith1-src.bin",
+      "size": 72,
+      "sha256": "318d77fe545c0a81fac7ab80204b793502ff1fc8fb8a2be20f9e4981fbdb6fdd",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith1-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith10-dst.bin",
+      "size": 768,
+      "sha256": "9dd2d7d51b79a2a235e291667c453d8fd5cb1a8d326ff246c45be941035ba436",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith10-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith10-src.bin",
+      "size": 72,
+      "sha256": "36220e655f977bf6d77fdf9742743b6bc646f67f8ca3d0e9212e2bd1ec229e8a",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith10-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith11-dst.bin",
+      "size": 20,
+      "sha256": "308483b2d96458ea97ff42f73718e8ad7e1fce5fe485df71ad863428e3b86d7c",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith11-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith11-src.bin",
+      "size": 120,
+      "sha256": "38337e25f0160ea68883dc0ffc3e6622323f6c3f54075e3dd52b30b8e61e717b",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith11-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith2-dst.bin",
+      "size": 20,
+      "sha256": "58fde44b42de026af7210409ff63e18e5ff4f05b07b739659ed221d24afcf13e",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith2-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith2-src.bin",
+      "size": 72,
+      "sha256": "41ac15c504512350fcf47cc064e453fd6856ff681ce4d5ea10a4dd473e6375bc",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith2-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith3-dst.bin",
+      "size": 144,
+      "sha256": "bf76a2ac5af6b2f51b704c3027eeee11256fa74f0c9e9b433a45de4024be8e01",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith3-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith3-src.bin",
+      "size": 168,
+      "sha256": "7c5aab9a45754503377f2bd7ac7f3f450754a7a52c6ab677219b97a9352d9637",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith3-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith4-dst.bin",
+      "size": 72,
+      "sha256": "d485c8b9ceb9cf47803079783258068817c5901ab44d80183d3f25fca321a23e",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith4-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith4-src.bin",
+      "size": 144,
+      "sha256": "967957872907a4dab2a4d321d85f17da5a12720b0dccb4296c249154e42c05ed",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith4-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith5-dst.bin",
+      "size": 48,
+      "sha256": "3a24e5817cce110176a19bb4feab79576712e39f823ec5474d7a4857ee448e1a",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith5-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith5-src.bin",
+      "size": 216,
+      "sha256": "844e7a84b8bf4942cf885dd5a24a37a102c831eb8f609a979c2b9be0dbe8cf30",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith5-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith6-dst.bin",
+      "size": 144,
+      "sha256": "966bcfadb6c6386fad91a1486599e336f5f7dd4f00e4708cb8dea325a9c326a8",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith6-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith6-src.bin",
+      "size": 216,
+      "sha256": "855e886f134a7d324b71ae16122ca6dcbd40f84e0f081bf584bcfa14c3e9d837",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith6-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith7-dst.bin",
+      "size": 144,
+      "sha256": "161bcea68676da14cc837dd8d1f6252e3c6f1ba40062191bc2a260d016930185",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith7-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith7-src.bin",
+      "size": 96,
+      "sha256": "66fb16c816c073ba65b6522c66101868ed6f88201d642eacd2b40bf0276c8f5e",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith7-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith8-dst.bin",
+      "size": 60,
+      "sha256": "64325dfb286f85c1139a895c5a82c9e6e7aa3312213d27cdaebd6e4dd822e72a",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith8-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith8-src.bin",
+      "size": 72,
+      "sha256": "9d82a35ce92aeea3fd91113b26aeba82475ead92a2f907ed26ec65ea3d23f0f0",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith8-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith9-dst.bin",
+      "size": 24,
+      "sha256": "b669af07462459ec5a1b43578dd10f9a715b54101e0c3258bc85c99e00c0910f",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith9-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/monoliths/monolith9-src.bin",
+      "size": 788,
+      "sha256": "047e0d4d81d3afb4cd79bddc4e37ed546a838636be43c0519db856f37a5410ae",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Monoliths/monolith9-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform1-dst.bin",
+      "size": 60,
+      "sha256": "51fdbe472b8b36dd3653e23621d3a2df39876cf0658a4d998ba949044f553edb",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform1-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform1-src.bin",
+      "size": 24,
+      "sha256": "7f51d37c00f1d52bedfa5b21b1d256842da2d7982cc190794823f7271142b27f",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform1-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform10-dst.bin",
+      "size": 24,
+      "sha256": "523db2dfdb561a2947a51fb8120af5b804f110091ccac63b5ee3b2feabc80fe0",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform10-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform10-src.bin",
+      "size": 24,
+      "sha256": "0671422bdc177b297707adf08740a4188ad3c3c1b062104a3d892adaf5964f0b",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform10-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform10_2-dst.bin",
+      "size": 24,
+      "sha256": "50168da4f71b26a1d438b3c1e61e10ea379e7b5480440ceafe145a817bfc6ba3",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform10_2-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform10_2-src.bin",
+      "size": 24,
+      "sha256": "4b1a0d55fd033876d2d510fb14d309931dcfce8c123fbba28717b621437e8537",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform10_2-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11-dst.bin",
+      "size": 24,
+      "sha256": "3227a4cad9b033dc97a35783f6b18595cc6bbaf27178e219de5af35442880c71",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11-source1.bin",
+      "size": 24,
+      "sha256": "221319c37710e2c5998ac7571d15f91b706125350f73225587bd8f83c50b7543",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11-source2.bin",
+      "size": 24,
+      "sha256": "11f70cdaaa565a395ac18e88dbb8c2fdbae6b87405dd621613280b4b8eea238b",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_2-dst.bin",
+      "size": 24,
+      "sha256": "83c778263f1e6cd02bf8ac9b23d38a81d2d839a847f95a765e3f2d0e358dbd44",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_2-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_2-source1.bin",
+      "size": 24,
+      "sha256": "914b1c808c02c51b0dd6e3ae84d2a05a6501c4c28c3dfb563142e53ac4a00ef8",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_2-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_2-source2.bin",
+      "size": 24,
+      "sha256": "b2bfe2e680b017dd2e77cf07b00fa5cb85add0cea1631299568a37d29959ba95",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_2-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_3-dst.bin",
+      "size": 24,
+      "sha256": "aba4d8e526676dac0d2ea3ef008e821d3543ee900fe168d3a28f9a70ab2f8fe2",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_3-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_3-source1.bin",
+      "size": 24,
+      "sha256": "914b1c808c02c51b0dd6e3ae84d2a05a6501c4c28c3dfb563142e53ac4a00ef8",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_3-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_3-source2.bin",
+      "size": 24,
+      "sha256": "449927c4fd288dbebc8be05fe4f866a7f230507bda4fd006fe855b52d99f4844",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_3-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_4-dst.bin",
+      "size": 24,
+      "sha256": "fee3d68abdfd0e28e07ee632e417901a5b3390f997c96b7402e9a02f36f72bfc",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_4-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_4-source1.bin",
+      "size": 24,
+      "sha256": "14aaa74d1f35914c2aa59bae46563d0dcc394dce6fc1cf4a6a29c86be24c1abf",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_4-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform11_4-source2.bin",
+      "size": 24,
+      "sha256": "5b94939c518971d59ec226cbfd1e67e62d2494714bc75bf31f7be247ebdc070a",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform11_4-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform12_0x0-ctx-expected.bin",
+      "size": 3576,
+      "sha256": "d0e739c0e4d5d384aad380ccaaa81974a85e18963b076b7c5f710609a71be89b",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform12_0x0-ctx-expected.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform12_0x0-ctx.bin",
+      "size": 3576,
+      "sha256": "0eef24ad75255d6c24336c9aabf576cc4caf96399b0ca88e9a5eb3d1e14bcb30",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform12_0x0-ctx.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform12_0x29-ctx-expected.bin",
+      "size": 3576,
+      "sha256": "94824f424bb0067e1244545af191e2cb5a4cc14de21a9811f600594955b5a24e",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform12_0x29-ctx-expected.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform12_0x29-ctx.bin",
+      "size": 3576,
+      "sha256": "a30a71523f533915f2b1be8420bddc9734d8e89d469994b5a58d69d8bb2c91fc",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform12_0x29-ctx.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform13-dst.bin",
+      "size": 60,
+      "sha256": "f791ce0d802f8c807bbc884c3cb0058a25420532422e26e680ac7de665a1fe93",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform13-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform13-src.bin",
+      "size": 60,
+      "sha256": "402f60d3c1ac31169c4aba7be06c18d728dc0891054a4a7cc42be8f93069b9f9",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform13-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform2-dst.bin",
+      "size": 48,
+      "sha256": "8a5b22671b8cffbb97e635e0f32ec891870958709adf63fadf7a1396b01334ac",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform2-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform2-src.bin",
+      "size": 60,
+      "sha256": "51fdbe472b8b36dd3653e23621d3a2df39876cf0658a4d998ba949044f553edb",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform2-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform3-dst.bin",
+      "size": 4096,
+      "sha256": "1e4cbd52457fb6194e13cb41b64c80e7d3224ba987d6c283a9be6d4551445304",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform3-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform3-src.bin",
+      "size": 16,
+      "sha256": "a1425022def6779e99231b5d60ad134c5a9abfd0774fdd2f5156c0520ff63aed",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform3-src.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform4-dst.bin",
+      "size": 16,
+      "sha256": "04da79ccbfe8ad6b5b939e2382e773e4316d2706d1af9a3cfe46a010da0cd841",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform4-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform4-key.bin",
+      "size": 16,
+      "sha256": "64ea76b63f83ad9a24444718537433c35cc3c9686d15d8abd36776611f00717f",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform4-key.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform4-lut.bin",
+      "size": 4096,
+      "sha256": "1e4cbd52457fb6194e13cb41b64c80e7d3224ba987d6c283a9be6d4551445304",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform4-lut.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform6-dst.bin",
+      "size": 60,
+      "sha256": "cf234eae1897f9f5b26afd1db1f7ca6593bc55eb7c63eaa00965bba05994855a",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform6-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform6-publicKey.bin",
+      "size": 40,
+      "sha256": "b9c6274c0939fa745dc962ebfc159165447ba5332cff7a5f25e7c21d0be9bf70",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform6-publicKey.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform6-t1.bin",
+      "size": 60,
+      "sha256": "51fdbe472b8b36dd3653e23621d3a2df39876cf0658a4d998ba949044f553edb",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform6-t1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform8-dst.bin",
+      "size": 24,
+      "sha256": "4b1a0d55fd033876d2d510fb14d309931dcfce8c123fbba28717b621437e8537",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform8-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform8-source1.bin",
+      "size": 24,
+      "sha256": "0afb62f51fd89483a859192a2e9d4d60cc378f7383a1e02aa53a347877c66969",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform8-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform8-source2.bin",
+      "size": 24,
+      "sha256": "d28269d8111834af77473eca1674c33f35d87fbbcfeb98e29c1c8cc2ffe3d710",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform8-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform8_2-dst.bin",
+      "size": 24,
+      "sha256": "f0f9cbee70da5836e56f52f75135cfd02de3aa00f874eb4b60c684852f350a2a",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform8_2-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform8_2-source1.bin",
+      "size": 24,
+      "sha256": "7e9575754c8848d46c7e2a43c77e807de943479465f41f5d19e5af3eb9ae8dd2",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform8_2-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform8_2-source2.bin",
+      "size": 24,
+      "sha256": "b7d818291db946d910ac8cf446deb0672f91a38feedfadeb1896389f1271c1dc",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform8_2-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9-dst.bin",
+      "size": 24,
+      "sha256": "1f28e9a7914aef676a3c2a90d41f3620b17b05e85e67a0819119b5b4c3e11bfe",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9-source1.bin",
+      "size": 24,
+      "sha256": "5bea0b01aed197eae96aa62d2970d279f68d45a2bf6923f7ac30bb16774870b0",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9-source2.bin",
+      "size": 24,
+      "sha256": "4b1a0d55fd033876d2d510fb14d309931dcfce8c123fbba28717b621437e8537",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9_2-dst.bin",
+      "size": 24,
+      "sha256": "4e57cc3301ffb4d78c44a3e3af957d9897a174bbff95c9d0baf52cbff10f16ac",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9_2-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9_2-source1.bin",
+      "size": 24,
+      "sha256": "04744f266919013bf8d58015bd1e362d96ee6ec4d0a3dad00ee4c85583e1871d",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9_2-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9_2-source2.bin",
+      "size": 24,
+      "sha256": "b7d818291db946d910ac8cf446deb0672f91a38feedfadeb1896389f1271c1dc",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9_2-source2.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9_3-dst.bin",
+      "size": 24,
+      "sha256": "358f51de4b05611e27266482e76ca64b22c9c7ed59f32af268d0c6b6b2960709",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9_3-dst.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9_3-source1.bin",
+      "size": 24,
+      "sha256": "cd9b5127f270f7d014c29eac18bcdbf7b949ab796aa6188b12b27ae8f204e42b",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9_3-source1.bin"
+    },
+    {
+      "path": "tests/fixtures/family0/transforms/transform9_3-source2.bin",
+      "size": 24,
+      "sha256": "754f57f6b30c1dc32d233254beb6c64b648efaf54ade341f5f17cc042037c324",
+      "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform9_3-source2.bin"
+    }
+  ],
+  "transform7_vectors": [
+    {
+      "name": "transform7",
+      "fields": {
+        "source": {
+          "hex": "8e0c9da30717478532617a4ad7586e84e2d82e7d3b678ccd13f1bc88f7e87f6cfe4c699de935a757",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7-src.bin",
+          "size": 40,
+          "sha256": "03c73adc88e7d81407281683f355c1e7a18799d265800a564074cc54557d61b1"
+        },
+        "prng1": {
+          "hex": "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7-prng1.bin",
+          "size": 20,
+          "sha256": "d3c1533799c2920ee3070a228fe7150fd588f90632f5cc4bcedc7222eadc1fc0"
+        },
+        "prng2": {
+          "hex": "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7-prng2.bin",
+          "size": 20,
+          "sha256": "d3c1533799c2920ee3070a228fe7150fd588f90632f5cc4bcedc7222eadc1fc0"
+        },
+        "destination": {
+          "hex": "17cfa6c44aff2d3a2491848e9a2bbac5d322130c21d61878922fc0a74df97ef5c9aef1eedfcebd9822147248a51b3e671f118a92d1d4791329a833fb821005dd55bdf4e3427a575e",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7-dst.bin",
+          "size": 72,
+          "sha256": "c2d86b92389e7e97873c7c161e2036833deb59f0e8cda28a6a65eec0bce305ba"
+        }
+      }
+    },
+    {
+      "name": "transform7_2",
+      "fields": {
+        "source": {
+          "hex": "8456a26996122216c921c571ff11e0befafdb1d70b5d4bc8390f5b0cc273ec142a03f2a04e6f1593",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7_2-src.bin",
+          "size": 40,
+          "sha256": "b9c6274c0939fa745dc962ebfc159165447ba5332cff7a5f25e7c21d0be9bf70"
+        },
+        "prng1": {
+          "hex": "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7_2-prng1.bin",
+          "size": 20,
+          "sha256": "d3c1533799c2920ee3070a228fe7150fd588f90632f5cc4bcedc7222eadc1fc0"
+        },
+        "prng2": {
+          "hex": "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7_2-prng2.bin",
+          "size": 20,
+          "sha256": "d3c1533799c2920ee3070a228fe7150fd588f90632f5cc4bcedc7222eadc1fc0"
+        },
+        "destination": {
+          "hex": "9d6322d0cadb287aa7e101aebcf8982b70b05348040a68f3c0e9065b8f60f9cd9bd7ec9ede371b9d47be56cbe42de9e1cc8520e424c6a8f3a20a5ffa821005dd55bdf4e3427a575e",
+          "upstream_source": "HarpoS7.Family0.Tests/Blobs/Transforms/transform7_2-dst.bin",
+          "size": 72,
+          "sha256": "8c64f06fc322aa1b2981d023bfbf7e81eff0231943b762a13e282f2c43e69a68"
+        }
+      }
+    }
+  ]
+}

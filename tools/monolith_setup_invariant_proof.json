@@ -1,0 +1,670 @@
+{
+  "scope": "local upper-zero encoding preservation under input B<2^166; Monolith3 additionally N<2^162",
+  "source_sha256": {
+    "monolith3.py": "abce73deb408a12e2a3b86f6a83a37ebd9be1cb31cd8fe8b20366fffe0e6c3ad",
+    "monolith4.py": "fbf5ff95a92e887cf4d73b129826a7405bbc779fa1bef0f4eafd5e44bfec267a",
+    "monolith5.py": "a302ea9a3fa83684d6bace727af36471fe58ec3ca33f4ae41ae52398bc0fd2da",
+    "monolith6.py": "f68e729e3d4e51b23243b741a9db1203072c8598f35b794866eeac5bfc81f154"
+  },
+  "gate_model_sha256": {
+    "monolith5_model.json": "cc850745da473531447c2460d79332e60f582217f70588c3864b268ee6f13cff",
+    "monolith5_gate_model.json": "b56f42806cc326aa9d74636960039019b69c417703e05a91a665b5469e8d7cae"
+  },
+  "upper_zero_triples": [
+    [
+      3,
+      4,
+      6,
+      7
+    ],
+    [
+      0,
+      2,
+      4,
+      5
+    ],
+    [
+      0,
+      4,
+      5,
+      6
+    ],
+    [
+      0,
+      2,
+      3,
+      7
+    ],
+    [
+      2,
+      3,
+      4,
+      6
+    ],
+    [
+      0,
+      2,
+      4,
+      5
+    ],
+    [
+      0,
+      2,
+      6,
+      7
+    ],
+    [
+      0,
+      2,
+      4,
+      5
+    ],
+    [
+      1,
+      3,
+      4,
+      5
+    ],
+    [
+      1,
+      3,
+      6,
+      7
+    ],
+    [
+      0,
+      4,
+      5,
+      7
+    ],
+    [
+      1,
+      2,
+      3,
+      6
+    ],
+    [
+      0,
+      2,
+      4,
+      5
+    ],
+    [
+      0,
+      2,
+      6,
+      7
+    ],
+    [
+      0,
+      2,
+      4,
+      5
+    ],
+    [
+      1,
+      2,
+      3,
+      6
+    ],
+    [
+      0,
+      1,
+      4,
+      6
+    ],
+    [
+      1,
+      3,
+      4,
+      5
+    ],
+    [
+      0,
+      4,
+      5,
+      6
+    ],
+    [
+      0,
+      1,
+      2,
+      5
+    ],
+    [
+      0,
+      1,
+      2,
+      4
+    ],
+    [
+      0,
+      1,
+      5,
+      7
+    ],
+    [
+      3,
+      4,
+      5,
+      7
+    ]
+  ],
+  "z3_version": "4.16.0",
+  "solver_budget_per_stage_ms": 10000,
+  "expected_stages": 73,
+  "full_proof": true,
+  "stages": [
+    {
+      "monolith": 3,
+      "stage": "payload_bit_167_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.003527
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_168_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.003271
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_169_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.007523
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_170_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.007086
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_171_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.007345
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_172_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.00674
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_173_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.003331
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_174_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.003085
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_175_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.003058
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_176_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.006789
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_177_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.007
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_178_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.007166
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_179_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.00671
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_180_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.006615
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_181_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.006242
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_182_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.005895
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_183_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.006528
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_184_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.002491
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_185_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.006378
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_186_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.00309
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_187_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.003027
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_188_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.00581
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_189_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.002478
+    },
+    {
+      "monolith": 3,
+      "stage": "upper_bit_190_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.001387
+    },
+    {
+      "monolith": 4,
+      "stage": "payload_bit_167_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.462241
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_168_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.402707
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_169_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.396566
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_170_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.490278
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_171_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.409269
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_172_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.430014
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_173_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.406511
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_174_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.461885
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_175_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.365122
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_176_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.447956
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_177_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.405211
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_178_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.352612
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_179_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.464069
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_180_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.415404
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_181_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.393379
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_182_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.508582
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_183_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.348934
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_184_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.427463
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_185_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.414234
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_186_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.357013
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_187_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.421709
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_188_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.407854
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_189_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.423342
+    },
+    {
+      "monolith": 4,
+      "stage": "upper_bit_190_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.463722
+    },
+    {
+      "monolith": 5,
+      "stage": "packed_streams_below_2_167",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020608
+    },
+    {
+      "monolith": 6,
+      "stage": "payload_bit_167_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023678
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_168_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.018586
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_169_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022587
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_170_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022602
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_171_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023617
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_172_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020723
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_173_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021744
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_174_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.017841
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_175_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.017728
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_176_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.015803
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_177_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02044
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_178_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.016319
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_179_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020935
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_180_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020945
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_181_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020378
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_182_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.016861
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_183_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020056
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_184_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.019732
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_185_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020186
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_186_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020502
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_187_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020729
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_188_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.019173
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_189_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020197
+    },
+    {
+      "monolith": 6,
+      "stage": "upper_bit_190_zero",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.017226
+    }
+  ]
+}

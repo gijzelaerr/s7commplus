@@ -1,0 +1,316 @@
+{
+  "scope": "all legal unsigned-160-bit setup inputs: zero wrapper corrections and affine PREMERGE residues; NOT final merge or whole-runtime equivalence",
+  "source_sha256": {
+    "transform7.py": "c9331525e8b0fe3a9e8d0edaad0c933a231907a8019054d52101afca1cfab28a",
+    "big_int_operations.py": "e3d52aaac624a6b4158dde9c2ab2b6e7aadbfc036595c468f2ae0ff661024ab5",
+    "monolith_wrappers.py": "4afa64f5d5183ca7fbc31f770dba7f3f6562da13162f61fd798fec8c45d9b1c8",
+    "monolith3.py": "abce73deb408a12e2a3b86f6a83a37ebd9be1cb31cd8fe8b20366fffe0e6c3ad",
+    "monolith4.py": "fbf5ff95a92e887cf4d73b129826a7405bbc779fa1bef0f4eafd5e44bfec267a",
+    "monolith5.py": "a302ea9a3fa83684d6bace727af36471fe58ec3ca33f4ae41ae52398bc0fd2da",
+    "monolith6.py": "f68e729e3d4e51b23243b741a9db1203072c8598f35b794866eeac5bfc81f154"
+  },
+  "data_sha256": "cebe9d5f0c1cb8238a6d7d4ef11559157554991eb2e49f22feec1f88ae129ec4",
+  "z3_version": "4.16.0",
+  "translation_controls": 8,
+  "expected_stages": 29,
+  "full_proof": true,
+  "kernel_dependencies": {
+    "3": {
+      "file": "monolith3_span_proof.json",
+      "sha256": "c69bf1fa0f1820b661172bca16c7a8c9bad95dee1c9e1ad357fad20939801650",
+      "scope": "complete decoded local-carry kernel theorem; solver-run record, not a certificate"
+    },
+    "4": {
+      "file": "monolith4_carry_proof.json",
+      "sha256": "a7645e358e52e2b63245f07a712d814ade7f20d6fa58d20e7d3e0171d84c34d1",
+      "scope": "complete decoded local-carry kernel theorem; solver-run record, not a certificate"
+    },
+    "6": {
+      "file": "monolith6_span_proof.json",
+      "sha256": "bd72564e398bde70af27c54515802b40595c059612141bfb931721a31f546c18",
+      "scope": "complete decoded local-carry kernel theorem; solver-run record, not a certificate"
+    }
+  },
+  "local_invariant_dependency": {
+    "file": "monolith_setup_invariant_proof.json",
+    "sha256": "8bf095289cd9be87fec779c1bb6b4169f07836dcc5cb9e811faa7724a53b3d51",
+    "scope": "all 73 local source obligations; solver-run record, not a certificate"
+  },
+  "zero_wrap_calls": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22
+  ],
+  "completed_premerge_slots": [
+    46,
+    48,
+    70,
+    94
+  ],
+  "slot94_exact_input_identity_proved": true,
+  "stages": [
+    {
+      "stage": "call_0_plain_below_2_162",
+      "result": "derived",
+      "proved": true,
+      "method": "exact setup initialization/rotation: all plain bits 162..191 are zero"
+    },
+    {
+      "stage": "call_0_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 970426534199370720937031119634798939104288093260,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_1_plain_below_2_162",
+      "result": "derived",
+      "proved": true,
+      "method": "exact setup initialization/rotation: all plain bits 162..191 are zero"
+    },
+    {
+      "stage": "call_1_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 970426534199370720937031119634798939104288093260,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_2_plain_below_2_162",
+      "result": "derived",
+      "proved": true,
+      "method": "exact setup initialization/rotation: all plain bits 162..191 are zero"
+    },
+    {
+      "stage": "call_2_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1215964085765136819570357976175540979380110318106,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_3_plain_below_2_162",
+      "result": "derived",
+      "proved": true,
+      "method": "exact setup initialization/rotation: all plain bits 162..191 are zero"
+    },
+    {
+      "stage": "call_3_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1338732861548019868887021404445911999518021430529,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_4_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 1338732861548019868887021404445911999518021430530,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_5_packed_streams_below_2_167",
+      "result": "derived",
+      "proved": true,
+      "method": "local packed-stream top-bit theorem plus exact Monolith5 combined congruence",
+      "maximum_payload": 3408216541761491196875885225249965508864009132525,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": false
+    },
+    {
+      "stage": "call_6_plain_below_2_162",
+      "result": "derived",
+      "proved": true,
+      "method": "exact setup initialization/rotation: all plain bits 162..191 are zero"
+    },
+    {
+      "stage": "call_6_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1400117249439461393545353118581097509586976986741,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_7_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 479351431067838523670377406553314858552643643569,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_8_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1090264391966330351854625471273127653742449004147,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_9_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 1400117249439461393545353118581097509586976986742,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_10_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1550647301152141786792113327287018979259615675734,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_11_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 970426534199370720937031119634798939104288093261,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_12_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1458570719314979499804615756084240714156182341416,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_13_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 1458570719314979499804615756084240714156182341417,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_14_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1579874036089900839921744646038590581544218353071,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_15_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 1579874036089900839921744646038590581544218353072,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_16_packed_streams_below_2_167",
+      "result": "derived",
+      "proved": true,
+      "method": "local packed-stream top-bit theorem plus exact Monolith5 combined congruence",
+      "maximum_payload": 3890498890845253138945331708435322672916402977609,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": false
+    },
+    {
+      "stage": "call_17_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 1550647301152141786792113327287018979259615675735,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_18_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1930636077953747042907850194841875535315900150136,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_19_decoded_addition_bound",
+      "result": "derived",
+      "proved": true,
+      "method": "complete decoded addition theorem plus local upper-zero preservation",
+      "maximum_payload": 1930636077953747042907850194841875535315900150137,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_20_packed_streams_below_2_167",
+      "result": "derived",
+      "proved": true,
+      "method": "local packed-stream top-bit theorem plus exact Monolith5 combined congruence",
+      "maximum_payload": 4592022974572945544917542806041892580459766571739,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": false
+    },
+    {
+      "stage": "call_21_plain_below_2_162",
+      "result": "derived",
+      "proved": true,
+      "method": "exact setup initialization/rotation: all plain bits 162..191 are zero"
+    },
+    {
+      "stage": "call_21_top_payload_bit_zero",
+      "result": "derived",
+      "proved": true,
+      "method": "local top-bit/upper-zero theorem plus complete doubled-pair carry identity",
+      "maximum_payload": 1826877046663628647754606040895353774569915678708,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": true
+    },
+    {
+      "stage": "call_22_packed_streams_below_2_167",
+      "result": "derived",
+      "proved": true,
+      "method": "local packed-stream top-bit theorem plus exact Monolith5 combined congruence",
+      "maximum_payload": 2557627865329080106856448457253495284397881950174,
+      "zero_wrap_derived": true,
+      "upper_zero_inherited": false
+    }
+  ]
+}

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import sys
@@ -16,11 +17,8 @@ GENERATED_ROOT = REPOSITORY_ROOT / "s7commplus/session_auth/family0/_generated"
 
 
 def _is_artifact(path: Path) -> bool:
-    return (
-        path.suffix == ".bin"
-        or path.name == "_constants.py"
-        or (path.suffix == ".py" and (path.name.startswith("monolith") or path.name.startswith("part")))
-    )
+    # Include handwritten package glue: data/__init__.py embeds SHARED_DATA.
+    return path.suffix in {".bin", ".py"}
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:
@@ -28,7 +26,7 @@ def _load_manifest(path: Path) -> dict[str, Any]:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"cannot read manifest {path}: {exc}") from exc
-    if document.get("schema_version") != 1 or not isinstance(document.get("artifacts"), list):
+    if not isinstance(document, dict) or document.get("schema_version") != 1 or not isinstance(document.get("artifacts"), list):
         raise ValueError("manifest must use schema_version 1 and contain an artifacts list")
     return document
 
@@ -77,7 +75,87 @@ def verify(manifest_path: Path = DEFAULT_MANIFEST) -> list[str]:
         errors.append(f"unmanifested generated artifact: {relative}")
     for relative in sorted(declared - actual):
         errors.append(f"manifest entry is not a generated runtime artifact: {relative}")
+    errors.extend(_verify_embedded_keys(document))
     return errors
+
+
+def _verify_embedded_keys(document: dict[str, Any]) -> list[str]:
+    """Inventory the vendored data within the human-maintained key store."""
+    # Keep the default verifier/pre-commit hook standard-library-only. Do not
+    # import the library or execute handwritten source while auditing data.
+    try:
+        expected = embedded_keys()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return [f"cannot decode embedded public-key store: {exc}"]
+    records = document.get("embedded_public_keys")
+    if not isinstance(records, list):
+        return ["manifest is missing embedded_public_keys inventory"]
+    errors, declared = [], set()
+    for record in records:
+        if not isinstance(record, dict) or not {"fingerprint", "size", "sha256", "upstream_source"}.issubset(record):
+            errors.append("invalid embedded public-key record")
+            continue
+        fingerprint = record["fingerprint"]
+        if not isinstance(fingerprint, str) or fingerprint in declared or fingerprint not in expected:
+            errors.append(f"invalid or duplicate embedded public key: {fingerprint!r}")
+            continue
+        declared.add(fingerprint)
+        family, key_id = fingerprint.split(":")
+        if record["upstream_source"] != f"HarpoS7.PublicKeys/Keys/{family}/{key_id}.bin":
+            errors.append(f"embedded public-key source mismatch: {fingerprint}")
+        value = expected[fingerprint]
+        if record["size"] != len(value) or record["sha256"] != hashlib.sha256(value).hexdigest():
+            errors.append(f"embedded public-key size/SHA-256 mismatch: {fingerprint}")
+    errors.extend(f"unmanifested embedded public key: {fingerprint}" for fingerprint in sorted(expected.keys() - declared))
+    formats = document.get("binary_formats")
+    binary_names = {path.name for path in GENERATED_ROOT.rglob("*.bin")}
+    if (
+        not isinstance(formats, dict)
+        or set(formats) != binary_names
+        or not all(isinstance(value, str) and value for value in formats.values())
+    ):
+        errors.append("binary format inventory differs from runtime tables")
+    return errors
+
+
+def embedded_keys() -> dict[str, bytes]:
+    module = ast.parse((REPOSITORY_ROOT / "s7commplus/session_auth/keys.py").read_text(encoding="utf-8"))
+    family_class = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "KeyFamily")
+    families = {
+        node.targets[0].id: ast.literal_eval(node.value)
+        for node in family_class.body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+    }
+    table = next(
+        node.value
+        for node in module.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "_PUBLIC_KEYS"
+    )
+    if not isinstance(table, ast.Dict):
+        raise ValueError("expected a literal public-key dictionary")
+    result = {}
+    for key, value in zip(table.keys, table.values):
+        if not (
+            isinstance(key, ast.Tuple)
+            and len(key.elts) == 2
+            and isinstance(key.elts[0], ast.Attribute)
+            and isinstance(key.elts[0].value, ast.Name)
+            and key.elts[0].value.id == "KeyFamily"
+            and isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id == "bytes"
+            and value.func.attr == "fromhex"
+            and len(value.args) == 1
+            and not value.keywords
+        ):
+            raise ValueError("unsupported public-key entry")
+        family, identifier = families[key.elts[0].attr], ast.literal_eval(key.elts[1])
+        fingerprint = f"{family:02X}:{identifier}"
+        if fingerprint in result:
+            raise ValueError("duplicate public-key entry")
+        result[fingerprint] = bytes.fromhex(ast.literal_eval(value.args[0]))
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:

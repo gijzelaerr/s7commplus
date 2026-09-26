@@ -5,10 +5,9 @@ handshake feeds into AES-CTR. None of them reach into the proprietary
 "monolith" transforms, so they're implementable in pure Python with
 ``hashlib`` alone.
 
-Ported from HarpoS7 (MIT) — ``HarpoS7.Keys.KeyUtilities``. The
-``DeriveSessionKey`` helper from that file is intentionally **not**
-ported here: it depends on ``HarpoFingerprint.FingerprintChallenge``,
-which is part of the Family-0 transforms and arrives in a later slice.
+Ported from HarpoS7 (MIT) — ``HarpoS7.Keys.KeyUtilities``. SessionKey
+derivation also uses the Family-0 challenge fingerprint; it is imported
+locally by ``derive_session_key`` to keep that dependency explicit.
 """
 
 from __future__ import annotations
