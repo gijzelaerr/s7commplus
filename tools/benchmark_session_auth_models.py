@@ -85,6 +85,7 @@ def implementations() -> list[Implementation]:
             Implementation("monolith7_middle", "tools.monolith7_middle_model", 7, 24, (3, 4, 5)),
             Implementation("monolith7_tail", "tools.monolith7_tail_model", 7, 24, (15, 16, 17)),
             Implementation("monolith7_full", "tools.monolith7_full_model", 7, 24, tuple(range(36))),
+            Implementation("monolith7_compiled", "tools.monolith7_compiled_model", 7, 24, tuple(range(36))),
             Implementation("monolith11_formula", "tools.monolith11_model", 11, 30, tuple(range(5))),
         ]
     )

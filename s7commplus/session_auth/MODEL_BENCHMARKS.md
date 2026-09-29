@@ -58,6 +58,7 @@ idle machine and treat small differences with caution before relying on them.
 | Monolith7 middle gates | 3–5 | 206.28 | 0.64 | 15,645 | 2.28 |
 | Monolith7 tail LUTs | 15–17 | 43.44 | 0.50 | 13,584 | 2.00 |
 | Monolith7 full BDD model | all 36 | 882.45 | 15.14 | 910,657 | 8.35 |
+| Monolith7 compiled | all 36 | 2924.69 | 8.50 | 6,318,046 | 8.14 |
 | Monolith11 generated | all 5 | 79.80 | 0.68 | 51,078 | 25.34 |
 | Monolith11 formula | all 5 | 3.39 | 0.16 | 767 | 28.26 |
 
@@ -83,10 +84,25 @@ longer for three words than the generated implementation takes for all 36,
 so interpreting its Boolean cores is currently a readability tool rather
 than a speed optimization. The complete Monolith7 BDD evaluator is about 5.9
 times slower and its source/data artifact is about nine times larger than
-generated code; unlike Monolith5, there is no full-coverage factored form to
-compile it from — only 6 of its 36 output words have one. Exact coverage is
-useful for reverse engineering and verification, but this representation is
-not a compact runtime replacement.
+generated code; only 6 of its 36 output words have the small, readable
+factored (shared-gate-core) form Monolith5's compiled result was built from.
+
+The full 36-word BDD model *is* complete, however, so compiling it the same
+way as Monolith5 (`tools/compile_monolith7.py`, "Monolith7 compiled" above)
+was tried directly. Unlike Monolith5, **this does not pay off**: the result
+is byte-exact but about 20 times *slower* and about 62 times larger than
+generated, and about 3.3 times slower than the interpreter it was meant to
+replace. Monolith5's model was word-parallel — 168 statements each doing
+32-bit-wide bitwise work on whole `source[i]` words. Monolith7's full model
+is bit-serial — 1,152 independently-derived bit computations with almost no
+cross-bit sharing (~77,000 total node evaluations, only 22 of 1,152 bits
+exactly duplicating another bit's computation). Unrolling a bit-serial walk
+into ~77,000 discrete Python statements inside one function multiplies
+per-statement interpreter overhead instead of removing it; the hand-written
+ROBDD-walking loop is already more efficient per elementary operation than
+that flat expansion. Exact coverage remains useful for reverse engineering
+and verification; neither Monolith7 representation is a compact runtime
+replacement today.
 
 ## Runtime recommendation
 
@@ -105,12 +121,18 @@ win — retiring two generated permutation-cipher modules in favor of proven,
 regenerable implementations — is the primary motivation, consistent with
 issue #1.
 
-For Monolith7, extending the shared-core factoring approach used for words
-3-5 and 15-17 to the remaining 30 output words — the prerequisite for a
-compilable full-coverage model, the same way Monolith5's named-gate model
-enabled its compilation — is unproven further research, not a scoped
-migration task; there is currently nothing complete to compile. Measure the
-final complete implementation at the byte interface rather than selecting a
-representation on formula count or source size alone: this benchmark's
-Monolith5 result shows a slower interpreter can still compile into a faster
-runtime implementation.
+For Monolith7, the full 36-word BDD model was compiled the same way as
+Monolith5, and it made things worse on both size and speed (see above) — the
+"compile the interpreter into flat code" playbook that worked for Monolith5
+does not transfer here, because the underlying model's structure is
+fundamentally bit-serial rather than word-parallel. Extending the small
+shared-core factoring approach used for words 3-5 and 15-17 to the remaining
+30 output words remains unproven further research, not a scoped migration
+task, and would need to actually produce word-parallel structure (not just
+more per-bit coverage) to have a realistic chance of compiling faster than
+the interpreter. Measure the final complete implementation at the byte
+interface rather than selecting a representation on formula count or source
+size alone: this benchmark's Monolith5 result shows a slower interpreter can
+still compile into a faster runtime implementation, and its Monolith7 result
+shows the reverse can also happen — compiling can make a slow interpreter
+slower still.
