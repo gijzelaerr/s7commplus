@@ -31,8 +31,9 @@ PLC                                          Client
  │  │ 3. Run Family-0 transforms to produce   │ │
  │  │    180-byte SecurityKeyEncryptedKey blob │ │
  │  │ 4. Derive 24-byte session_key via       │ │
- │  │    HMAC-SHA256(key2, fingerprint ||      │ │
- │  │    challenge)                            │ │
+ │  │    HMAC-SHA256(key2[:24], 8-byte         │ │
+ │  │    challenge fingerprint ||             │ │
+ │  │    challenge[2:18])                     │ │
  │  └─────────────────────────────────────────┘ │
  │                                              │
  │◄──── SetupSession ───────────────────────────│  V2 framing
@@ -41,11 +42,13 @@ PLC                                          Client
  │                                              │
  │──── response: success ──────────────────────►│
  │                                              │
- │  ══ data operations now work (V3+HMAC) ══    │
+ │  ══ V3+HMAC framing enabled ═════════════    │
  │                                              │
- │◄──── GET_VAR_SUB addr 303 (challenge) ───────│  (optional, only if
- │◄──── SET_VAR_SUB addr 1846 (solved blob) ────│   password provided)
+ │◄──── SET_VARIABLE addr 323 ──────────────────│  session activation
+ │◄──── GET_VAR_SUB addr 303 (challenge) ───────│  legitimation, even
+ │◄──── SET_VAR_SUB addr 1846 (solved blob) ────│  with empty password
  │                                              │
+ │  ══ data operations now work ════════════    │
 ```
 
 After SetupSession, all data frames use **V3 framing** with HMAC-SHA256
@@ -65,10 +68,70 @@ low-level connection method). Pass `None` to disable automatic renewal. This
 timer applies only to legacy V1-initial SessionKey sessions; TLS sessions do not
 start it.
 
-Note: TIA Portal sends SET_VARIABLE attr 323 + finalize reads before
-data operations, but this is TIA-specific behavior. The HarpoS7
-reference implementation skips it, and V1-initial PLCs reject the
-SET_VARIABLE with a connection reset (GH-710).
+The synchronous connection path currently sends SET_VARIABLE address 323 and
+then performs post-auth legitimation, even when no password was supplied. Do
+not remove these operations on the strength of older traces or the HarpoS7
+reference alone: this is the actual implemented handshake and requires
+hardware validation before wire-behavior changes. The asyncio client does not
+support this legacy SessionKey path.
+
+## Contributor path through the handwritten code
+
+The stable entry point is `S7CommPlusConnection.connect()` in
+`s7commplus/connection.py`. Its CreateObject parser saves the session challenge,
+public-key fingerprint, and ServerSessionVersion. `_setup_session()` calls
+`_try_session_key_auth()` only for non-TLS V1 sessions with both challenge and
+fingerprint; `keys.parse_fingerprint()` and `keys.get_public_key()` select the
+bundled key. A family-only fingerprint requires an explicit candidate from the
+discovery path rather than silently trying all keys.
+
+`legacy_auth.authenticate_real_plc()` is the small cryptographic boundary: it
+returns a 180-byte encrypted blob and a 24-byte session key. It delegates blob
+construction to `family0/authenticator.py` and key derivation to
+`key_derivation.py`. `_encode_security_key_struct()` owns the wire-level
+SecurityKey wrapper; `_setup_session()` writes it at address 1830 alongside the
+ServerSessionVersion echo at address 306 (with the V1-rejected PAOM string
+removed). Only an accepted response
+installs `_session_key` and enables IntegrityId tracking. `send_request()` and
+the response/fragments readers then own V3 HMAC framing and verification.
+
+After setup, `_session_activate()` sends address 323, and
+`_post_auth_legitimation()` reads a *new* challenge at address 303 and writes
+the 248-byte result to address 1846. The solver is
+`legitimate.solve_legitimate_challenge_real_plc()`. The CreateObject challenge
+must never substitute for a failed legitimation read. Renewal is handled by
+`_renew_session_key_locked()`: it reads a fresh address-303 challenge and writes
+another SecurityKey under the application-request lock. The old key verifies
+the response before the new key is installed.
+
+For a new real-PLC key family, add key selection and an authenticator parallel
+to `family0/authenticator.py`, then extend the handwritten dispatch in
+`legacy_auth.py` and its explicit tests. Do not import `_generated` in the
+connection layer, edit transpiled output to fix handshake behavior, or silently
+map an unknown family to Family 0. This is a recommended extension boundary,
+not a claim that a pluggable authenticator interface already exists.
+
+### Diagnosing a failed connection
+
+- Missing ServerSessionVersion: inspect CreateObject attribute parsing before
+  any crypto; SetupSession cannot proceed without an echoable typed value.
+- Missing challenge or fingerprint: `_try_session_key_auth()` skips the legacy
+  path. Compare the PLC's reported family, firmware, and captured attributes;
+  do not infer a bad cryptographic transform from the skipped path.
+- Unknown full fingerprint or family-only identifier: check `keys.py` and the
+  discovery candidate. A candidate rejected by SetupSession is not proof that
+  the bundled key or transform is correct for that PLC.
+- Blob generated but SetupSession rejected: compare the 1830/306 request layout,
+  public-key family, and PLC response return value before entering monoliths.
+- Setup accepted but later request rejected: distinguish activation,
+  legitimation, IntegrityId, V3 frame/HMAC, and fragmented-response verification.
+  The address-303 challenge is distinct from the CreateObject challenge.
+- Renewal failure: the connection is closed intentionally; check the fresh
+  challenge read, authenticated SecurityKey write, and PLC expiry behavior.
+
+Do not attach raw packet captures or debug logs containing challenges, session
+keys, passwords, or private material to public issues. The real-PLC acceptance
+guide describes the shareable artifact workflow.
 
 ## Module map
 
