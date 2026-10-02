@@ -25,8 +25,8 @@ partially usable public client.
 Client compatibility
 --------------------
 
-The clients share transport, TLS, session-setup, and response-parsing helpers,
-but legacy SessionKey authentication is currently synchronous-only:
+The clients share transport, TLS, session-setup, SessionKey, and
+response-parsing helpers:
 
 .. list-table:: Authentication support
    :header-rows: 1
@@ -40,10 +40,20 @@ but legacy SessionKey authentication is currently synchronous-only:
      - Supported
    * - V1 with legacy SessionKey authentication
      - Supported
-     - Not supported; ``connect`` raises before session setup
+     - Supported (emulator-tested; not yet validated on hardware)
    * - V2 or V3 with TLS
      - Supported
      - Supported
+
+Both clients authenticate a PLC that advertises legacy public-key fingerprint or
+session-challenge attributes. They share the same blob, framing, key-fallback
+and renewal logic, and accept the same ``connect()`` options: ``password``,
+``allow_legacy_key_fallback``, ``legacy_session_key_refresh_interval`` and
+``legacy_s7_1500``. The synchronous path is the one validated on real
+controllers; the asyncio path so far runs against the emulator and captured
+request layouts only. Password legitimation over a TLS session is also
+available through ``authenticate``, and happens during ``connect`` when a
+``password`` is given.
 
 Observed firmware and session paths
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -85,18 +95,12 @@ Firmware not listed here has not been validated. "V1" in this documentation
 refers to the S7CommPlus protocol-version byte negotiated by the session, not
 to the protocol generations used in some academic literature.
 
-Use the synchronous client for a PLC that advertises legacy public-key
-fingerprint or session-challenge attributes. The asyncio client detects those
-attributes in the CreateObject response and fails immediately instead of
-returning a misleading connected client. Password legitimation over a
-supported TLS session remains available through ``AsyncClient.authenticate``.
-
 Legacy S7-1500 firmware 2.6
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 An S7-1512SP on firmware 2.6 has been observed to use different authenticated
 fragment digests, symbolic-read qualifiers, and EXPLORE response layouts.
-For that non-TLS, synchronous path, opt in explicitly:
+For that non-TLS path, opt in explicitly:
 
 .. code-block:: python
 
@@ -110,10 +114,10 @@ For that non-TLS, synchronous path, opt in explicitly:
        raw = client.read_symbolic(address[0], address[1:])
 
 The setting defaults to ``False`` and is retained across reconnects. It is
-incompatible with TLS. It changes synchronous browse and symbolic reads after
-SessionKey authentication; writes, alarms, subscriptions, raw DB access, and
-other firmware have not been hardware validated with this profile. The
-``AsyncClient`` does not support legacy SessionKey authentication.
+incompatible with TLS. It changes browse and symbolic reads after SessionKey
+authentication, in both clients; writes, alarms, subscriptions, raw DB access,
+other firmware, and the ``AsyncClient`` have not been hardware validated with
+this profile.
 
 TLS
 ---

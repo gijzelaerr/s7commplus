@@ -9,7 +9,7 @@ description = "Pure Python S7CommPlus client and server emulator for Siemens S7-
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-license-files = ["LICENSE", "s7commplus/session_auth/LICENSE-HarpoS7"]
+license-files = ["LICENSE", "s7commplus/v1_session_key/LICENSE-HarpoS7"]
 authors = [{name = "Gijs Molenaar", email = "gijsmolenaar@gmail.com"}]
 keywords = ["s7commplus", "s7", "siemens", "plc", "industrial-automation"]
 classifiers = [
@@ -30,6 +30,7 @@ dependencies = ["cryptography>=41"]
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio", "pytest-bdd>=8.1,<9", "pytest-cov", "hypothesis", "mypy", "ruff"]
 docs = ["sphinx>=7.2", "furo>=2024.8.6"]
+analysis = ["z3-solver>=4.13,<5"]
 
 [project.urls]
 Homepage = "https://github.com/gijzelaerr/s7commplus"
@@ -40,12 +41,11 @@ Documentation = "https://s7commplus.readthedocs.io/"
 [tool.setuptools.package-data]
 s7commplus = [
     "py.typed",
-    "session_auth/**/*.bin",
-    "session_auth/ARCHITECTURE.md",
-    "session_auth/MONOLITH5_ANALYSIS.md",
-    "session_auth/MONOLITH11_ANALYSIS.md",
-    "session_auth/LICENSE-HarpoS7",
-    "session_auth/artifacts.json",
+    "v1_session_key/**/*.bin",
+    "v1_session_key/ARCHITECTURE.md",
+    "v1_session_key/MAINTAINER_GUIDE.md",
+    "v1_session_key/MODEL_BENCHMARKS.md",
+    "v1_session_key/LICENSE-HarpoS7",
     "zlib_dicts/*.xml",
 ]
 
@@ -62,6 +62,8 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
     "conformance: protocol conformance tests",
+    "slow: re-derives a recovered SessionKey proof via Z3; skipped by default, pass --slow to run",
+    "analysis: studies retired HarpoS7 code in old/; skipped by default, pass --analysis to run (CI does)",
     "e2e: end-to-end tests requiring a real PLC connection",
     "real_plc: versioned real-PLC acceptance scenario",
     "smoke: read-only real-PLC acceptance scenario",

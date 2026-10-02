@@ -33,21 +33,34 @@ tested against an isolated, non-safety-critical controller.
 - `s7commplus/tag_browser.py`, `typeinfo.py`, and `blob_decompressor.py`: symbol,
   type-information, and compressed metadata parsing
 - `s7commplus/subscription.py` and `alarm.py`: cyclic subscriptions and alarms
-- `s7commplus/legitimation.py`: client-side password legitimation flow
-- `s7commplus/session_auth/`: session authentication and HarpoS7-derived
-  cryptographic algorithms
-- `s7commplus/session_auth/family0/_generated/`: generated translations of
-  authentication transforms; avoid hand-editing without a specific reason
+- `s7commplus/legitimation.py`: client-side password legitimation for TLS
+  (V2/V3) sessions
+- `s7commplus/v1_session_key/`: the V1 SessionKey handshake and V1 password
+  legitimation, used only for S7CommPlus V1 without TLS; HarpoS7-derived
+- `s7commplus/v1_session_key/real_plc/`: the blob algorithm for real
+  S7-1200/1500 keys (HarpoS7's "Family 0") and its
+  recovered primitives (`seed`, `curve`, `present`, `checksum`, `fingerprint`);
+  `fingerprint.py`'s constants are recovered by `tools/recover_fingerprint.py`
+- `old/`: retired, repository-only reference code (the transpiled HarpoS7
+  monoliths, their vendored tables in `old/family0/_generated/data/`, and the
+  Transform7/12/13 ports) that tests and `tools/` compare the runtime against;
+  not packaged. Proof reports pin many of these files' SHA-256, so do not edit
+  them
 - `s7commplus/zlib_dicts/`: preset dictionaries used to decompress PLC metadata
 - `tests/`: unit, protocol conformance, emulator, TLS, authentication, and
   opt-in real-PLC tests
 
-Package data matters: `py.typed`, authentication `.bin` files, and zlib
-dictionary `.xml` files are included through `pyproject.toml`. Do not move,
-rename, or omit them from distributions accidentally.
+Package data matters: `py.typed`, the V1 SessionKey documents
+(`ARCHITECTURE.md`, `MAINTAINER_GUIDE.md`, `MODEL_BENCHMARKS.md`),
+`LICENSE-HarpoS7`, and zlib dictionary `.xml` files are included through
+`pyproject.toml`. The artifact manifest and the analyses of retired HarpoS7
+code live in `old/family0/` and are not distributed. The runtime currently ships no `.bin` tables;
+the `v1_session_key/**/*.bin` glob stays so that any manifested table added later
+is distributed. Do not move, rename, or omit package data from distributions
+accidentally.
 
-The session-authentication code derives from HarpoS7. Preserve its attribution
-and `s7commplus/session_auth/LICENSE-HarpoS7` when changing or redistributing it.
+The V1 SessionKey code derives from HarpoS7. Preserve its attribution
+and `s7commplus/v1_session_key/LICENSE-HarpoS7` when changing or redistributing it.
 
 ## Protocol stack and design constraints
 
@@ -98,8 +111,10 @@ async with AsyncClient() as client:
 ```
 
 TLS connections use the `use_tls`, `tls_cert`, `tls_key`, and `tls_ca`
-arguments to `connect()`. The synchronous client also accepts `password` there;
-with the async client, call `authenticate()` after connecting. Never weaken
+arguments to `connect()`. Both clients also accept `password` there, which V1
+SessionKey sessions use for their post-handshake legitimation and TLS sessions
+pass to `authenticate()`; that method can also be called after connecting.
+V1 SessionKey support in the async client is emulator-tested only. Never weaken
 certificate verification or authentication defaults merely to make an
 integration test pass.
 
@@ -127,7 +142,9 @@ pre-commit run --all-files
 
 GitHub Releases whose tags match the package version (for example, `v0.1.0`
 for version `0.1.0`) publish the validated wheel and source distribution to
-PyPI through trusted publishing. The ``pypi`` GitHub environment and the PyPI
+PyPI through trusted publishing. Record user-visible changes under the unreleased
+heading in `CHANGES.md` as they land, with an upgrade note for any renamed or
+removed public API, and give that heading its version when tagging. The ``pypi`` GitHub environment and the PyPI
 trusted publisher must both be configured before the first release.
 
 Useful focused commands:
@@ -135,7 +152,7 @@ Useful focused commands:
 ```bash
 pytest tests/test_s7_unit.py
 pytest tests/test_s7_tls.py
-pytest tests/test_session_auth.py
+pytest tests/test_v1_session_key.py
 pytest -m conformance
 ```
 
@@ -149,6 +166,32 @@ enabled:
 ```bash
 pytest --e2e --plc-ip 192.168.1.10 --plc-port 102 \
   --plc-rack 0 --plc-slot 1 --plc-db-read 1 --plc-db-write 2
+```
+
+Tests that re-derive a recovered SessionKey proof (Z3 SAT/UNSAT replay, or
+exhaustive per-branch/per-byte verification over hundreds of generated-source
+cases) are marked `slow` and skipped by default; a plain `pytest` run
+completes in a few minutes instead of roughly half an hour. Pass `--slow` to
+run them:
+
+```bash
+pytest --slow
+```
+
+Run with `--slow` when changing anything under `tools/prove_*.py`,
+`tools/recover_*.py`, the retired `old/family0/` modules, or any
+checked-in proof/model JSON — the fast default only checks that code exists
+and imports, not that its proofs still hold.
+
+Tests whose subject is the retired HarpoS7 code in `old/` (monolith models,
+Transform7/12 analyses, scalar research, bit traces) are marked `analysis`
+and are also skipped by default, which keeps a plain `pytest` run to about a
+minute. The runtime's own tests, including its comparisons against `old/`
+references, always run. CI passes `--analysis`; do the same when touching
+`old/`, `tools/` or the analysis tests:
+
+```bash
+pytest --analysis
 ```
 
 The write DB supplied to E2E tests must be disposable and safe to modify. Never

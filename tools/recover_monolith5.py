@@ -14,8 +14,8 @@ import json
 from pathlib import Path
 from typing import TypeAlias, TypedDict
 
-from tools.trace_session_auth_bits import trace_output_bits
-from tools.trace_session_auth_output import REPOSITORY_ROOT, trace_monolith
+from tools.trace_v1_session_key_bits import trace_output_bits
+from tools.trace_v1_session_key_output import REPOSITORY_ROOT, trace_monolith
 
 Word: TypeAlias = tuple[int, ...]
 Polynomial: TypeAlias = frozenset[int]  # XOR of monomials; each monomial is a bitset of source-bit IDs.

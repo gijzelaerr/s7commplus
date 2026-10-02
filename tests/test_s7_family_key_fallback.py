@@ -8,7 +8,7 @@ from s7commplus.error import S7ConnectionError
 from s7commplus.client import S7CommPlusClient, _LEGACY_KEY_CACHE
 from s7commplus.connection import FamilyOnlyFingerprintError, S7CommPlusConnection, SessionKeyCandidateRejectedError
 from s7commplus.protocol import DataType, ProtocolVersion
-from s7commplus.session_auth import KeyFamily, get_public_key
+from s7commplus.v1_session_key import KeyFamily, get_public_key
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def test_family_only_identifier_tries_same_family_candidates_on_fresh_sessions()
     factory, instances = _connection_factory(connect_effect)
     with (
         patch("s7commplus.client.S7CommPlusConnection", side_effect=factory),
-        patch("s7commplus.session_auth.keys.fingerprints_for_family", return_value=("01:BAD", "01:GOOD")),
+        patch("s7commplus.v1_session_key.keys.fingerprints_for_family", return_value=("01:BAD", "01:GOOD")),
     ):
         S7CommPlusClient().connect("plc")
 
@@ -82,7 +82,7 @@ def test_disabled_fallback_fails_without_probing() -> None:
     factory, instances = _connection_factory(connect_effect)
     with (
         patch("s7commplus.client.S7CommPlusConnection", side_effect=factory),
-        patch("s7commplus.session_auth.keys.fingerprints_for_family") as candidates,
+        patch("s7commplus.v1_session_key.keys.fingerprints_for_family") as candidates,
         pytest.raises(S7ConnectionError, match="fallback is disabled"),
     ):
         S7CommPlusClient().connect("plc", allow_legacy_key_fallback=False)
@@ -100,7 +100,7 @@ def test_exhausted_candidates_fail_clearly_and_each_uses_a_fresh_session() -> No
     factory, instances = _connection_factory(connect_effect)
     with (
         patch("s7commplus.client.S7CommPlusConnection", side_effect=factory),
-        patch("s7commplus.session_auth.keys.fingerprints_for_family", return_value=("01:A", "01:B")),
+        patch("s7commplus.v1_session_key.keys.fingerprints_for_family", return_value=("01:A", "01:B")),
         pytest.raises(S7ConnectionError, match="rejected all 2"),
     ):
         S7CommPlusClient().connect("plc")
@@ -160,7 +160,7 @@ def test_explicit_candidate_selects_its_public_key() -> None:
     connection._session_challenge = bytes(range(20))
     generated = (bytes(180), bytes(24))
 
-    with patch("s7commplus.session_auth.legacy_auth.authenticate_real_plc", return_value=generated) as authenticate:
+    with patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=generated) as authenticate:
         assert connection._try_session_key_auth() == generated
 
     assert authenticate.call_args.args[1] == get_public_key("01:BD426B091F08731A")

@@ -4,6 +4,8 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import ssl
 import struct
@@ -11,17 +13,19 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError
+from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
 
 from . import typeinfo
 from .blob_decompressor import find_and_decompress
 from .client import (
+    _LEGACY_KEY_CACHE,
     DBWriteItem,
     SymbolicReadItem,
     SymbolicWriteItem,
     _build_area_read_payload,
     _build_area_write_payload,
     _build_explore_payload,
+    _build_explore_payload_v3,
     _build_explore_request,
     _build_invoke_payload,
     _build_multi_symbolic_write_payload,
@@ -48,21 +52,38 @@ from .codec import (
     parse_create_object_session_id,
 )
 from .connection import (
+    _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
     _MAX_STALE_RESPONSES_PER_REQUEST,
     _MAX_SYSTEM_EVENTS_PER_RESPONSE,
     _S7_CIPHERS,
+    FamilyOnlyFingerprintError,
+    SessionKeyAuthenticationDependencyError,
+    SessionKeyCandidateRejectedError,
     _build_get_var_substreamed_payload,
+    _build_session_activate_payload,
+    _build_session_setup_frame,
     _build_set_variable_payload,
+    _build_v1_get_var_substreamed_payload,
+    _build_v1_legitimation_payload,
     _check_set_variable_response,
     _check_system_event,
+    _check_v1_legitimation_response,
+    _encode_security_key_struct,
+    _frame_request,
+    _generate_session_key_blob,
     _incoming_frame_opcode,
     _incoming_response_sequence,
     _is_stale_response_sequence,
     _log_create_object_return_value,
     _parse_get_var_substreamed_response,
     _parse_protection_level_response,
+    _resolve_session_key_fingerprint,
+    _session_setup_accepted,
     _set_s7_groups,
+    _strip_response_integrity_id,
+    _v1_integrity_tail,
     _validate_response_header,
+    _verify_v3_hmac,
 )
 from .alarm import (
     Alarm,
@@ -91,11 +112,13 @@ from .protocol import (
     ElementID,
     FunctionCode,
     Ids,
+    LegitimationId,
     LegitimationType,
     ObjectId,
     Opcode,
     ProtocolVersion,
 )
+from .v1_session_key.keys import KeyFamily
 from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
 
 logger = logging.getLogger(__name__)
@@ -144,10 +167,21 @@ class S7CommPlusAsyncClient:
         # ServerSessionVersion is captured as its raw typed value (flags+datatype+data)
         # so it can be echoed back verbatim — real S7-1500 PLCs send it as a Struct.
         self._server_session_version: Optional[bytes] = None
-        self._legacy_session_key_required: bool = False
         self._session_setup_ok: bool = False
         # Effective protection level, read once the session is up
         self._protection_level: Optional[int] = None
+
+        # V1 SessionKey state (non-TLS V1 sessions only), as in S7CommPlusConnection.
+        self._legacy_s7_1500 = False
+        self._public_key_fingerprint: Optional[str] = None
+        self._session_challenge: Optional[bytes] = None
+        self._session_key: Optional[bytes] = None
+        self._v1_session_key_public_key: bytes = b""
+        self._v1_session_key_family = KeyFamily.S7_1500
+        self._session_key_fingerprint_override: Optional[str] = None
+        self._session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL
+        self._session_key_refresh_task: Optional[asyncio.Task[None]] = None
+        self._session_key_refresh_error: Optional[Exception] = None
 
     @property
     def connected(self) -> bool:
@@ -186,6 +220,11 @@ class S7CommPlusAsyncClient:
         """Effective protection level reported by the PLC (see `AccessLevel`)."""
         return self._protection_level
 
+    @property
+    def legacy_s7_1500(self) -> bool:
+        """Whether the opt-in profile is active on a SessionKey connection."""
+        return self._legacy_s7_1500 and self._session_key is not None
+
     async def connect(
         self,
         host: str,
@@ -197,6 +236,10 @@ class S7CommPlusAsyncClient:
         tls_cert: Optional[str] = None,
         tls_key: Optional[str] = None,
         tls_ca: Optional[str] = None,
+        password: Optional[str] = None,
+        allow_legacy_key_fallback: bool = True,
+        legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
+        legacy_s7_1500: bool = False,
     ) -> None:
         """Connect to an S7-1200/1500 PLC using S7CommPlus.
 
@@ -209,7 +252,20 @@ class S7CommPlusAsyncClient:
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
+            password: PLC password. V1 SessionKey sessions use it for the
+                post-handshake legitimation; TLS sessions pass it to
+                :meth:`authenticate` after connecting.
+            allow_legacy_key_fallback: Try known same-family public keys on
+                fresh sessions when a legacy PLC omits its key id.
+            legacy_session_key_refresh_interval: Seconds between legacy
+                SessionKey renewals, or ``None`` to disable them.
+            legacy_s7_1500: Enable the non-TLS S7-1500 FW 2.6 browse/read
+                profile validated in issue #12.
         """
+        if legacy_s7_1500 and use_tls:
+            raise ValueError("legacy_s7_1500 requires use_tls=False")
+        if legacy_session_key_refresh_interval is not None and legacy_session_key_refresh_interval <= 0:
+            raise ValueError("legacy_session_key_refresh_interval must be positive or None")
         self._symbol_catalog = None
         self._connect_params = {
             "host": host,
@@ -220,11 +276,81 @@ class S7CommPlusAsyncClient:
             "tls_cert": tls_cert,
             "tls_key": tls_key,
             "tls_ca": tls_ca,
+            "password": password,
+            "allow_legacy_key_fallback": allow_legacy_key_fallback,
+            "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
+            "legacy_s7_1500": legacy_s7_1500,
         }
         self._host = host
+        try:
+            await self._open_connection()
+        except Exception:
+            self._connect_params = None
+            raise
+
+    async def _open_connection(self) -> None:
+        """Open the connection, trying bundled same-family keys when the PLC withholds its key id."""
+        assert self._connect_params is not None
+        p = self._connect_params
+        cache_key = (p["host"], p["port"])
+        cached = _LEGACY_KEY_CACHE.get(cache_key) if p["allow_legacy_key_fallback"] else None
+        if cached is not None:
+            try:
+                await self._open_connection_once(cached)
+                return
+            except SessionKeyCandidateRejectedError:
+                logger.info("Cached SessionKey candidate %s was rejected; trying remaining family keys", cached)
+                _LEGACY_KEY_CACHE.pop(cache_key, None)
+                from .v1_session_key.keys import parse_fingerprint
+
+                family, _ = parse_fingerprint(cached)
+                await self._probe_family_keys(family, excluded={cached})
+                return
+
+        try:
+            await self._open_connection_once()
+        except FamilyOnlyFingerprintError as exc:
+            if not p["allow_legacy_key_fallback"]:
+                raise S7ConnectionError(
+                    f"PLC advertised family-only key id {exc.family:02X}, but legacy key fallback is disabled"
+                ) from exc
+            await self._probe_family_keys(exc.family)
+
+    async def _probe_family_keys(self, family: int, excluded: set[str] | None = None) -> None:
+        """Try each same-family key on a new connection and cache the winner."""
+        assert self._connect_params is not None
+        from .v1_session_key.keys import fingerprints_for_family
+
+        excluded = excluded or set()
+        candidates = [fingerprint for fingerprint in fingerprints_for_family(family) if fingerprint not in excluded]
+        if not candidates:
+            raise S7ConnectionError(f"No bundled SessionKey candidates for public-key family {family:02X}")
+
+        for attempt, fingerprint in enumerate(candidates, 1):
+            logger.info("Trying SessionKey candidate %s (%d/%d) on a fresh session", fingerprint, attempt, len(candidates))
+            try:
+                await self._open_connection_once(fingerprint)
+            except SessionKeyCandidateRejectedError:
+                continue
+            _LEGACY_KEY_CACHE[(self._connect_params["host"], self._connect_params["port"])] = fingerprint
+            logger.info("Confirmed and cached SessionKey candidate %s", fingerprint)
+            return
+        raise S7ConnectionError(
+            f"PLC rejected all {len(candidates)} bundled SessionKey candidates for public-key family {family:02X}"
+        )
+
+    async def _open_connection_once(self, fingerprint: Optional[str] = None) -> None:
+        """Open exactly one transport and session, optionally with one SessionKey candidate."""
+        assert self._connect_params is not None
+        p = self._connect_params
+        use_tls = p["use_tls"]
+        self._legacy_s7_1500 = p["legacy_s7_1500"]
+        self._session_key_refresh_interval = p["legacy_session_key_refresh_interval"]
+        self._session_key_refresh_error = None
+        self._session_key_fingerprint_override = fingerprint
 
         # TCP connect
-        self._reader, self._writer = await asyncio.open_connection(host, port)
+        self._reader, self._writer = await asyncio.open_connection(p["host"], p["port"])
         self._transport_connected = True
 
         try:
@@ -236,36 +362,40 @@ class S7CommPlusAsyncClient:
 
             # Step 3: TLS activation (between InitSSL and CreateObject)
             if use_tls:
-                await self._activate_tls(tls_cert=tls_cert, tls_key=tls_key, tls_ca=tls_ca)
+                await self._activate_tls(tls_cert=p["tls_cert"], tls_key=p["tls_key"], tls_ca=p["tls_ca"])
 
             # Step 4: S7CommPlus session setup (CreateObject)
             await self._create_session()
+            self._session_key_fingerprint_override = _resolve_session_key_fingerprint(
+                self._public_key_fingerprint, self._session_key_fingerprint_override
+            )
 
             # After CreateObject (which always uses V1 framing), data PDUs over TLS
             # use ProtocolVersion V2 on a real S7-1500 (matches the C# reference driver).
             if self._tls_active:
                 self._protocol_version = ProtocolVersion.V2
 
-            if self._protocol_version == ProtocolVersion.V1 and self._legacy_session_key_required:
-                from .error import S7ConnectionError
-
-                raise S7ConnectionError(
-                    "AsyncClient does not support legacy V1 SessionKey authentication; "
-                    "use the synchronous s7commplus.Client for this PLC"
-                )
-
             # Step 5: Session setup. A transport and CreateObject response do
             # not make the public client usable until the PLC accepts setup.
             if self._server_session_version is None:
-                from .error import S7ConnectionError
-
                 raise S7ConnectionError(
                     "PLC did not provide a usable ServerSessionVersion attribute; S7CommPlus session setup cannot continue"
                 )
-            self._session_setup_ok = await self._setup_session()
+            try:
+                self._session_setup_ok = await self._setup_session()
+            except SessionKeyAuthenticationDependencyError:
+                raise
+            except Exception as exc:
+                if self._session_key_fingerprint_override is not None:
+                    raise SessionKeyCandidateRejectedError(
+                        f"Session failed while trying SessionKey candidate {self._session_key_fingerprint_override}"
+                    ) from exc
+                raise
             if not self._session_setup_ok:
-                from .error import S7ConnectionError
-
+                if self._session_key_fingerprint_override is not None:
+                    raise SessionKeyCandidateRejectedError(
+                        f"PLC rejected SessionKey candidate {self._session_key_fingerprint_override}"
+                    )
                 raise S7ConnectionError("S7CommPlus session setup was rejected by the PLC")
             self._session_ready = True
 
@@ -277,29 +407,36 @@ class S7CommPlusAsyncClient:
                     )
             elif self._protocol_version == ProtocolVersion.V2:
                 if not self._tls_active:
-                    from .error import S7ConnectionError
-
                     raise S7ConnectionError("PLC reports V2 protocol but TLS is not active. V2 requires TLS. Use use_tls=True.")
                 self._with_integrity_id = True
                 self._integrity_id_read = 0
                 self._integrity_id_write = 0
                 logger.info("V2 IntegrityId tracking enabled")
 
+            if self._session_key is not None:
+                await self._session_activate()
+                await self._post_auth_legitimation(p["password"] or "")
+
             self._protection_level = await self._get_effective_protection_level()
             if self._protection_level is not None:
                 logger.info(f"PLC reports protection level: {self._protection_level}")
 
             self._connected = True
+            self._schedule_session_key_refresh()
 
             logger.info(
-                f"Async S7CommPlus connected to {host}:{port}, "
+                f"Async S7CommPlus connected to {p['host']}:{p['port']}, "
                 f"version=V{self._protocol_version}, session={self._session_id}, "
                 f"tls={self._tls_active}"
             )
 
         except Exception:
-            await self.disconnect()
+            await self._close()
             raise
+
+        if p["password"] is not None and self._tls_active:
+            logger.info("Performing PLC legitimation (password authentication)")
+            await self.authenticate(p["password"])
 
     async def authenticate(self, password: str, username: str = "") -> None:
         """Perform PLC password authentication (legitimation).
@@ -505,6 +642,13 @@ class S7CommPlusAsyncClient:
 
     async def disconnect(self) -> None:
         """Disconnect from PLC."""
+        await self._close()
+        self._session_key_refresh_error = None
+        self._connect_params = None
+
+    async def _close(self) -> None:
+        """Tear down the session and transport, keeping the connect parameters and any renewal failure."""
+        self._stop_session_key_refresh()
         if self._session_ready and self._session_id:
             try:
                 await self._delete_session()
@@ -528,9 +672,13 @@ class S7CommPlusAsyncClient:
         self._oms_secret = None
         self._symbol_catalog = None
         self._server_session_version = None
-        self._legacy_session_key_required = False
         self._session_setup_ok = False
         self._protection_level = None
+        self._public_key_fingerprint = None
+        self._session_challenge = None
+        self._session_key = None
+        self._v1_session_key_public_key = b""
+        self._v1_session_key_family = KeyFamily.S7_1500
         self._notification_frames.clear()
 
         if self._writer:
@@ -541,7 +689,70 @@ class S7CommPlusAsyncClient:
                 pass
             self._writer = None
             self._reader = None
-        self._connect_params = None
+
+    async def _invalidate_integrity_failure(self) -> None:
+        """Discard authenticated state without writing to an untrusted stream."""
+        self._session_ready = False
+        await self._close()
+
+    # -- V1 SessionKey renewal --
+
+    def _stop_session_key_refresh(self) -> None:
+        """Cancel the renewal task, unless it is the task doing the stopping."""
+        task = self._session_key_refresh_task
+        self._session_key_refresh_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    def _schedule_session_key_refresh(self) -> None:
+        """Start renewing an authenticated legacy session's key periodically."""
+        interval = self._session_key_refresh_interval
+        if interval is None or self._session_key is None or not self._connected:
+            return
+        self._session_key_refresh_task = asyncio.get_running_loop().create_task(self._session_key_refresh_loop(interval))
+
+    async def _session_key_refresh_loop(self, interval: float) -> None:
+        """Renew under the request lock every ``interval`` seconds; a failed renewal is terminal."""
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                async with self._lock:
+                    if not self._connected:
+                        return
+                    await self._renew_session_key_locked()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failure = S7ConnectionError(f"Legacy SessionKey renewal failed: {exc}")
+            logger.error("%s", failure)
+            self._session_key_refresh_error = failure
+            self._session_ready = False
+            self._session_id = 0
+            await self._close()
+
+    async def _renew_session_key_locked(self) -> None:
+        """Perform the challenge/SecurityKey exchange while the old key is active."""
+        if self._session_key is None or not self._v1_session_key_public_key:
+            raise S7ConnectionError("Legacy SessionKey renewal prerequisites are unavailable")
+
+        from .v1_session_key.handshake import authenticate_real_plc
+
+        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
+        challenge_payload = _build_v1_get_var_substreamed_payload(
+            self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
+        )
+        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail)
+        challenge = _parse_get_var_substreamed_response(challenge_response)
+        if len(challenge) != 20:
+            raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
+        blob, new_session_key = authenticate_real_plc(challenge, self._v1_session_key_public_key, self._v1_session_key_family)
+        security_key = _encode_security_key_struct(
+            self._v1_session_key_public_key, self._v1_session_key_family, blob, new_session_key
+        )
+        renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
+        _check_set_variable_response(await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4))
+        self._session_key = new_session_key
+        logger.info("Legacy SessionKey renewed successfully")
 
     async def _reconnect(self) -> None:
         """Tear down and re-establish the connection with the same parameters."""
@@ -610,8 +821,11 @@ class S7CommPlusAsyncClient:
 
     async def explore(self, explore_id: int = 0) -> bytes:
         """Browse the PLC object tree."""
-        payload = _build_explore_payload(explore_id)
-        return await self._send_request(FunctionCode.EXPLORE, payload)
+        if self._session_key is not None:
+            payload = _build_explore_payload_v3(explore_id if explore_id else 0x38)
+        else:
+            payload = _build_explore_payload(explore_id)
+        return await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
 
     async def explore_xml(self, explore_id: int = 0) -> str | None:
         """EXPLORE a PLC object and decompress the XML metadata from the response.
@@ -768,6 +982,7 @@ class S7CommPlusAsyncClient:
             else:
                 receive = self._recv_cotp_dt()
                 frame = await asyncio.wait_for(receive, timeout) if timeout is not None else await receive
+            await self._verified_incoming_data(frame)
         return parse_alarm_notification(frame, language_ids)
 
     async def read_alarms(self, language_ids: Optional[list[LanguageId | int]] = None) -> list[Alarm]:
@@ -782,7 +997,8 @@ class S7CommPlusAsyncClient:
 
         .. warning:: This method is **experimental** and may change.
         """
-        payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, self._protocol_version)
+        version = ProtocolVersion.V2 if self.legacy_s7_1500 else self._protocol_version
+        payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, version)
         response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
@@ -806,7 +1022,8 @@ class S7CommPlusAsyncClient:
         """
         if not items:
             return []
-        payload = _build_multi_symbolic_read_payload(items, self._protocol_version)
+        version = ProtocolVersion.V2 if self.legacy_s7_1500 else self._protocol_version
+        payload = _build_multi_symbolic_read_payload(items, version)
         response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response, expected_count=len(items))
         if len(results) != len(items):
@@ -902,7 +1119,14 @@ class S7CommPlusAsyncClient:
 
         .. warning:: This method is **experimental** and may change.
         """
-        payload = _build_explore_request(Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER])
+        if self._session_key is not None and not self.legacy_s7_1500:
+            # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
+            # matching TIA Portal's browse pattern
+            payload = _build_explore_payload_v3(0x8A11FFFF)
+        else:
+            payload = _build_explore_request(
+                Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER]
+            )
         response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return _parse_explore_datablocks(response)
 
@@ -1021,65 +1245,109 @@ class S7CommPlusAsyncClient:
             Response payload (after the 10-byte response header).
         """
         async with self._lock:
-            if not (self._connected or self._transport_connected) or self._writer is None or self._reader is None:
-                raise S7ConnectionError("Not connected")
+            return await self._send_request_locked(function_code, payload, integrity_tail, reassemble)
 
-            seq_num = self._next_sequence_number()
+    async def _send_request_locked(
+        self,
+        function_code: int,
+        payload: bytes,
+        integrity_tail: int = 4,
+        reassemble: bool = False,
+    ) -> bytes:
+        """:meth:`_send_request` for a caller that already holds the request lock."""
+        if self._session_key_refresh_error is not None:
+            raise self._session_key_refresh_error
+        if not (self._connected or self._transport_connected) or self._writer is None or self._reader is None:
+            raise S7ConnectionError("Not connected")
 
-            request_header = struct.pack(
-                ">BHHHHIB",
-                Opcode.REQUEST,
-                0x0000,
-                function_code,
-                0x0000,
-                seq_num,
-                self._session_id,
-                # Transport flags: 0x34 for the function codes the reference sends with 0x34.
-                0x34 if function_code in FLAGS_34_FUNCTION_CODES else 0x36,
-            )
+        seq_num = self._next_sequence_number()
 
-            integrity_id_bytes = b""
-            if self._with_integrity_id and self._protocol_version >= ProtocolVersion.V2:
-                is_read = function_code in READ_FUNCTION_CODES
-                integrity_id = self._integrity_id_read if is_read else self._integrity_id_write
-                integrity_id_bytes = encode_uint32_vlq(integrity_id)
+        request_header = struct.pack(
+            ">BHHHHIB",
+            Opcode.REQUEST,
+            0x0000,
+            function_code,
+            0x0000,
+            seq_num,
+            self._session_id,
+            # Transport flags: 0x34 after SessionKey auth (matches TIA Portal),
+            # and for the function codes the reference sends with 0x34.
+            0x34 if self._session_key is not None or function_code in FLAGS_34_FUNCTION_CODES else 0x36,
+        )
 
-            # The IntegrityId is spliced in just before the payload's trailing fill bytes
-            # (integrity_tail of them), not right after the header.
-            if integrity_id_bytes and len(payload) >= integrity_tail:
-                request = request_header + payload[:-integrity_tail] + integrity_id_bytes + payload[-integrity_tail:]
+        with_integrity_id = self._with_integrity_id and (
+            self._protocol_version >= ProtocolVersion.V2 or self._session_key is not None
+        )
+        integrity_id_bytes = b""
+        if with_integrity_id:
+            is_read = function_code in READ_FUNCTION_CODES
+            integrity_id = self._integrity_id_read if is_read else self._integrity_id_write
+            integrity_id_bytes = encode_uint32_vlq(integrity_id)
+
+        # The IntegrityId is spliced in just before the payload's trailing fill bytes
+        # (integrity_tail of them), not right after the header.
+        if integrity_id_bytes and len(payload) >= integrity_tail:
+            request = request_header + payload[:-integrity_tail] + integrity_id_bytes + payload[-integrity_tail:]
+        else:
+            request = request_header + integrity_id_bytes + payload
+
+        # After SessionKey auth, all data ops use V3 framing with HMAC
+        await self._send_cotp_dt(_frame_request(request, self._protocol_version, self._session_key))
+
+        if with_integrity_id:
+            if function_code in READ_FUNCTION_CODES:
+                self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
             else:
-                request = request_header + integrity_id_bytes + payload
+                self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
 
-            frame = encode_header(self._protocol_version, len(request)) + request
-            frame += struct.pack(">BBH", 0x72, self._protocol_version, 0x0000)
-            await self._send_cotp_dt(frame)
+        response_data = await self._recv_response_frame(seq_num)
 
-            if self._with_integrity_id and self._protocol_version >= ProtocolVersion.V2:
-                if function_code in READ_FUNCTION_CODES:
-                    self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
-                else:
-                    self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
+        # Large responses (e.g. Explore) are split across several S7CommPlus PDUs.
+        if reassemble:
+            data = await self._recv_reassembled_payload(response_data)
+            if len(data) < 10:
+                raise S7ConnectionError("Response too short")
+            _validate_response_header(data, function_code, seq_num)
+            return self._response_payload(function_code, bytes(data[10:]))
 
-            response_data = await self._recv_response_frame(seq_num)
+        version, data_length, consumed = decode_header(response_data)
+        if self._session_key is not None and version != ProtocolVersion.V3:
+            await self._invalidate_integrity_failure()
+            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
+        response = response_data[consumed : consumed + data_length]
+        if self._session_key is not None:
+            try:
+                response = _verify_v3_hmac(response, self._session_key)
+            except S7IntegrityError:
+                await self._invalidate_integrity_failure()
+                raise
 
-            # Large responses (e.g. Explore) are split across several S7CommPlus PDUs.
-            if reassemble:
-                data = await self._recv_reassembled_payload(response_data)
-                if len(data) < 10:
-                    raise S7ConnectionError("Response too short")
-                _validate_response_header(data, function_code, seq_num)
-                return bytes(data[10:])
+        _validate_response_header(response, function_code, seq_num)
 
-            _, data_length, consumed = decode_header(response_data)
-            response = response_data[consumed : consumed + data_length]
+        # RESPONSE header is 10 bytes (opcode+res+func+res+seqnr+transport) — responses
+        # carry no SessionId field (requests do, hence their 14-byte header). For V2+ the
+        # IntegrityId travels at the END of the payload and is ignored by the parsers;
+        # after SessionKey auth it leads the payload and is removed here.
+        return self._response_payload(function_code, response[10:])
 
-            _validate_response_header(response, function_code, seq_num)
+    def _response_payload(self, function_code: int, payload: bytes) -> bytes:
+        """Preserve legacy return values where IntegrityId follows the body."""
+        return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
 
-            # RESPONSE header is 10 bytes (opcode+res+func+res+seqnr+transport) — responses
-            # carry no SessionId field (requests do, hence their 14-byte header). For V2+ the
-            # IntegrityId travels at the END of the payload and is ignored by the parsers.
-            return response[10:]
+    async def _verified_incoming_data(self, frame: bytes) -> bytes:
+        """Return application data after authenticating the complete frame."""
+        version, data_length, consumed = decode_header(frame)
+        data = bytes(frame[consumed : consumed + data_length])
+        if self._session_key is None:
+            return data
+        if version != ProtocolVersion.V3:
+            await self._invalidate_integrity_failure()
+            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
+        try:
+            return _verify_v3_hmac(data, self._session_key)
+        except S7IntegrityError:
+            await self._invalidate_integrity_failure()
+            raise
 
     async def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
         """Receive the next response, queueing unsolicited application frames."""
@@ -1096,6 +1364,8 @@ class S7CommPlusAsyncClient:
                 if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
                     raise S7ProtocolError("Too many S7CommPlus SystemEvents while waiting for a response")
                 continue
+            if self._session_key is not None:
+                await self._verified_incoming_data(response_data)
             if data_length < 10:
                 return response_data
             opcode = _incoming_frame_opcode(response_data)
@@ -1127,7 +1397,8 @@ class S7CommPlusAsyncClient:
         ``0x72 <ver> <len:2> <data:len>`` with no trailer; only the final fragment is
         followed by the ``0x72 <ver> 0x0000`` trailer. We concatenate the data parts
         of every fragment until the trailer is seen. Works for single-PDU responses
-        too (one fragment immediately followed by the trailer).
+        too (one fragment immediately followed by the trailer). After SessionKey
+        auth every fragment must be V3, and its HMAC covers the fragments so far.
         """
         buf = bytearray(initial_data)
 
@@ -1138,19 +1409,54 @@ class S7CommPlusAsyncClient:
                     raise S7ConnectionError("Connection closed during response reassembly")
                 buf.extend(chunk)
 
+        from ._fragment_hmac import FragmentHMACVerifier
+
+        session_key = self._session_key
+        legacy_verifier = FragmentHMACVerifier(session_key) if self.legacy_s7_1500 and session_key else None
+        digest_state = hmac.new(session_key[:24], digestmod=hashlib.sha256) if session_key is not None else None
         data = bytearray()
         fragments = 0
+        expected_version: int | None = None
         while True:
             await ensure(4)
             if buf[0] != 0x72:
                 raise S7ConnectionError("Expected S7CommPlus fragment header (0x72)")
+            fragment_version = buf[1]
+            if session_key is not None and fragment_version != ProtocolVersion.V3:
+                await self._invalidate_integrity_failure()
+                raise S7IntegrityError(
+                    f"Authenticated response used unauthenticated frame version V{fragment_version}; reconnect"
+                )
+            if expected_version is None:
+                expected_version = fragment_version
+            elif fragment_version != expected_version:
+                if session_key is not None:
+                    await self._invalidate_integrity_failure()
+                    raise S7IntegrityError(
+                        f"Authenticated S7CommPlus response changed fragment version from {expected_version} "
+                        f"to {fragment_version}; reconnect"
+                    )
+                raise S7ConnectionError(
+                    f"S7CommPlus response changed fragment version from {expected_version} to {fragment_version}"
+                )
             frag_len = (buf[2] << 8) | buf[3]
             del buf[:4]
             if frag_len == 0:
                 break  # standalone trailer (defensive)
             await ensure(frag_len)
-            data.extend(buf[:frag_len])
+            fragment_data = bytes(buf[:frag_len])
             del buf[:frag_len]
+            if digest_state is not None:
+                try:
+                    fragment_data = (
+                        legacy_verifier.verify(fragment_data)
+                        if legacy_verifier is not None
+                        else _verify_v3_hmac(fragment_data, digest_state)
+                    )
+                except S7IntegrityError:
+                    await self._invalidate_integrity_failure()
+                    raise
+            data.extend(fragment_data)
             fragments += 1
             if fragments > self._MAX_REASSEMBLED_FRAGMENTS or len(data) > self._MAX_REASSEMBLED_BYTES:
                 raise S7ConnectionError(f"Reassembled response exceeds limits ({len(data)} bytes, {fragments} fragments)")
@@ -1283,18 +1589,62 @@ class S7CommPlusAsyncClient:
 
         attrs = parse_create_object_attributes(response[10 + obj_end :])
         self._server_session_version = attrs.server_session_version
-        self._legacy_session_key_required = attrs.public_key_fingerprint is not None or attrs.session_challenge is not None
         if self._server_session_version is not None:
             logger.info(f"ServerSessionVersion captured: {len(self._server_session_version)} bytes")
         else:
             logger.debug("ServerSessionVersion not found in CreateObject response")
-        if self._legacy_session_key_required:
-            logger.info("PLC advertised legacy SessionKey authentication attributes")
+        if attrs.public_key_fingerprint is not None:
+            self._public_key_fingerprint = attrs.public_key_fingerprint
+            logger.info(f"Public key fingerprint captured: {attrs.public_key_fingerprint}")
+        if attrs.session_challenge is not None:
+            self._session_challenge = attrs.session_challenge
+            logger.info(f"Session challenge captured ({len(attrs.session_challenge)} bytes)")
+
+    def _try_session_key_auth(self) -> Optional[tuple[bytes, bytes]]:
+        """Generate the SecurityKey blob for a V1 session without TLS, or return None (see the sync connection)."""
+        if self._tls_active or self._protocol_version != ProtocolVersion.V1:
+            return None
+        if self._session_challenge is None or self._public_key_fingerprint is None:
+            return None
+        fingerprint = self._session_key_fingerprint_override or self._public_key_fingerprint
+        result = _generate_session_key_blob(self._session_challenge, fingerprint)
+        if result is None:
+            return None
+        blob, session_key, self._v1_session_key_public_key, self._v1_session_key_family = result
+        return blob, session_key
 
     async def _setup_session(self) -> bool:
-        """Echo ServerSessionVersion back to the PLC via SetMultiVariables."""
+        """Echo ServerSessionVersion back to the PLC via SetMultiVariables.
+
+        On V1-initial PLCs this also carries the SecurityKey blob, in the same
+        V2-framed request the synchronous connection sends.
+        """
         if self._server_session_version is None:
             return False
+
+        auth_result = self._try_session_key_auth()
+        if auth_result is not None:
+            blob, session_key = auth_result
+            security_key = _encode_security_key_struct(
+                self._v1_session_key_public_key, self._v1_session_key_family, blob, session_key
+            )
+            frame = _build_session_setup_frame(
+                self._session_id,
+                self._next_sequence_number(),
+                self._server_session_version,
+                self._protocol_version,
+                security_key,
+            )
+            async with self._lock:
+                await self._send_cotp_dt(frame)
+                accepted = _session_setup_accepted(await self._recv_cotp_dt())
+            if accepted:
+                self._session_key = session_key
+                self._with_integrity_id = True
+                self._integrity_id_read = 0
+                self._integrity_id_write = 0
+                logger.info("SecurityKey accepted by PLC, IntegrityId tracking enabled")
+            return accepted
 
         payload = bytearray()
         payload += struct.pack(">I", self._session_id)
@@ -1317,6 +1667,44 @@ class S7CommPlusAsyncClient:
             logger.info("Session setup completed successfully")
             return True
         return False
+
+    async def _session_activate(self) -> None:
+        """Activate the V3 session after the SecurityKey handshake (SET_VARIABLE addr 323 = USINT(5))."""
+        async with self._lock:
+            payload = _build_session_activate_payload(self._session_id, self._sequence_number)
+            await self._send_request_locked(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
+        logger.info("Session activation completed")
+
+    async def _post_auth_legitimation(self, password: str = "") -> None:
+        """Solve the V1 legitimation challenge after the SessionKey handshake (see the sync connection)."""
+        async with self._lock:
+            payload = _build_v1_get_var_substreamed_payload(
+                self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
+            )
+            challenge_resp = await self._send_request_locked(
+                FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=_v1_integrity_tail(self._v1_session_key_family)
+            )
+
+        # Never substitute the earlier CreateObject challenge when this read
+        # fails: it belongs to a different authentication exchange.
+        challenge = _parse_get_var_substreamed_response(challenge_resp)
+        if len(challenge) != 20:
+            raise S7ConnectionError("Post-auth legitimation failed: expected a 20-byte challenge")
+
+        from .v1_session_key.legitimation import solve_legitimate_challenge_real_plc
+
+        session_key = self._session_key
+        if session_key is None:
+            raise S7ConnectionError("Post-auth legitimation failed: no session key")
+        blob = solve_legitimate_challenge_real_plc(
+            challenge, self._v1_session_key_public_key, self._v1_session_key_family, session_key, password
+        )
+
+        async with self._lock:
+            payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob)
+            response = await self._send_request_locked(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=3)
+        _check_v1_legitimation_response(response)
+        logger.info("Post-auth legitimation completed")
 
     async def _delete_session(self) -> None:
         """Send DeleteObject to close the session."""

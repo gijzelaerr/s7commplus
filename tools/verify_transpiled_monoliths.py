@@ -19,7 +19,7 @@ from pathlib import Path
 from transpile_harpo_monolith import emit_python, transpile_monolith
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = REPOSITORY_ROOT / "s7commplus/session_auth/artifacts.json"
+MANIFEST = REPOSITORY_ROOT / "old/family0/artifacts.json"
 
 
 def _normalized_ast(source: str) -> str:

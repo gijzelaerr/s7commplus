@@ -1,0 +1,1038 @@
+{
+  "scope": "decoded pair: 2*(B_out0+B_out1)+h_out0+h_out1 = sum(B_in)+H*parity(h_in)+majority(h_in) modulo 2^168",
+  "source_sha256": "f68e729e3d4e51b23243b741a9db1203072c8598f35b794866eeac5bfc81f154",
+  "gate_model_sha256": {
+    "monolith5_model.json": "cc850745da473531447c2460d79332e60f582217f70588c3864b268ee6f13cff",
+    "monolith5_gate_model.json": "b56f42806cc326aa9d74636960039019b69c417703e05a91a665b5469e8d7cae"
+  },
+  "z3_version": "4.16.0",
+  "translation_controls": 8,
+  "solver_budget_per_stage_ms": 10000,
+  "requested_payload_bits": 168,
+  "checked_payload_bits": 168,
+  "wrap_balance_bound_proved": true,
+  "backend": "local integer carry columns (four-bit exact bounded encoding)",
+  "full_proof": true,
+  "stages": [
+    {
+      "stage": "boundary_exclusive",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.000512
+    },
+    {
+      "stage": "initial_column",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027583
+    },
+    {
+      "stage": "column_1",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.038211
+    },
+    {
+      "stage": "column_2",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024436
+    },
+    {
+      "stage": "column_3",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031811
+    },
+    {
+      "stage": "column_4",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029277
+    },
+    {
+      "stage": "column_5",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031929
+    },
+    {
+      "stage": "column_6",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036492
+    },
+    {
+      "stage": "column_7",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03244
+    },
+    {
+      "stage": "column_8",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.038082
+    },
+    {
+      "stage": "column_9",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029665
+    },
+    {
+      "stage": "column_10",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029828
+    },
+    {
+      "stage": "column_11",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024271
+    },
+    {
+      "stage": "column_12",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020699
+    },
+    {
+      "stage": "column_13",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027604
+    },
+    {
+      "stage": "column_14",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028707
+    },
+    {
+      "stage": "column_15",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034656
+    },
+    {
+      "stage": "column_16",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029979
+    },
+    {
+      "stage": "column_17",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024102
+    },
+    {
+      "stage": "column_18",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023318
+    },
+    {
+      "stage": "column_19",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022143
+    },
+    {
+      "stage": "column_20",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033677
+    },
+    {
+      "stage": "column_21",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034126
+    },
+    {
+      "stage": "column_22",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032545
+    },
+    {
+      "stage": "column_23",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033364
+    },
+    {
+      "stage": "column_24",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030092
+    },
+    {
+      "stage": "column_25",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024792
+    },
+    {
+      "stage": "column_26",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023981
+    },
+    {
+      "stage": "column_27",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024525
+    },
+    {
+      "stage": "column_28",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032611
+    },
+    {
+      "stage": "column_29",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.037595
+    },
+    {
+      "stage": "column_30",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033841
+    },
+    {
+      "stage": "column_31",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034613
+    },
+    {
+      "stage": "column_32",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.058256
+    },
+    {
+      "stage": "column_33",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.04104
+    },
+    {
+      "stage": "column_34",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029615
+    },
+    {
+      "stage": "column_35",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027863
+    },
+    {
+      "stage": "column_36",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025974
+    },
+    {
+      "stage": "column_37",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026394
+    },
+    {
+      "stage": "column_38",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026915
+    },
+    {
+      "stage": "column_39",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031789
+    },
+    {
+      "stage": "column_40",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032292
+    },
+    {
+      "stage": "column_41",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030631
+    },
+    {
+      "stage": "column_42",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034278
+    },
+    {
+      "stage": "column_43",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036005
+    },
+    {
+      "stage": "column_44",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030523
+    },
+    {
+      "stage": "column_45",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028715
+    },
+    {
+      "stage": "column_46",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023878
+    },
+    {
+      "stage": "column_47",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026543
+    },
+    {
+      "stage": "column_48",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028401
+    },
+    {
+      "stage": "column_49",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.044015
+    },
+    {
+      "stage": "column_50",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.040626
+    },
+    {
+      "stage": "column_51",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024981
+    },
+    {
+      "stage": "column_52",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031298
+    },
+    {
+      "stage": "column_53",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034045
+    },
+    {
+      "stage": "column_54",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031297
+    },
+    {
+      "stage": "column_55",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036974
+    },
+    {
+      "stage": "column_56",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026126
+    },
+    {
+      "stage": "column_57",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.020402
+    },
+    {
+      "stage": "column_58",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031559
+    },
+    {
+      "stage": "column_59",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027428
+    },
+    {
+      "stage": "column_60",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028826
+    },
+    {
+      "stage": "column_61",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027176
+    },
+    {
+      "stage": "column_62",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028481
+    },
+    {
+      "stage": "column_63",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033999
+    },
+    {
+      "stage": "column_64",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.039572
+    },
+    {
+      "stage": "column_65",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026562
+    },
+    {
+      "stage": "column_66",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024041
+    },
+    {
+      "stage": "column_67",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.022188
+    },
+    {
+      "stage": "column_68",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.042279
+    },
+    {
+      "stage": "column_69",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036551
+    },
+    {
+      "stage": "column_70",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025149
+    },
+    {
+      "stage": "column_71",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.023373
+    },
+    {
+      "stage": "column_72",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030194
+    },
+    {
+      "stage": "column_73",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026532
+    },
+    {
+      "stage": "column_74",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024778
+    },
+    {
+      "stage": "column_75",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024785
+    },
+    {
+      "stage": "column_76",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03683
+    },
+    {
+      "stage": "column_77",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027357
+    },
+    {
+      "stage": "column_78",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028631
+    },
+    {
+      "stage": "column_79",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030544
+    },
+    {
+      "stage": "column_80",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030902
+    },
+    {
+      "stage": "column_81",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031879
+    },
+    {
+      "stage": "column_82",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028373
+    },
+    {
+      "stage": "column_83",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029866
+    },
+    {
+      "stage": "column_84",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028369
+    },
+    {
+      "stage": "column_85",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.038392
+    },
+    {
+      "stage": "column_86",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032709
+    },
+    {
+      "stage": "column_87",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031922
+    },
+    {
+      "stage": "column_88",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.02753
+    },
+    {
+      "stage": "column_89",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026568
+    },
+    {
+      "stage": "column_90",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029417
+    },
+    {
+      "stage": "column_91",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025815
+    },
+    {
+      "stage": "column_92",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031537
+    },
+    {
+      "stage": "column_93",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029544
+    },
+    {
+      "stage": "column_94",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027609
+    },
+    {
+      "stage": "column_95",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036
+    },
+    {
+      "stage": "column_96",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030809
+    },
+    {
+      "stage": "column_97",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029553
+    },
+    {
+      "stage": "column_98",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025741
+    },
+    {
+      "stage": "column_99",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025082
+    },
+    {
+      "stage": "column_100",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024303
+    },
+    {
+      "stage": "column_101",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026453
+    },
+    {
+      "stage": "column_102",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.043409
+    },
+    {
+      "stage": "column_103",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03549
+    },
+    {
+      "stage": "column_104",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030272
+    },
+    {
+      "stage": "column_105",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.028453
+    },
+    {
+      "stage": "column_106",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032989
+    },
+    {
+      "stage": "column_107",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030237
+    },
+    {
+      "stage": "column_108",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031569
+    },
+    {
+      "stage": "column_109",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027758
+    },
+    {
+      "stage": "column_110",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030458
+    },
+    {
+      "stage": "column_111",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.043025
+    },
+    {
+      "stage": "column_112",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.038551
+    },
+    {
+      "stage": "column_113",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032575
+    },
+    {
+      "stage": "column_114",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030863
+    },
+    {
+      "stage": "column_115",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029704
+    },
+    {
+      "stage": "column_116",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.029626
+    },
+    {
+      "stage": "column_117",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030915
+    },
+    {
+      "stage": "column_118",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030371
+    },
+    {
+      "stage": "column_119",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024917
+    },
+    {
+      "stage": "column_120",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021093
+    },
+    {
+      "stage": "column_121",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025484
+    },
+    {
+      "stage": "column_122",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03384
+    },
+    {
+      "stage": "column_123",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025355
+    },
+    {
+      "stage": "column_124",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027601
+    },
+    {
+      "stage": "column_125",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.03314
+    },
+    {
+      "stage": "column_126",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.0398
+    },
+    {
+      "stage": "column_127",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.051408
+    },
+    {
+      "stage": "column_128",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033778
+    },
+    {
+      "stage": "column_129",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.036593
+    },
+    {
+      "stage": "column_130",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031645
+    },
+    {
+      "stage": "column_131",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027578
+    },
+    {
+      "stage": "column_132",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027958
+    },
+    {
+      "stage": "column_133",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031498
+    },
+    {
+      "stage": "column_134",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026274
+    },
+    {
+      "stage": "column_135",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026131
+    },
+    {
+      "stage": "column_136",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031514
+    },
+    {
+      "stage": "column_137",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.024376
+    },
+    {
+      "stage": "column_138",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030874
+    },
+    {
+      "stage": "column_139",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.027476
+    },
+    {
+      "stage": "column_140",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.045426
+    },
+    {
+      "stage": "column_141",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.034153
+    },
+    {
+      "stage": "column_142",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.043189
+    },
+    {
+      "stage": "column_143",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.026251
+    },
+    {
+      "stage": "column_144",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.040484
+    },
+    {
+      "stage": "column_145",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.051311
+    },
+    {
+      "stage": "column_146",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.056509
+    },
+    {
+      "stage": "column_147",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.045523
+    },
+    {
+      "stage": "column_148",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.041848
+    },
+    {
+      "stage": "column_149",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.045232
+    },
+    {
+      "stage": "column_150",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.054703
+    },
+    {
+      "stage": "column_151",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.032649
+    },
+    {
+      "stage": "column_152",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031701
+    },
+    {
+      "stage": "column_153",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030033
+    },
+    {
+      "stage": "column_154",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031302
+    },
+    {
+      "stage": "column_155",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.041844
+    },
+    {
+      "stage": "column_156",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.043038
+    },
+    {
+      "stage": "column_157",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.096347
+    },
+    {
+      "stage": "column_158",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.046751
+    },
+    {
+      "stage": "column_159",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.043384
+    },
+    {
+      "stage": "column_160",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.044428
+    },
+    {
+      "stage": "column_161",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.030844
+    },
+    {
+      "stage": "column_162",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.043704
+    },
+    {
+      "stage": "column_163",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031093
+    },
+    {
+      "stage": "column_164",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.025664
+    },
+    {
+      "stage": "column_165",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031567
+    },
+    {
+      "stage": "column_166",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.033627
+    },
+    {
+      "stage": "column_167",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.031801
+    },
+    {
+      "stage": "wrap_balance_bound",
+      "result": "unsat",
+      "proved": true,
+      "elapsed_seconds": 0.021725
+    }
+  ]
+}

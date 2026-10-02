@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
 
-from tools.trace_session_auth_output import REPOSITORY_ROOT, trace_monolith
+from tools.trace_v1_session_key_output import REPOSITORY_ROOT, trace_monolith
 
 
 @dataclass(frozen=True)

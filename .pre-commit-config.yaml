@@ -39,10 +39,10 @@ repos:
 
   - repo: local
     hooks:
-      - id: verify-session-auth-artifacts
+      - id: verify-v1-session-key-artifacts
         name: verify SessionKey generated artifacts
-        entry: python tools/verify_session_auth_artifacts.py
+        entry: python tools/verify_v1_session_key_artifacts.py
         language: python
         pass_filenames: false
-        files: ^(s7commplus/session_auth/artifacts\.json|s7commplus/session_auth/family0/_generated/|tools/verify_session_auth_artifacts\.py)$
+        files: ^(old/family0/artifacts\.json$|s7commplus/v1_session_key/real_plc/.*\.bin$|old/family0/_generated/|tools/verify_v1_session_key_artifacts\.py$)
 exclude: "s7commplus/protocol.py"

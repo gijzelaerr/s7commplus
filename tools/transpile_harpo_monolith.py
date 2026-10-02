@@ -21,7 +21,7 @@ Usage::
 
     python tools/transpile_harpo_monolith.py \\
         --source /path/to/HarpoS7.Family0/Monoliths/Monolith1.cs \\
-        --output s7commplus/session_auth/family0/_generated/monolith1.py
+        --output old/family0/_generated/monolith1.py
 
 Limitations the MVP does NOT handle (none observed in HarpoS7's
 Family-0/Monoliths/*.cs as of revision shipped with HarpoS7 1.1.0):

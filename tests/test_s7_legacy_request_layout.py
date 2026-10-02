@@ -64,7 +64,7 @@ def test_legacy_legitimation_uses_the_new_challenge(monkeypatch: pytest.MonkeyPa
     response = b"\x00\x00\x10\x02\x14" + challenge + b"\x00"
     conn.send_request = MagicMock(side_effect=[response, b"\x00"])
     solve = MagicMock(return_value=bytes(248))
-    monkeypatch.setattr("s7commplus.session_auth.legitimate.solve_legitimate_challenge_real_plc", solve)
+    monkeypatch.setattr("s7commplus.v1_session_key.legitimation.solve_legitimate_challenge_real_plc", solve)
     conn._post_auth_legitimation("password")
     assert solve.call_args.args[0] == challenge
     assert solve.call_args.args[-1] == "password"

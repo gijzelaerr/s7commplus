@@ -2,9 +2,9 @@
 
 Pure-Python S7CommPlus communication for Siemens S7-1200 and S7-1500 PLCs.
 It supports S7CommPlus V1, V2 (TLS), and V3; synchronous and asyncio clients;
-and a server emulator for testing. The synchronous client additionally supports
-legacy V1 SessionKey authentication; the asyncio client rejects that path
-during connection with an actionable error.
+and a server emulator for testing. Both clients support legacy V1 SessionKey
+authentication; the synchronous client's implementation is the one validated
+on real controllers, while the asyncio client's is so far emulator-tested.
 
 ## Installation
 
@@ -32,8 +32,8 @@ endorsed by, or supported by Siemens AG. Test against an isolated controller
 before using it in production or safety-relevant environments.
 
 Some older PLCs advertise only their SessionKey family instead of a complete
-public-key fingerprint. The synchronous `Client` tries the bounded set of
-bundled keys from that family on fresh sessions and caches the confirmed key
+public-key fingerprint. `Client` and `AsyncClient` try the bounded set of
+bundled keys from that family on fresh sessions and cache the confirmed key
 for the PLC. Set `allow_legacy_key_fallback=False` on `connect()` when key
 probing must be disabled.
 
@@ -61,5 +61,5 @@ build it locally from a development checkout:
 sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
-The session-authentication implementation derives from HarpoS7; its MIT
-license is included at `s7commplus/session_auth/LICENSE-HarpoS7`.
+The V1 SessionKey implementation derives from HarpoS7; its MIT
+license is included at `s7commplus/v1_session_key/LICENSE-HarpoS7`.

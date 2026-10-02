@@ -187,7 +187,7 @@ class S7CommPlusClient:
             except SessionKeyCandidateRejectedError:
                 logger.info("Cached SessionKey candidate %s was rejected; trying remaining family keys", cached)
                 _LEGACY_KEY_CACHE.pop(cache_key, None)
-                from .session_auth.keys import parse_fingerprint
+                from .v1_session_key.keys import parse_fingerprint
 
                 family, _ = parse_fingerprint(cached)
                 self._probe_family_keys(family, excluded={cached})
@@ -223,7 +223,7 @@ class S7CommPlusClient:
     def _probe_family_keys(self, family: int, excluded: set[str] | None = None) -> None:
         """Try each same-family key on a new connection and cache the winner."""
         assert self._connect_params is not None
-        from .session_auth.keys import fingerprints_for_family
+        from .v1_session_key.keys import fingerprints_for_family
 
         excluded = excluded or set()
         candidates = [fingerprint for fingerprint in fingerprints_for_family(family) if fingerprint not in excluded]
