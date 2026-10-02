@@ -21,7 +21,6 @@ from .client import (
     SymbolicWriteItem,
     _build_area_read_payload,
     _build_area_write_payload,
-    _build_explore_payload,
     _build_explore_request,
     _build_invoke_payload,
     _build_multi_symbolic_write_payload,
@@ -608,12 +607,20 @@ class S7CommPlusAsyncClient:
         response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
 
-    async def explore(self, explore_id: int = 0) -> bytes:
-        """Browse the PLC object tree."""
-        payload = _build_explore_payload(explore_id)
-        return await self._send_request(FunctionCode.EXPLORE, payload)
+    async def explore(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> bytes:
+        """Browse the PLC object tree.
 
-    async def explore_xml(self, explore_id: int = 0) -> str | None:
+        Args:
+            explore_id: RID of the object to explore. 0 explores the PLC program (`Ids.NATIVE_THE_PLC_PROGRAM_RID`).
+            attributes: Attribute IDs to request. None or empty returns every attribute.
+
+        Returns:
+            Raw response payload.
+        """
+        payload = _build_explore_request(explore_id or Ids.NATIVE_THE_PLC_PROGRAM_RID, list(attributes or []))
+        return await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+
+    async def explore_xml(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> str | None:
         """EXPLORE a PLC object and decompress the XML metadata from the response.
 
         S7-1200/1500 PLCs (FW V4.5+) compress XML metadata — tag definitions,
@@ -624,13 +631,14 @@ class S7CommPlusAsyncClient:
         .. warning:: This method is **experimental** and may change.
 
         Args:
-            explore_id: Object to explore (0 = root).
+            explore_id: RID of the object to explore. 0 explores the PLC program.
+            attributes: Attribute IDs to request. None or empty returns every attribute.
 
         Returns:
             Decompressed XML as a UTF-8 string, or ``None`` if the response
             contains no recognisable zlib stream.
         """
-        raw = await self.explore(explore_id)
+        raw = await self.explore(explore_id, attributes)
         return find_and_decompress(raw)
 
     async def set_plc_operating_state(self, state: int) -> None:

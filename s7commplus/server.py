@@ -867,6 +867,17 @@ class S7CommPlusServer:
         """Handle Explore -- return the object tree (registered data blocks)."""
         response = bytearray()
         response += self._build_response_header(FunctionCode.EXPLORE, seq_num)
+
+        # The ExploreId is a fixed UInt32 at the start of the request.
+        if len(request_data) >= 4 and not self._explore_object_exists(struct.unpack_from(">I", request_data)[0]):
+            # ReturnValue a real S7-1500 sends for an EXPLORE of an object that does not exist, RID 0 included:
+            # error flag (bit 63) set, no error extension (bit 62 clear), error code -12 in the low 16 bits.
+            _EXPLORE_NO_SUCH_OBJECT = 0x8020AB001992FFF4
+            response += encode_uint64_vlq(_EXPLORE_NO_SUCH_OBJECT)
+            response += struct.pack(">I", 0)  # ExploreId, echoed as 0 on error
+            response += struct.pack(">I", 0)
+            return bytes(response)
+
         response += encode_uint32_vlq(0)  # Return code: success
 
         # Return list of data blocks as objects using the real S7-1500 IDs:
@@ -922,6 +933,28 @@ class S7CommPlusServer:
         # Final terminator
         response += struct.pack(">I", 0)
         return bytes(response)
+
+    def _explore_object_exists(self, explore_id: int) -> bool:
+        """Whether an EXPLORE target names an object this emulator has.
+
+        These are the native objects the clients and examples explore, plus one
+        object per registered data block. A real PLC rejects any other id.
+        """
+        if explore_id in (
+            Ids.NATIVE_THE_PLC_PROGRAM_RID,
+            Ids.NATIVE_THE_ALARM_SUBSYSTEM_RID,
+            Ids.NATIVE_THE_CPU_EXEC_UNIT_RID,
+            Ids.NATIVE_THE_I_AREA_RID,
+            Ids.NATIVE_THE_Q_AREA_RID,
+            Ids.NATIVE_THE_M_AREA_RID,
+            Ids.NATIVE_THE_S7_COUNTERS_RID,
+            Ids.NATIVE_THE_S7_TIMERS_RID,
+            Ids.OBJECT_OMS_TYPE_INFO_CONTAINER,
+            0x38,  # explored by the SessionKey path of Client.explore()
+            0x8A11FFFF,  # DB wildcard explored by the SessionKey path of Client.list_datablocks()
+        ):
+            return True
+        return explore_id & 0xFFFF0000 == Ids.DB_ACCESS_AREA_BASE and explore_id & 0xFFFF in self._data_blocks
 
     def _handle_get_multi_variables(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
         """Handle GetMultiVariables -- read variables from data blocks.

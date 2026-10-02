@@ -633,11 +633,13 @@ class S7CommPlusClient:
             for index, tag in enumerate(tags, 1)
         ]
 
-    def explore(self, explore_id: int = 0) -> bytes:
+    def explore(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> bytes:
         """Browse the PLC object tree.
 
         Args:
-            explore_id: Object to explore (0 = root).
+            explore_id: RID of the object to explore. 0 explores the PLC program (`Ids.NATIVE_THE_PLC_PROGRAM_RID`).
+            attributes: Attribute IDs to request. None or empty returns every attribute. Ignored on V1 SessionKey
+                sessions, whose EXPLORE format carries no attribute list.
 
         Returns:
             Raw response payload.
@@ -648,11 +650,11 @@ class S7CommPlusClient:
         if self._connection._session_key is not None:
             payload = _build_explore_payload_v3(explore_id if explore_id else 0x38)
         else:
-            payload = _build_explore_payload(explore_id)
+            payload = _build_explore_request(explore_id or Ids.NATIVE_THE_PLC_PROGRAM_RID, list(attributes or []))
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return response
 
-    def explore_xml(self, explore_id: int = 0) -> str | None:
+    def explore_xml(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> str | None:
         """EXPLORE a PLC object and decompress the XML metadata from the response.
 
         S7-1200/1500 PLCs (FW V4.5+) compress XML metadata — tag definitions,
@@ -663,13 +665,14 @@ class S7CommPlusClient:
         .. warning:: This method is **experimental** and may change.
 
         Args:
-            explore_id: Object to explore (0 = root).
+            explore_id: RID of the object to explore. 0 explores the PLC program.
+            attributes: Attribute IDs to request. None or empty returns every attribute.
 
         Returns:
             Decompressed XML as a UTF-8 string, or ``None`` if the response
             contains no recognisable zlib stream.
         """
-        raw = self.explore(explore_id)
+        raw = self.explore(explore_id, attributes)
         return find_and_decompress(raw)
 
     def set_plc_operating_state(self, state: int) -> None:
@@ -1428,20 +1431,6 @@ def _build_multi_symbolic_write_payload(items: Sequence[SymbolicWriteItem], prot
     payload += bytes([0x00])
     payload += encode_object_qualifier(protocol_version=protocol_version)
     payload += struct.pack(">I", 0)
-    return bytes(payload)
-
-
-def _build_explore_payload(explore_id: int = 0) -> bytes:
-    """Build an EXPLORE request payload.
-
-    Args:
-        explore_id: Object to explore (0 = root, other values
-            explore a specific object by RID).
-    """
-    if explore_id == 0:
-        return b""
-    payload = bytearray()
-    payload += encode_uint32_vlq(explore_id)
     return bytes(payload)
 
 
