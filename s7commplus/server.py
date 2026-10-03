@@ -153,20 +153,28 @@ class DataBlock:
         self.variables[name] = DBVariable(name, soft_type, byte_offset)
 
     def read(self, offset: int, size: int) -> bytes:
-        """Read bytes from the data block."""
+        """Read bytes from the data block.
+
+        Raises:
+            IndexError: If the range is not wholly inside the block.
+        """
         with self.lock:
-            end = min(offset + size, len(self.data))
-            result = bytes(self.data[offset:end])
-            # Pad with zeros if reading past end
-            if len(result) < size:
-                result += b"\x00" * (size - len(result))
-            return result
+            self._check_range(offset, size)
+            return bytes(self.data[offset : offset + size])
 
     def write(self, offset: int, data: bytes) -> None:
-        """Write bytes to the data block."""
+        """Write bytes to the data block.
+
+        Raises:
+            IndexError: If the range is not wholly inside the block. Nothing is written.
+        """
         with self.lock:
-            end = min(offset + len(data), len(self.data))
-            self.data[offset:end] = data[: end - offset]
+            self._check_range(offset, len(data))
+            self.data[offset : offset + len(data)] = data
+
+    def _check_range(self, offset: int, size: int) -> None:
+        if offset < 0 or size < 0 or offset + size > len(self.data):
+            raise IndexError(f"DB{self.number}: bytes {offset}..{offset + size} are outside the block ({len(self.data)} bytes)")
 
     def read_variable(self, name: str) -> tuple[int, bytes]:
         """Read a named variable.
@@ -941,11 +949,11 @@ class S7CommPlusServer:
         # ReturnValue: success
         response += encode_uint64_vlq(0)
 
+        results = [self._read_item(item) for item in items]
+
         # Value list: ItemNumber (1-based) + PValue, terminated by ItemNumber=0
-        for i, (db_num, byte_offset, byte_size) in enumerate(items, 1):
-            db = self._data_blocks.get(db_num)
-            if db is not None:
-                data = db.read(byte_offset, byte_size)
+        for i, data in enumerate(results, 1):
+            if data is not None:
                 response += encode_uint32_vlq(i)  # ItemNumber
                 response += encode_pvalue_blob(data)  # Value as BLOB
             # Errors handled in error list below
@@ -954,11 +962,10 @@ class S7CommPlusServer:
         response += encode_uint32_vlq(0)
 
         # Error list
-        for i, (db_num, byte_offset, byte_size) in enumerate(items, 1):
-            db = self._data_blocks.get(db_num)
-            if db is None:
+        for i, data in enumerate(results, 1):
+            if data is None:
                 response += encode_uint32_vlq(i)  # ErrorItemNumber
-                response += encode_uint64_vlq(0x8104)  # Error: object not found
+                response += encode_uint64_vlq(_ITEM_ERROR)
 
         # Terminate error list
         response += encode_uint32_vlq(0)
@@ -1007,12 +1014,9 @@ class S7CommPlusServer:
 
         # Write data
         errors: list[tuple[int, int]] = []
-        for i, ((db_num, byte_offset, _), data) in enumerate(zip(items, values), 1):
-            db = self._data_blocks.get(db_num)
-            if db is not None:
-                db.write(byte_offset, data)
-            else:
-                errors.append((i, 0x8104))  # Object not found
+        for i, (item, data) in enumerate(zip(items, values), 1):
+            if not self._write_item(item, data):
+                errors.append((i, _ITEM_ERROR))
 
         # ReturnValue: success
         response += encode_uint64_vlq(0)
@@ -1029,6 +1033,38 @@ class S7CommPlusServer:
             response += encode_uint32_vlq(0)  # Legacy V1 IntegrityId
 
         return bytes(response)
+
+    def _read_item(self, item: Optional[tuple[int, int, int]]) -> Optional[bytes]:
+        """The bytes one item addresses, or None when the emulator cannot serve it.
+
+        That is an address the parser could not resolve, a data block that is not
+        registered, or a range not wholly inside the block. The emulator never
+        answers such an item with a value.
+        """
+        if item is None:
+            return None
+        db_num, byte_offset, byte_size = item
+        db = self._data_blocks.get(db_num)
+        if db is None:
+            return None
+        try:
+            return db.read(byte_offset, byte_size)
+        except IndexError:
+            return None
+
+    def _write_item(self, item: Optional[tuple[int, int, int]], data: bytes) -> bool:
+        """Write one item. False, with nothing written, when the emulator cannot serve it."""
+        if item is None:
+            return False
+        db_num, byte_offset, _ = item
+        db = self._data_blocks.get(db_num)
+        if db is None:
+            return False
+        try:
+            db.write(byte_offset, data)
+        except IndexError:
+            return False
+        return True
 
     @staticmethod
     def _is_session_setup_write(request_data: bytes) -> bool:
@@ -1231,20 +1267,44 @@ class S7CommPlusServer:
 # -- Server-side request parsers --
 
 
-def _server_parse_read_request(request_data: bytes) -> list[tuple[int, int, int]]:
+#: The error the emulator returns for an item it cannot serve.
+_ITEM_ERROR = 0x8104
+
+
+def _resolve_classic_blob(access_area: int, lids: list[int]) -> Optional[tuple[int, int, int]]:
+    """The byte range an ItemAddress names, or None when the emulator cannot resolve it.
+
+    The emulator holds a data block as bytes, so the one path it can serve is a
+    ClassicBlob range: the marker, a zero-based byte offset and a size. Any other
+    path names something only a real PLC's symbol tree could resolve.
+
+    Args:
+        access_area: The item's AccessArea
+        lids: The LIDs after the AccessSubArea
+
+    Returns:
+        (db_number, byte_offset, byte_size), or None
+    """
+    if len(lids) != 3 or lids[0] != Ids.LID_OMS_STB_CLASSIC_BLOB:
+        return None
+    return access_area & 0xFFFF, lids[1], lids[2]
+
+
+def _server_parse_read_request(request_data: bytes) -> list[Optional[tuple[int, int, int]]]:
     """Parse a GetMultiVariables request payload on the server side.
 
     Extracts (db_number, byte_offset, byte_size) for each item from the
     S7CommPlus ItemAddress format.
 
     Returns:
-        List of (db_number, byte_offset, byte_size) tuples
+        One entry per item, in request order: (db_number, byte_offset, byte_size),
+        or None for an address the emulator cannot resolve
     """
     if not request_data:
         return []
 
     offset = 0
-    items: list[tuple[int, int, int]] = []
+    items: list[Optional[tuple[int, int, int]]] = []
 
     # LinkId (UInt32 fixed)
     if offset + 4 > len(request_data):
@@ -1289,24 +1349,18 @@ def _server_parse_read_request(request_data: bytes) -> list[tuple[int, int, int]
             offset += consumed
             lids.append(lid_val)
 
-        # Extract db_number from AccessArea
-        db_num = access_area & 0xFFFF
-
-        # lids[0] is the ClassicBlob marker; offsets are zero-based.
-        byte_offset = lids[1] if len(lids) > 1 else 0
-        byte_size = lids[2] if len(lids) > 2 else 1
-
-        items.append((db_num, byte_offset, byte_size))
+        items.append(_resolve_classic_blob(access_area, lids))
 
     return items
 
 
-def _server_parse_write_request(request_data: bytes) -> tuple[list[tuple[int, int, int]], list[bytes]]:
+def _server_parse_write_request(request_data: bytes) -> tuple[list[Optional[tuple[int, int, int]]], list[bytes]]:
     """Parse a SetMultiVariables request payload on the server side.
 
     Returns:
-        Tuple of (items, values) where items is list of (db_number, byte_offset, byte_size)
-        and values is list of raw bytes to write
+        Tuple of (items, values) where items holds, per item in request order,
+        (db_number, byte_offset, byte_size) or None for an address the emulator
+        cannot resolve, and values is list of raw bytes to write
     """
     if not request_data:
         return [], []
@@ -1327,7 +1381,7 @@ def _server_parse_write_request(request_data: bytes) -> tuple[list[tuple[int, in
     offset += consumed
 
     # Parse each ItemAddress
-    items: list[tuple[int, int, int]] = []
+    items: list[Optional[tuple[int, int, int]]] = []
     for _ in range(item_count):
         if offset >= len(request_data):
             break
@@ -1357,10 +1411,7 @@ def _server_parse_write_request(request_data: bytes) -> tuple[list[tuple[int, in
             offset += consumed
             lids.append(lid_val)
 
-        db_num = access_area & 0xFFFF
-        byte_offset = lids[1] if len(lids) > 1 else 0  # lids[0] is the ClassicBlob marker
-        byte_size = lids[2] if len(lids) > 2 else 1
-        items.append((db_num, byte_offset, byte_size))
+        items.append(_resolve_classic_blob(access_area, lids))
 
     # Parse value list: ItemNumber (VLQ, 1-based) + PValue
     values: list[bytes] = []
