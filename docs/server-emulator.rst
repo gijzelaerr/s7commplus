@@ -38,6 +38,23 @@ Use an unprivileged, test-specific port and always stop the server in cleanup.
 The test suite contains examples covering TLS, protocol versions, session
 authentication, subscriptions, and concurrent clients.
 
+Addresses the emulator serves
+-----------------------------
+
+The emulator holds each data block as bytes, so it serves one kind of address: a
+ClassicBlob byte range. That is what ``db_read`` and ``db_write`` send, and what
+``read_symbolic`` and ``write_symbolic`` send for the LIDs
+``[Ids.LID_OMS_STB_CLASSIC_BLOB, offset, size]``.
+
+Everything else is answered with an item error, never with a value:
+
+- an LID path that is not such a range,
+- a data block that is not registered,
+- a range that is not wholly inside the block.
+
+``DataBlock.read`` and ``DataBlock.write`` raise ``IndexError`` for a range outside
+the block. A read is never padded, and a refused write changes nothing.
+
 TLS emulator
 ------------
 
