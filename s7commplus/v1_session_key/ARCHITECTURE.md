@@ -394,11 +394,16 @@ Three PLCSIM-specific behaviours were found and fixed (#66):
   `GET_MULTI_VARIABLES`/`EXPLORE`; those payloads are kept whole so the
   per-item error list parses correctly.
 
-The post-auth legitimation stays skipped for family 03 (HarpoS7 has no PLCSIM
-legitimation and the validated project grants full access without one), so a
-`password` is still rejected pending a no-access PLCSIM project. Automatic
-25-minute **renewal is disabled for family 03**: PLCSIM Advanced FW V2.8 resets
-the connection when a new SecurityKey is written to address 1830, in both the
+The post-auth legitimation is settled but not implementable from the current
+references. On a password-protected (NoAccess) family-03 PLCSIM session the PLC
+**does** answer the address-303 legitimation read with a 20-byte challenge, but
+it **rejects the real-PLC 248-byte blob** (return value `0x8318890001E2FFFE`);
+the PLCSIM-specific legitimation algorithm differs from HarpoS7's
+`LegitimateScheme`, and neither HarpoS7 nor S7CommRust implements it. The client
+therefore keeps skipping family-03 legitimation and rejecting `password=`, and a
+protected PLCSIM project can be connected but not read. Automatic 25-minute
+**renewal is disabled for family 03**: PLCSIM Advanced FW V2.8 resets the
+connection when a new SecurityKey is written to address 1830, in both the
 `SET_VARIABLE` and the `SET_MULTI_VARIABLES` layout, so a renewal would end a
 long-lived session instead of extending it. Byte-offset `db_read`/`db_write` work
 on a standard (non-optimized) DB and are refused with PLC error `0xA40013` on an

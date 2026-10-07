@@ -148,13 +148,14 @@ Other behaviour changes:
 * PLCSIM's legacy authentication (key family 03) is implemented (#56) and was
   validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN, FW V2.8 project) with
   the sync and async clients: connect, browse, symbolic and byte-offset reads
-  and writes, and data subscriptions. It skips the post-auth legitimation and
-  rejects a `password`, because the validated project grants full access without
-  one; a no-access PLCSIM project is needed to settle whether PLCSIM expects the
-  real-PLC legitimation scheme. Automatic SessionKey renewal and the address-323
-  session activation are skipped for family 03 (the simulator resets the
-  connection on both). Byte-offset reads/writes are refused on optimized blocks,
-  as on real hardware; use symbolic access there (#66).
+  and writes, and data subscriptions. Automatic SessionKey renewal and the
+  address-323 session activation are skipped for family 03 (the simulator resets
+  the connection on both). Byte-offset reads/writes are refused on optimized
+  blocks, as on real hardware; use symbolic access there. **Password
+  legitimation is not implemented for family 03**: a NoAccess PLCSIM project
+  answers the address-303 read with a 20-byte challenge but rejects the real-PLC
+  248-byte blob, so a protected instance cannot be read and `password=` is
+  rejected (#66).
 
 ### Thanks
 
