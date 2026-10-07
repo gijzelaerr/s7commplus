@@ -1549,6 +1549,13 @@ class S7CommPlusConnection:
         interval = self._session_key_refresh_interval
         if interval is None or self._session_key is None or not self._connected:
             return
+        if self._v1_session_key_family == KeyFamily.PLCSIM:
+            # PLCSIM Advanced FW 2.8 resets the connection when the SessionKey is
+            # re-sent to address 1830, with either the SET_VARIABLE renewal layout
+            # or the session-setup SET_MULTI_VARIABLES one, so an automatic renewal
+            # would kill a long-lived session. Skip it and keep the session alive.
+            logger.info("PLCSIM session: automatic SessionKey renewal disabled (key family 03 resets the connection on renewal)")
+            return
         generation = self._session_key_refresh_generation
         timer = threading.Timer(interval, self._session_key_refresh_callback, args=(generation,))
         timer.daemon = True

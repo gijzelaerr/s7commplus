@@ -1,9 +1,18 @@
 """Verify legacy S7-1500 V3 fragments without discarding integrity checks.
 
-Older PLCs finalize, then reuse, both SHA-256 states of HMAC for each
-fragment. Finalization mutates the chaining state but does not increase the
-message byte count. hashlib deliberately cannot resume a finalized digest,
-so the small SHA-256 continuation below handles this wire compatibility case.
+A multi-fragment V3 response chains its fragments with HMAC-SHA256, but the
+PLCs do not agree on the continuation dialect. Real S7-1200/1500 firmware
+finalize, then reuse, both SHA-256 states of HMAC for each fragment
+(*state-resume*); finalization mutates the chaining state but does not
+increase the message byte count, and hashlib deliberately cannot resume a
+finalized digest, so the small SHA-256 continuation below handles that wire
+compatibility case. PLCSIM Advanced clears the HMAC key each time instead and
+chains *feed-forward*: each later fragment's digest is a fresh HMAC over the
+previous fragment's digest followed by this fragment's data,
+``HMAC(key, digest_{n-1} || fragment_n)``. A response may also carry plain,
+independent per-fragment HMACs. The dialect is fixed for the whole response
+and is detected from the second fragment; a mismatch afterwards is rejected.
+
 Each verifier is scoped to exactly one reassembled response.
 
 This module is private, and is used only by the opt-in legacy S7-1500
@@ -139,10 +148,11 @@ def _continue_sha256(digest: bytes, data: bytes, total: int) -> bytes:
 class FragmentHMACVerifier:
     """Authenticate fragments belonging to one V3 response.
 
-    The first fragment must have a standard HMAC. The second chooses between
-    independent fragment HMACs and the legacy finalized-state continuation.
-    The chosen mode cannot change within a response. Return application data
-    only after comparing the full digest in constant time.
+    The first fragment must always carry a standard HMAC. The second picks the
+    continuation dialect among independent fragments, the state-resume
+    continuation, and the feed-forward chain, and the choice is then fixed for
+    the rest of the response. Return application data only after comparing the
+    full digest in constant time.
 
     Construct a fresh verifier per response; never share it between sessions.
     """
@@ -155,15 +165,18 @@ class FragmentHMACVerifier:
         self._outer: bytes | None = None
         self._inner_count = 64
         self._outer_count = 64
-        self._mode: Literal["independent", "legacy"] | None = None
+        # The previous fragment's received digest, for the feed-forward dialect.
+        self._last = b""
+        self._mode: Literal["independent", "legacy", "feed-forward"] | None = None
 
     def verify(self, protected: bytes) -> bytes:
         if not protected or protected[0] != 32 or len(protected) < 33:
             raise S7IntegrityError("Invalid V3 HMAC prefix")
         received = protected[1:33]
         data = protected[33:]
-        independent = hmac.new(self._key, data, hashlib.sha256).digest()
+
         if self._inner is None:
+            independent = hmac.new(self._key, data, hashlib.sha256).digest()
             if not hmac.compare_digest(received, independent):
                 raise S7IntegrityError("Invalid V3 HMAC")
             ipad = bytes(value ^ 0x36 for value in self._key.ljust(64, b"\0"))
@@ -171,22 +184,49 @@ class FragmentHMACVerifier:
             self._outer = independent
             self._inner_count += len(data)
             self._outer_count += 32
+            self._last = received
             return data
 
-        if self._mode != "legacy" and hmac.compare_digest(received, independent):
-            self._mode = "independent"
-            return data
         if self._mode == "independent":
-            raise S7IntegrityError("Invalid V3 HMAC")
+            independent = hmac.new(self._key, data, hashlib.sha256).digest()
+            if not hmac.compare_digest(received, independent):
+                raise S7IntegrityError("Invalid V3 continuation HMAC")
+            self._last = received
+            return data
+
+        if self._mode == "feed-forward":
+            expected = hmac.new(self._key, self._last + data, hashlib.sha256).digest()
+            if not hmac.compare_digest(received, expected):
+                raise S7IntegrityError("Invalid V3 continuation HMAC")
+            self._last = received
+            return data
 
         assert self._outer is not None
         inner_count = self._inner_count + len(data)
         outer_count = self._outer_count + 32
         inner = _continue_sha256(self._inner, data, inner_count)
         outer = _continue_sha256(self._outer, inner, outer_count)
-        if not hmac.compare_digest(received, outer):
+
+        if self._mode == "legacy":
+            if not hmac.compare_digest(received, outer):
+                raise S7IntegrityError("Invalid V3 continuation HMAC")
+            self._inner, self._outer = inner, outer
+            self._inner_count, self._outer_count = inner_count, outer_count
+            self._last = received
+            return data
+
+        # Second fragment: detect the dialect and fix it for the rest of the response.
+        independent = hmac.new(self._key, data, hashlib.sha256).digest()
+        feed_forward = hmac.new(self._key, self._last + data, hashlib.sha256).digest()
+        if hmac.compare_digest(received, independent):
+            self._mode = "independent"
+        elif hmac.compare_digest(received, outer):
+            self._mode = "legacy"
+            self._inner, self._outer = inner, outer
+            self._inner_count, self._outer_count = inner_count, outer_count
+        elif hmac.compare_digest(received, feed_forward):
+            self._mode = "feed-forward"
+        else:
             raise S7IntegrityError("Invalid V3 continuation HMAC")
-        self._mode = "legacy"
-        self._inner, self._outer = inner, outer
-        self._inner_count, self._outer_count = inner_count, outer_count
+        self._last = received
         return data

@@ -60,8 +60,9 @@ Other behaviour changes:
   nothing is recreated implicitly, notifications from the gap are not replayed
   and alarm subscriptions are not restored (#69, #67).
 * PLCSIM / PLCSIM Advanced (key family 03) V1 SessionKey authentication, with an
-  ECIES-over-P-256 seed (#65, #56). Emulator-tested only; see the known
-  limitations.
+  ECIES-over-P-256 seed (#65, #56). Validated against S7-PLCSIM Advanced V8
+  (CPU 1511-1 PN) with both clients: connect, browse and symbolic reads; see the
+  known limitations.
 * `Ids` gains the data-interface and comment attribute ids (#60).
 
 ### Performance
@@ -87,6 +88,14 @@ Other behaviour changes:
 
 ### Bug fixes and hardening
 
+* A multi-fragment V1 SessionKey response whose continuation digests are
+  chained feed-forward (`HMAC(key, digest_{n-1} ‖ fragment_n)`, as PLCSIM
+  Advanced uses) no longer fails with `Invalid V3 continuation HMAC`. The
+  verifier previously accepted only the finalized-state resume dialect; it now
+  detects the dialect from the second fragment and accepts either (#66).
+* Automatic 25-minute SessionKey renewal is skipped on PLCSIM (key family 03):
+  the simulator resets the connection when a new SecurityKey is written to
+  address 1830, so a renewal would end a long-lived session (#66).
 * Stop logging the SessionKey session challenge bytes (#44).
 * A V1 SessionKey connect without a password no longer sends the post-auth
   legitimation. S7-1200 PLCs with key family 01 reject it but still serve reads,
@@ -126,9 +135,14 @@ Other behaviour changes:
   TIA traffic and the emulator, and was confirmed on an S7-1200 1215C (FW V4.2)
   with both the sync and async clients (#44). A V1 S7-1500 retest of the new
   code is still pending.
-* PLCSIM's legacy authentication (key family 03) is implemented (#56) but only
-  tested against the emulator. It skips the post-auth legitimation and rejects a
-  `password` until a real PLCSIM capture shows what PLCSIM expects (#66).
+* PLCSIM's legacy authentication (key family 03) is implemented (#56) and was
+  validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN, FW V2.8 project):
+  connect, browse and symbolic reads. It skips the post-auth legitimation and
+  rejects a `password`, because the validated project grants full access without
+  one; a no-access PLCSIM project is needed to settle whether PLCSIM expects the
+  real-PLC legitimation scheme. Automatic SessionKey renewal is skipped for
+  family 03 (the simulator resets the connection). Byte-offset reads are refused
+  on optimized blocks, as on real hardware; use symbolic reads (#66).
 
 ### Thanks
 

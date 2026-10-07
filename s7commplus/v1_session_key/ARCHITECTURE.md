@@ -66,7 +66,8 @@ The interval is configurable in seconds through
 `S7CommPlusClient.connect(legacy_session_key_refresh_interval=...)` (or the
 low-level connection method). Pass `None` to disable automatic renewal. This
 timer applies only to legacy V1-initial SessionKey sessions; TLS sessions do not
-start it.
+start it. It is also skipped for key family 03 (PLCSIM), whose firmware resets
+the connection on a renewal SecurityKey write (see the family-03 note below).
 
 Activation and firmware-specific failures require protocol evidence, not
 changes to the arithmetic models. The CPU1515/FW2.9 investigation is tracked
@@ -366,10 +367,29 @@ P-256 and the existing KDF and `AesGcm24`, and is pinned to HarpoS7's
 supports only families 00 and 01, and `handshake.authenticate_session_key()`
 dispatches on the family.
 
-PLCSIM is **emulator-tested only**. It uses the S7-1500 request layouts, skips
-the post-auth legitimation (HarpoS7 has no PLCSIM legitimation, so it is
-unknown what PLCSIM expects) and rejects a `password`, until a capture from a
-real PLCSIM or PLCSIM Advanced instance settles those points (#56).
+PLCSIM is **validated** on a real S7-PLCSIM Advanced V8 instance (CPU 1511-1 PN,
+FW V2.8 project, host `169.254.130.10`): connect, SecurityKey setup, session
+activation, `browse()`, and symbolic reads all work with the sync and async
+clients. It uses the S7-1500 request
+layouts. CreateObject is parsed structurally (attribute 233 carries the
+`03:…` fingerprint, 303 the 20-byte challenge; no fixed offsets are used). The
+SetupSession SecurityKey write **echoes the PLC's own ServerSessionVersion**,
+including elements 315–318; that is accepted here (return 0), unlike the stale
+captured values a fixed auth template would send (firmware error −258). One
+wire difference from real hardware was found and fixed: a multi-fragment V3
+response from PLCSIM chains its continuation digests **feed-forward**
+(`HMAC(key, digest_{n-1} ‖ fragment_n)`), while real firmware uses the
+finalized-state resume dialect; `FragmentHMACVerifier` now accepts either.
+
+The post-auth legitimation stays skipped for family 03 (HarpoS7 has no PLCSIM
+legitimation and the validated project grants full access without one), so a
+`password` is still rejected pending a no-access PLCSIM project. Automatic
+25-minute **renewal is disabled for family 03**: PLCSIM Advanced FW V2.8 resets
+the connection when a new SecurityKey is written to address 1830, in both the
+`SET_VARIABLE` and the `SET_MULTI_VARIABLES` layout, so a renewal would end a
+long-lived session instead of extending it. Byte-offset `db_read` works on a
+standard (non-optimized) DB and is refused with PLC error `0xA40013` on an
+optimized DB, exactly as on real hardware; use symbolic reads there.
 
 [`MAINTAINER_GUIDE.md`](MAINTAINER_GUIDE.md) maps the stable handwritten
 interfaces, source/fixture evidence, failure triage, model limits and issue #1

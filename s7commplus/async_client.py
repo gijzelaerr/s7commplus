@@ -842,6 +842,12 @@ class S7CommPlusAsyncClient:
         interval = self._session_key_refresh_interval
         if interval is None or self._session_key is None or not self._connected:
             return
+        if self._v1_session_key_family == KeyFamily.PLCSIM:
+            # PLCSIM Advanced FW 2.8 resets the connection when the SessionKey is
+            # re-sent to address 1830, so an automatic renewal would kill a
+            # long-lived session. Skip it and keep the session alive.
+            logger.info("PLCSIM session: automatic SessionKey renewal disabled (key family 03 resets the connection on renewal)")
+            return
         self._session_key_refresh_task = asyncio.get_running_loop().create_task(self._session_key_refresh_loop(interval))
 
     async def _session_key_refresh_loop(self, interval: float) -> None:
