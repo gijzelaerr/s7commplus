@@ -368,7 +368,7 @@ supports only families 00 and 01, and `handshake.authenticate_session_key()`
 dispatches on the family.
 
 PLCSIM is **validated** on a real S7-PLCSIM Advanced V8 instance (CPU 1511-1 PN,
-FW V2.8 project, host `169.254.130.10`) with the sync and async clients:
+FW V2.8 project, on the PLCSIM virtual adapter) with the sync and async clients:
 connect, SecurityKey setup, `browse()`, symbolic and byte-offset reads,
 symbolic and byte-offset writes, data subscriptions, password legitimation, and
 key handling. It uses the S7-1500 request layouts. CreateObject is parsed
