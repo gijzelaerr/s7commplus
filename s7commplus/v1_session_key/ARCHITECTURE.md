@@ -370,20 +370,22 @@ dispatches on the family.
 PLCSIM is **validated** on a real S7-PLCSIM Advanced V8 instance (CPU 1511-1 PN,
 FW V2.8 project, host `169.254.130.10`) with the sync and async clients:
 connect, SecurityKey setup, `browse()`, symbolic and byte-offset reads,
-symbolic and byte-offset writes, data subscriptions, and key handling. It uses
-the S7-1500 request layouts. CreateObject is parsed structurally (attribute 233
-carries the `03:…` fingerprint, 303 the 20-byte challenge; no fixed offsets are
-used). The SetupSession SecurityKey write **echoes the PLC's own
-ServerSessionVersion**, including elements 315–318; that is accepted here
-(return 0), unlike the stale captured values a fixed auth template would send
-(firmware error −258).
+symbolic and byte-offset writes, data subscriptions, password legitimation, and
+key handling. It uses the S7-1500 request layouts. CreateObject is parsed
+structurally (attribute 233 carries the `03:…` fingerprint, 303 the 20-byte
+challenge; no fixed offsets are used).
 
-Three PLCSIM-specific behaviours were found and fixed (#66):
+Four PLCSIM-specific behaviours were found and fixed (#66):
 
 - A multi-fragment V3 response chains its continuation digests **feed-forward**
   (`HMAC(key, digest_{n-1} ‖ fragment_n)`), while real firmware resumes the
   finalized HMAC state; `FragmentHMACVerifier` now detects the dialect from the
   second fragment and accepts either, so `browse()` works.
+- The SetupSession SecurityKey write echoes the PLC's own ServerSessionVersion
+  **with elements 315–318 rewritten to the S7-1500 (real-PLC) values**. Echoing
+  PLCSIM's own values back is accepted for the setup and serves reads, but it
+  makes PLCSIM reject the post-auth legitimation; the real-PLC values are what
+  S7CommRust and the HarpoS7 PoC (patched) use, and they work for both.
 - PLCSIM Advanced does **not** want the address-323 session activation
   (`SET_VARIABLE` = USINT(5)) that real firmware needs: reads still work after
   it, but the next `CreateObject` / `SetMultiVariables` (write, subscription,
@@ -394,14 +396,21 @@ Three PLCSIM-specific behaviours were found and fixed (#66):
   `GET_MULTI_VARIABLES`/`EXPLORE`; those payloads are kept whole so the
   per-item error list parses correctly.
 
-The post-auth legitimation is settled but not implementable from the current
-references. On a password-protected (NoAccess) family-03 PLCSIM session the PLC
-**does** answer the address-303 legitimation read with a 20-byte challenge, but
-it **rejects the real-PLC 248-byte blob** (return value `0x8318890001E2FFFE`);
-the PLCSIM-specific legitimation algorithm differs from HarpoS7's
-`LegitimateScheme`, and neither HarpoS7 nor S7CommRust implements it. The client
-therefore keeps skipping family-03 legitimation and rejecting `password=`, and a
-protected PLCSIM project can be connected but not read. Automatic 25-minute
+The post-auth legitimation is **implemented and validated**. HarpoS7 does have a
+PLCSIM variant (`LegitimateScheme.SolveLegitimateChallengePlcSim`) — contrary to
+an earlier note here — and
+`v1_session_key.legitimation.solve_legitimate_challenge_plcsim` is a manual port
+of it that byte-matches HarpoS7's known answer (the IV and the ECIES seed are
+injected in the vector, since the scalar is random; the seed generator has its
+own HarpoS7 known-answer test). It uses the same P-256 seed as the session
+handshake and AES-GCM-encrypts the SHA-1 password hash and the address-303
+challenge. On a password-protected (NoAccess) family-03 PLCSIM session the PLC
+answers the address-303 read with a 20-byte challenge, and the client's 284-byte
+blob is accepted once (a) the setup carries the real-PLC 315–318 values and
+(b) the request uses HarpoS7's captured layout (object qualifier key 1, no
+item-number byte, the IntegrityId before the trailing fill). The result is
+`LegitimatedLevel1`: the client reaches `protection_level` 1, browses, reads and
+writes; `Client` and `AsyncClient` both work. Automatic 25-minute
 **renewal is disabled for family 03**: PLCSIM Advanced FW V2.8 resets the
 connection when a new SecurityKey is written to address 1830, in both the
 `SET_VARIABLE` and the `SET_MULTI_VARIABLES` layout, so a renewal would end a

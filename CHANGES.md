@@ -60,9 +60,11 @@ Other behaviour changes:
   nothing is recreated implicitly, notifications from the gap are not replayed
   and alarm subscriptions are not restored (#69, #67).
 * PLCSIM / PLCSIM Advanced (key family 03) V1 SessionKey authentication, with an
-  ECIES-over-P-256 seed (#65, #56). Validated against S7-PLCSIM Advanced V8
-  (CPU 1511-1 PN) with both clients: connect, browse and symbolic reads; see the
-  known limitations.
+  ECIES-over-P-256 seed (#65, #56), **and password legitimation** (a manual port
+  of HarpoS7's `SolveLegitimateChallengePlcSim`). Validated against S7-PLCSIM
+  Advanced V8 (CPU 1511-1 PN, NoAccess project) with both clients: connect with a
+  password, browse, reads, writes and data subscriptions; the client reaches
+  `protection_level` 1 after `LegitimatedLevel1`. See the known limitations.
 * `Ids` gains the data-interface and comment attribute ids (#60).
 
 ### Performance
@@ -106,6 +108,14 @@ Other behaviour changes:
 * `Client.write_symbolic`/`AsyncClient.write_symbolic` and the subscription
   delete now use the session's `object_qualifier_version` like every other data
   path, instead of the negotiated protocol version (#66).
+* PLCSIM family-03 sessions rewrite ServerSessionVersion elements 315–318 to the
+  real-PLC values in the session setup. Echoing PLCSIM's own values back was
+  accepted for the setup and reads, but it made the post-auth legitimation fail;
+  the real-PLC values work for both (#66).
+* The V1 legitimation `SET_VAR_SUBSTREAMED` request now uses the captured layout
+  (object qualifier key 1, no item-number byte, the IntegrityId before the
+  trailing fill). The previous item-number byte made PLCSIM reject the request
+  with a fatal SystemEvent (#66).
 * Stop logging the SessionKey session challenge bytes (#44).
 * A V1 SessionKey connect without a password no longer sends the post-auth
   legitimation. S7-1200 PLCs with key family 01 reject it but still serve reads,
@@ -146,16 +156,14 @@ Other behaviour changes:
   with both the sync and async clients (#44). A V1 S7-1500 retest of the new
   code is still pending.
 * PLCSIM's legacy authentication (key family 03) is implemented (#56) and was
-  validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN, FW V2.8 project) with
-  the sync and async clients: connect, browse, symbolic and byte-offset reads
-  and writes, and data subscriptions. Automatic SessionKey renewal and the
-  address-323 session activation are skipped for family 03 (the simulator resets
-  the connection on both). Byte-offset reads/writes are refused on optimized
-  blocks, as on real hardware; use symbolic access there. **Password
-  legitimation is not implemented for family 03**: a NoAccess PLCSIM project
-  answers the address-303 read with a 20-byte challenge but rejects the real-PLC
-  248-byte blob, so a protected instance cannot be read and `password=` is
-  rejected (#66).
+  validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN, NoAccess FW V2.8
+  project) with the sync and async clients: connect with a password, browse,
+  symbolic and byte-offset reads and writes, data subscriptions, and **password
+  legitimation** (a manual port of HarpoS7's `SolveLegitimateChallengePlcSim`).
+  Automatic SessionKey renewal and the address-323 session activation are skipped
+  for family 03 (the simulator resets the connection on both). Byte-offset
+  reads/writes are refused on optimized blocks, as on real hardware; use symbolic
+  access there (#66).
 
 ### Thanks
 

@@ -15,7 +15,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import _LEGACY_KEY_CACHE, S7CommPlusClient
 from s7commplus.connection import _build_v1_get_var_substreamed_payload, _v1_integrity_tail
-from s7commplus.error import S7AuthenticationError
 from s7commplus.server import S7CommPlusServer
 from s7commplus.v1_session_key import handshake, legitimation
 from s7commplus.v1_session_key.blob_metadata import ENCRYPTED_BLOB_LENGTH_PLCSIM, write_metadata
@@ -300,18 +299,39 @@ async def test_async_client_authenticates_against_family_03(
         await client.disconnect()
 
 
-def test_sync_client_rejects_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
+def test_sync_client_legitimates_with_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
     _, port = plcsim_server
     client = S7CommPlusClient()
-    with pytest.raises(S7AuthenticationError, match="PLCSIM"):
-        client.connect("127.0.0.1", port=port, password="secret")
-    assert not client.connected
+    client.connect("127.0.0.1", port=port, password="secret")
+    try:
+        assert client.connected
+        assert abs(struct.unpack(">f", client.db_read(1, 0, 4))[0] - 23.5) < 0.001
+    finally:
+        client.disconnect()
 
 
 @pytest.mark.asyncio
-async def test_async_client_rejects_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
+async def test_async_client_legitimates_with_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
     _, port = plcsim_server
     client = S7CommPlusAsyncClient()
-    with pytest.raises(S7AuthenticationError, match="PLCSIM"):
-        await client.connect("127.0.0.1", port=port, password="secret")
-    assert not client.connected
+    await client.connect("127.0.0.1", port=port, password="secret")
+    try:
+        assert client.connected
+        assert abs(struct.unpack(">f", await client.db_read(1, 0, 4))[0] - 23.5) < 0.001
+    finally:
+        await client.disconnect()
+
+
+def test_plcsim_session_version_patch_rewrites_315_to_318() -> None:
+    from s7commplus.connection import _patch_plcsim_server_session_version
+
+    plcsim_struct = bytes.fromhex(
+        "0017000007088e090004008e0a0002008e0b0017000007218e220005aaaaaaaaaaaaaaaa8e23000486108e24000400008e0c0017000007218e220005bbbbbbbbbbbbbbbb8e2300048486018e24000400008e0d0014008158addee1fed800000001000000010000003a823b00048800823c00048500823d000484818640823e000484818400823f0015008240001500"
+    )
+    patched = _patch_plcsim_server_session_version(plcsim_struct)
+    assert bytes.fromhex("823b00048400") in patched
+    assert bytes.fromhex("823c00048400") in patched
+    assert bytes.fromhex("823d000484818240") in patched
+    assert bytes.fromhex("823e000484818240") in patched
+    # Unrelated parts are untouched.
+    assert bytes.fromhex("8e0d0014008158addee1fed8") in patched

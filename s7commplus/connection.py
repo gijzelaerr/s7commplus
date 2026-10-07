@@ -61,7 +61,7 @@ from .codec import (
     encode_object_qualifier,
     parse_create_object_attributes,
 )
-from .error import S7AuthenticationError, S7ConnectionError
+from .error import S7ConnectionError
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -527,29 +527,48 @@ def _strip_paom_string_in_session_version(struct_bytes: bytes) -> bytes:
     return struct_bytes[:after_dtype] + bytes([0x00]) + struct_bytes[after_dtype + consumed + length :]
 
 
+# ServerSessionVersion elements 315-318. Echoing the PlcSim values back makes
+# PLCSIM Advanced FW 2.8 accept the session and serve reads, but it then rejects
+# the post-auth legitimation blob (the challenge/key derivation ends up wrong).
+# The real-PLC (S7-1500) values are accepted for the setup *and* for the
+# legitimation, as S7CommRust and the HarpoS7 PoC (with its template patched)
+# both use. Source: S7CommRust `legacy/session.rs` patch_after calls, verified
+# live against PLCSIM Advanced V8 (#66).
+_PLCSIM_SERVER_SESSION_VERSION_PATCHES: tuple[tuple[bytes, bytes], ...] = (
+    (bytes([0x82, 0x3B, 0x00, 0x04]), bytes([0x84, 0x00])),
+    (bytes([0x82, 0x3C, 0x00, 0x04]), bytes([0x84, 0x00])),
+    (bytes([0x82, 0x3D, 0x00, 0x04]), bytes([0x84, 0x81, 0x82, 0x40])),
+    (bytes([0x82, 0x3E, 0x00, 0x04]), bytes([0x84, 0x81, 0x82, 0x40])),
+)
+
+
+def _patch_plcsim_server_session_version(struct_bytes: bytes) -> bytes:
+    """Rewrite ServerSessionVersion elements 315-318 to the real-PLC values.
+
+    PLCSIM Advanced rejects the post-auth legitimation when the setup echo carries
+    the emulator's own 315-318 values; the S7-1500 values are needed for both the
+    setup and the legitimation.
+    """
+    out = bytearray(struct_bytes)
+    for marker, value in _PLCSIM_SERVER_SESSION_VERSION_PATCHES:
+        idx = out.find(marker)
+        if idx < 0:
+            continue
+        value_start = idx + len(marker)
+        try:
+            _, consumed = decode_uint32_vlq(bytes(out), value_start)
+        except ValueError:
+            continue
+        out[value_start : value_start + consumed] = value
+    return bytes(out)
+
+
 # --- V1 SessionKey helpers, shared by S7CommPlusConnection and the async client. ---
 
 
 def _v1_integrity_tail(family: KeyFamily) -> int:
     """Trailing fill bytes of V1 SessionKey substreamed requests: 3 on the S7-1200, 4 on the S7-1500."""
     return 3 if family == KeyFamily.S7_1200 else 4
-
-
-def _skip_plcsim_legitimation(password: str) -> None:
-    """Skip the post-auth legitimation on a PLCSIM session, rejecting a password.
-
-    HarpoS7 has no PLCSIM legitimation, so it is unknown what PLCSIM expects. A
-    password cannot be honoured, and ignoring it silently would look like
-    authenticated access.
-
-    Raises:
-        S7AuthenticationError: If ``password`` is not empty.
-    """
-    if password:
-        raise S7AuthenticationError(
-            "Password legitimation is not supported on PLCSIM sessions that use the legacy SessionKey (key family 03)"
-        )
-    logger.info("PLCSIM session: skipping post-auth legitimation (not implemented for key family 03)")
 
 
 def _resolve_session_key_fingerprint(public_key_fingerprint: Optional[str], override: Optional[str]) -> Optional[str]:
@@ -803,19 +822,23 @@ def _build_v1_get_var_substreamed_payload(
 
 
 def _build_v1_legitimation_payload(session_id: int, sequence_number: int, legitimation_blob: bytes) -> bytes:
-    """SET_VAR_SUBSTREAMED writing the solved legitimation blob to address 1846."""
-    oq = encode_object_qualifier(key_qualifier=sequence_number, protocol_version=ProtocolVersion.V1)
+    """SET_VAR_SUBSTREAMED writing the solved legitimation blob to address 1846.
+
+    Layout captured by HarpoS7: the item intro, an object qualifier with key
+    qualifier 1, a fill byte, the BLOB, and a trailing fill that the request
+    IntegrityId is spliced into. This is the layout PLCSIM Advanced accepts
+    (see the caller's comment); the item-number byte after the qualifier that an
+    earlier version emitted made PLCSIM reject the request.
+    """
+    oq = encode_object_qualifier(key_qualifier=1, protocol_version=ProtocolVersion.V1)
     payload = struct.pack(">I", session_id)
-    payload += bytes([0x20, 0x04])
-    payload += encode_uint32_vlq(1)
+    payload += bytes([0x20, 0x04, 0x01])
     payload += encode_uint32_vlq(LegitimationId.LEGITIMATE)  # 1846
     payload += oq
-    payload += encode_uint32_vlq(1)
     payload += bytes([0x00, DataType.BLOB, 0x00])
     payload += encode_uint32_vlq(len(legitimation_blob))
     payload += legitimation_blob
-    payload += encode_uint32_vlq(sequence_number)
-    payload += bytes(3)  # trailing zeros
+    payload += struct.pack(">I", 0)  # trailing fill (the IntegrityId is spliced before it)
     return payload
 
 
@@ -2260,11 +2283,17 @@ class S7CommPlusConnection:
         auth_result = self._try_session_key_auth()
         security_key = None if auth_result is None else self._encode_security_key_struct(*auth_result)
 
+        server_session_version = self._server_session_version
+        if self._v1_session_key_family == KeyFamily.PLCSIM:
+            # PLCSIM needs the real-PLC 315-318 values for the post-auth
+            # legitimation to be accepted (see the helper).
+            server_session_version = _patch_plcsim_server_session_version(server_session_version)
+
         seq_num = self._next_sequence_number()
         frame = _build_session_setup_frame(
             self._session_id,
             seq_num,
-            self._server_session_version,
+            server_session_version,
             self._protocol_version,
             security_key,
         )
@@ -2327,12 +2356,9 @@ class S7CommPlusConnection:
 
         Matches HarpoS7 PoC legitimation sequence:
         1. GET_VAR_SUBSTREAMED: read 20-byte challenge from address 303
-        2. Solve the challenge cryptographically
-        3. SET_VAR_SUBSTREAMED: write solved 248-byte blob to address 1846
+        2. Solve the challenge cryptographically (real-PLC or PlcSim scheme)
+        3. SET_VAR_SUBSTREAMED: write the solved blob to address 1846
         """
-        if self._v1_session_key_family == KeyFamily.PLCSIM:
-            _skip_plcsim_legitimation(password)
-            return
         # Step 1: Read legitimation challenge from session, address 303
         logger.debug("Post-auth legitimation: reading challenge from address 303")
         challenge_resp = self.send_request(
@@ -2347,13 +2373,13 @@ class S7CommPlusConnection:
         if len(legit_challenge) != 20:
             raise S7ConnectionError("Post-auth legitimation failed: expected a 20-byte challenge")
 
-        # Step 2: Solve the challenge
-        from .v1_session_key.legitimation import solve_legitimate_challenge_real_plc
+        # Step 2: Solve the challenge with the family's scheme
+        from .v1_session_key.legitimation import solve_legitimate_challenge
 
         session_key = self._session_key
         if session_key is None:
             raise S7ConnectionError("Post-auth legitimation failed: no session key")
-        legit_blob = solve_legitimate_challenge_real_plc(
+        legit_blob = solve_legitimate_challenge(
             legit_challenge,
             self._v1_session_key_public_key,
             self._v1_session_key_family,
@@ -2365,7 +2391,7 @@ class S7CommPlusConnection:
         # Step 3: Write solved blob via SET_VAR_SUBSTREAMED to address 1846
         logger.debug("Post-auth legitimation: writing solved blob to address 1846")
         payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, legit_blob)
-        response = self.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=3)
+        response = self.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=4)
         _check_v1_legitimation_response(response, self._last_raw_response_payload)
         logger.info("Post-auth legitimation completed")
 

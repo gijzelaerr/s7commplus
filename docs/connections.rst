@@ -89,7 +89,7 @@ determine it. The following combinations have been reported on real hardware:
    * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.8 project)
      - key family 03
      - V1, legacy SessionKey
-     - Validated (sync and async: connect, browse, reads, writes, data subscriptions; renewal skipped)
+     - Validated (sync and async: connect, password legitimation, browse, reads, writes, data subscriptions; renewal skipped)
    * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.9 project)
      - V2.9
      - TLS

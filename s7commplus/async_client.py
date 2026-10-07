@@ -77,9 +77,9 @@ from .connection import (
     _log_create_object_return_value,
     _parse_get_var_substreamed_response,
     _parse_protection_level_response,
+    _patch_plcsim_server_session_version,
     _resolve_session_key_fingerprint,
     _session_setup_accepted,
-    _skip_plcsim_legitimation,
     _set_s7_groups,
     _strip_response_integrity_id,
     _v1_session_key_profile,
@@ -1988,10 +1988,13 @@ class S7CommPlusAsyncClient:
             security_key = _encode_security_key_struct(
                 self._v1_session_key_public_key, self._v1_session_key_family, blob, session_key
             )
+            server_session_version = self._server_session_version
+            if self._v1_session_key_family == KeyFamily.PLCSIM:
+                server_session_version = _patch_plcsim_server_session_version(server_session_version)
             frame = _build_session_setup_frame(
                 self._session_id,
                 self._next_sequence_number(),
-                self._server_session_version,
+                server_session_version,
                 self._protocol_version,
                 security_key,
             )
@@ -2050,9 +2053,6 @@ class S7CommPlusAsyncClient:
 
     async def _post_auth_legitimation(self, password: str = "") -> None:
         """Solve the V1 legitimation challenge after the SessionKey handshake (see the sync connection)."""
-        if self._v1_session_key_family == KeyFamily.PLCSIM:
-            _skip_plcsim_legitimation(password)
-            return
         async with self._lock:
             payload = _build_v1_get_var_substreamed_payload(
                 self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
@@ -2067,18 +2067,18 @@ class S7CommPlusAsyncClient:
         if len(challenge) != 20:
             raise S7ConnectionError("Post-auth legitimation failed: expected a 20-byte challenge")
 
-        from .v1_session_key.legitimation import solve_legitimate_challenge_real_plc
+        from .v1_session_key.legitimation import solve_legitimate_challenge
 
         session_key = self._session_key
         if session_key is None:
             raise S7ConnectionError("Post-auth legitimation failed: no session key")
-        blob = solve_legitimate_challenge_real_plc(
+        blob = solve_legitimate_challenge(
             challenge, self._v1_session_key_public_key, self._v1_session_key_family, session_key, password
         )
 
         async with self._lock:
             payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob)
-            response = await self._send_request_locked(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=3)
+            response = await self._send_request_locked(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=4)
         _check_v1_legitimation_response(response, self._last_raw_response_payload)
         logger.info("Post-auth legitimation completed")
 
