@@ -84,6 +84,7 @@ from .connection import (
     _strip_response_integrity_id,
     _v1_session_key_profile,
     _v1_integrity_tail,
+    _v1_legitimation_integrity_tail,
     _validate_response_header,
     _verify_v3_hmac,
 )
@@ -2077,8 +2078,12 @@ class S7CommPlusAsyncClient:
         )
 
         async with self._lock:
-            payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob)
-            response = await self._send_request_locked(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=4)
+            payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob, self._v1_session_key_family)
+            response = await self._send_request_locked(
+                FunctionCode.SET_VAR_SUBSTREAMED,
+                payload,
+                integrity_tail=_v1_legitimation_integrity_tail(self._v1_session_key_family),
+            )
         _check_v1_legitimation_response(response, self._last_raw_response_payload)
         logger.info("Post-auth legitimation completed")
 

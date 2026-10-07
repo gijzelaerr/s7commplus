@@ -318,11 +318,11 @@ def test_solve_legitimate_challenge_plcsim_vector() -> None:
     assert blob == expected
 
 
-def test_v1_legitimation_payload_layout() -> None:
+def test_v1_legitimation_payload_layout_plcsim() -> None:
     """The SET_VAR_SUBSTREAMED legitimation request layout PLCSIM accepts."""
     from s7commplus.connection import _build_v1_legitimation_payload
 
-    payload = _build_v1_legitimation_payload(0x70000F8F, 5, b"\xaa" * 8)
+    payload = _build_v1_legitimation_payload(0x70000F8F, 5, b"\xaa" * 8, KeyFamily.PLCSIM)
 
     assert payload == bytes.fromhex(
         "70000f8f"  # InObjectId
@@ -334,3 +334,33 @@ def test_v1_legitimation_payload_layout() -> None:
         "aaaaaaaaaaaaaaaa"  # blob
         "00000000"  # trailing fill (IntegrityId spliced before it)
     )
+
+
+def test_v1_legitimation_payload_layout_real_plc() -> None:
+    """S7-1200 and S7-1500 keep the pre-existing (master) legitimation layout byte-for-byte."""
+    from s7commplus.connection import _build_v1_legitimation_payload
+
+    expected = bytes.fromhex(
+        "00001234"  # InObjectId
+        "2004"  # item intro
+        "01"  # ItemNumber
+        "8e36"  # address 1846 (VLQ)
+        "000004e88969001200000000896a001300896b000400000007"  # object qualifier, key qualifier = sequence
+        "01"  # ItemNumber for the value
+        "001400"  # fill, BLOB, fill
+        "04"  # blob length (VLQ)
+        "01020304"  # blob
+        "07"  # sequence number (VLQ)
+        "000000"  # trailing fill (IntegrityId spliced before it)
+    )
+
+    for family in (KeyFamily.S7_1200, KeyFamily.S7_1500):
+        assert _build_v1_legitimation_payload(0x1234, 7, b"\x01\x02\x03\x04", family) == expected
+
+
+def test_v1_legitimation_integrity_tail_is_gated_on_family() -> None:
+    from s7commplus.connection import _v1_legitimation_integrity_tail
+
+    assert _v1_legitimation_integrity_tail(KeyFamily.PLCSIM) == 4
+    assert _v1_legitimation_integrity_tail(KeyFamily.S7_1200) == 3
+    assert _v1_legitimation_integrity_tail(KeyFamily.S7_1500) == 3

@@ -112,10 +112,11 @@ Other behaviour changes:
   real-PLC values in the session setup. Echoing PLCSIM's own values back was
   accepted for the setup and reads, but it made the post-auth legitimation fail;
   the real-PLC values work for both (#66).
-* The V1 legitimation `SET_VAR_SUBSTREAMED` request now uses the captured layout
+* The V1 legitimation `SET_VAR_SUBSTREAMED` request uses PLCSIM's captured layout
   (object qualifier key 1, no item-number byte, the IntegrityId before the
-  trailing fill). The previous item-number byte made PLCSIM reject the request
-  with a fatal SystemEvent (#66).
+  trailing fill) for key family 03 only. The previous item-number byte made
+  PLCSIM reject the request with a fatal SystemEvent. The other families keep the
+  pre-existing layout byte-for-byte (#66).
 * Stop logging the SessionKey session challenge bytes (#44).
 * A V1 SessionKey connect without a password no longer sends the post-auth
   legitimation. S7-1200 PLCs with key family 01 reject it but still serve reads,

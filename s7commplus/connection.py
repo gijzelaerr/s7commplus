@@ -61,7 +61,7 @@ from .codec import (
     encode_object_qualifier,
     parse_create_object_attributes,
 )
-from .error import S7ConnectionError
+from .error import S7AuthenticationError, S7ConnectionError
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -69,6 +69,7 @@ from .legitimation import (
     derive_legitimation_key,
     extract_session_oms_version,
     extract_session_version_string,
+    iter_struct_elements,
     oms_session_version_name,
 )
 from .protocol import (
@@ -534,12 +535,12 @@ def _strip_paom_string_in_session_version(struct_bytes: bytes) -> bytes:
 # legitimation, as S7CommRust and the HarpoS7 PoC (with its template patched)
 # both use. Source: S7CommRust `legacy/session.rs` patch_after calls, verified
 # live against PLCSIM Advanced V8 (#66).
-_PLCSIM_SERVER_SESSION_VERSION_PATCHES: tuple[tuple[bytes, bytes], ...] = (
-    (bytes([0x82, 0x3B, 0x00, 0x04]), bytes([0x84, 0x00])),
-    (bytes([0x82, 0x3C, 0x00, 0x04]), bytes([0x84, 0x00])),
-    (bytes([0x82, 0x3D, 0x00, 0x04]), bytes([0x84, 0x81, 0x82, 0x40])),
-    (bytes([0x82, 0x3E, 0x00, 0x04]), bytes([0x84, 0x81, 0x82, 0x40])),
-)
+_PLCSIM_SERVER_SESSION_VERSION_REWRITES: dict[int, bytes] = {
+    315: bytes([0x84, 0x00]),
+    316: bytes([0x84, 0x00]),
+    317: bytes([0x84, 0x81, 0x82, 0x40]),
+    318: bytes([0x84, 0x81, 0x82, 0x40]),
+}
 
 
 def _patch_plcsim_server_session_version(struct_bytes: bytes) -> bytes:
@@ -548,18 +549,22 @@ def _patch_plcsim_server_session_version(struct_bytes: bytes) -> bytes:
     PLCSIM Advanced rejects the post-auth legitimation when the setup echo carries
     the emulator's own 315-318 values; the S7-1500 values are needed for both the
     setup and the legitimation.
+
+    The struct is walked at element boundaries (`iter_struct_elements`), so only
+    real elements with those keys are rewritten — never lookalike bytes inside
+    another element's value. The first element the walk cannot size (or the
+    terminator) ends the rewrite and everything from there is copied verbatim.
     """
-    out = bytearray(struct_bytes)
-    for marker, value in _PLCSIM_SERVER_SESSION_VERSION_PATCHES:
-        idx = out.find(marker)
-        if idx < 0:
+    out = bytearray()
+    cursor = 0
+    for element in iter_struct_elements(struct_bytes):
+        replacement = _PLCSIM_SERVER_SESSION_VERSION_REWRITES.get(element.key)
+        if replacement is None:
             continue
-        value_start = idx + len(marker)
-        try:
-            _, consumed = decode_uint32_vlq(bytes(out), value_start)
-        except ValueError:
-            continue
-        out[value_start : value_start + consumed] = value
+        out += struct_bytes[cursor : element.value_start]
+        out += replacement
+        cursor = element.end
+    out += struct_bytes[cursor:]
     return bytes(out)
 
 
@@ -821,24 +826,50 @@ def _build_v1_get_var_substreamed_payload(
     return _build_get_var_substreamed_payload(in_object_id, address, sequence_field=seq_field)
 
 
-def _build_v1_legitimation_payload(session_id: int, sequence_number: int, legitimation_blob: bytes) -> bytes:
+def _v1_legitimation_integrity_tail(family: KeyFamily) -> int:
+    """Trailing fill bytes of the legitimation ``SET_VAR_SUBSTREAMED`` request.
+
+    PLCSIM's layout leaves four bytes for the IntegrityId; the real-PLC layouts
+    are unchanged from before (three), matching master.
+    """
+    return 4 if family == KeyFamily.PLCSIM else 3
+
+
+def _build_v1_legitimation_payload(session_id: int, sequence_number: int, legitimation_blob: bytes, family: KeyFamily) -> bytes:
     """SET_VAR_SUBSTREAMED writing the solved legitimation blob to address 1846.
 
-    Layout captured by HarpoS7: the item intro, an object qualifier with key
-    qualifier 1, a fill byte, the BLOB, and a trailing fill that the request
-    IntegrityId is spliced into. This is the layout PLCSIM Advanced accepts
-    (see the caller's comment); the item-number byte after the qualifier that an
-    earlier version emitted made PLCSIM reject the request.
+    Two layouts, chosen by key family. PLCSIM (family 03) needs the item intro
+    without an item-number byte, an object qualifier with key qualifier 1, and a
+    four-byte trailing fill (captured from HarpoS7). The real-PLC families keep
+    the pre-existing layout byte-for-byte: an item-number byte after the
+    qualifier, the sequence number as the key qualifier, and a ``VLQ(seq)`` plus
+    three-byte fill — none of them has been seen with the PLCSIM layout, and the
+    change must not silently alter their requests.
     """
-    oq = encode_object_qualifier(key_qualifier=1, protocol_version=ProtocolVersion.V1)
+    if family == KeyFamily.PLCSIM:
+        oq = encode_object_qualifier(key_qualifier=1, protocol_version=ProtocolVersion.V1)
+        payload = struct.pack(">I", session_id)
+        payload += bytes([0x20, 0x04, 0x01])
+        payload += encode_uint32_vlq(LegitimationId.LEGITIMATE)  # 1846
+        payload += oq
+        payload += bytes([0x00, DataType.BLOB, 0x00])
+        payload += encode_uint32_vlq(len(legitimation_blob))
+        payload += legitimation_blob
+        payload += struct.pack(">I", 0)  # trailing fill (the IntegrityId is spliced before it)
+        return payload
+
+    oq = encode_object_qualifier(key_qualifier=sequence_number, protocol_version=ProtocolVersion.V1)
     payload = struct.pack(">I", session_id)
-    payload += bytes([0x20, 0x04, 0x01])
+    payload += bytes([0x20, 0x04])
+    payload += encode_uint32_vlq(1)  # ItemNumber
     payload += encode_uint32_vlq(LegitimationId.LEGITIMATE)  # 1846
     payload += oq
+    payload += encode_uint32_vlq(1)  # ItemNumber for the value
     payload += bytes([0x00, DataType.BLOB, 0x00])
     payload += encode_uint32_vlq(len(legitimation_blob))
     payload += legitimation_blob
-    payload += struct.pack(">I", 0)  # trailing fill (the IntegrityId is spliced before it)
+    payload += encode_uint32_vlq(sequence_number)
+    payload += bytes(3)  # trailing fill (the IntegrityId is spliced before it)
     return payload
 
 
@@ -2390,8 +2421,12 @@ class S7CommPlusConnection:
 
         # Step 3: Write solved blob via SET_VAR_SUBSTREAMED to address 1846
         logger.debug("Post-auth legitimation: writing solved blob to address 1846")
-        payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, legit_blob)
-        response = self.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=4)
+        payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, legit_blob, self._v1_session_key_family)
+        response = self.send_request(
+            FunctionCode.SET_VAR_SUBSTREAMED,
+            payload,
+            integrity_tail=_v1_legitimation_integrity_tail(self._v1_session_key_family),
+        )
         _check_v1_legitimation_response(response, self._last_raw_response_payload)
         logger.info("Post-auth legitimation completed")
 

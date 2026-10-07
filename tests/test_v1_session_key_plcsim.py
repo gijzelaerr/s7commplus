@@ -322,16 +322,50 @@ async def test_async_client_legitimates_with_a_password_on_plcsim(plcsim_server:
         await client.disconnect()
 
 
+# A real PLCSIM Advanced ServerSessionVersion (captured CreateObject response):
+# elements 315-318 carry the emulator values, 319/320 are the PAOM and
+# order-number WStrings.
+_PLCSIM_SSV = bytes.fromhex(
+    "00170000013a"
+    "823b00048800"
+    "823c00048500"
+    "823d000484818640"
+    "823e000484818400"
+    "823f00151a313b364553372053494d2d30313530302d41504c433b53342e31"
+    "8240001508323b373436323838"
+    "00"
+)
+_PLCSIM_SSV_PATCHED = bytes.fromhex(
+    "00170000013a"
+    "823b00048400"
+    "823c00048400"
+    "823d000484818240"
+    "823e000484818240"
+    "823f00151a313b364553372053494d2d30313530302d41504c433b53342e31"
+    "8240001508323b373436323838"
+    "00"
+)
+
+
 def test_plcsim_session_version_patch_rewrites_315_to_318() -> None:
     from s7commplus.connection import _patch_plcsim_server_session_version
 
-    plcsim_struct = bytes.fromhex(
-        "0017000007088e090004008e0a0002008e0b0017000007218e220005aaaaaaaaaaaaaaaa8e23000486108e24000400008e0c0017000007218e220005bbbbbbbbbbbbbbbb8e2300048486018e24000400008e0d0014008158addee1fed800000001000000010000003a823b00048800823c00048500823d000484818640823e000484818400823f0015008240001500"
-    )
-    patched = _patch_plcsim_server_session_version(plcsim_struct)
-    assert bytes.fromhex("823b00048400") in patched
-    assert bytes.fromhex("823c00048400") in patched
-    assert bytes.fromhex("823d000484818240") in patched
-    assert bytes.fromhex("823e000484818240") in patched
-    # Unrelated parts are untouched.
-    assert bytes.fromhex("8e0d0014008158addee1fed8") in patched
+    assert _patch_plcsim_server_session_version(_PLCSIM_SSV) == _PLCSIM_SSV_PATCHED
+
+
+def test_plcsim_session_version_patch_ignores_marker_bytes_in_values() -> None:
+    """The patch walks elements, so marker bytes inside a BLOB value are not rewritten."""
+    from s7commplus.connection import _patch_plcsim_server_session_version
+
+    lookalike = bytes.fromhex("823b00048800")
+    blob_element = bytes.fromhex("822c0014") + bytes([len(lookalike)]) + lookalike  # element 300, BLOB
+    struct = bytes.fromhex("00170000013a") + blob_element + bytes.fromhex("823b00048800") + bytes([0x00])
+    expected = bytes.fromhex("00170000013a") + blob_element + bytes.fromhex("823b00048400") + bytes([0x00])
+    assert _patch_plcsim_server_session_version(struct) == expected
+
+
+def test_plcsim_session_version_patch_leaves_non_structs_alone() -> None:
+    from s7commplus.connection import _patch_plcsim_server_session_version
+
+    bare_udint = bytes.fromhex("00048400")  # flags, datatype UDINT, value; not a struct
+    assert _patch_plcsim_server_session_version(bare_udint) == bare_udint

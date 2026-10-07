@@ -408,7 +408,11 @@ challenge. On a password-protected (NoAccess) family-03 PLCSIM session the PLC
 answers the address-303 read with a 20-byte challenge, and the client's 284-byte
 blob is accepted once (a) the setup carries the real-PLC 315–318 values and
 (b) the request uses HarpoS7's captured layout (object qualifier key 1, no
-item-number byte, the IntegrityId before the trailing fill). The result is
+item-number byte, the IntegrityId before the trailing fill). Both are scoped to
+family 03: the setup rewrite is PLCSIM-only, and the other families keep the
+pre-existing request layout (key qualifier = sequence number, an item-number
+byte, and a three-byte tail) byte-for-byte, unchanged from before this work.
+The result is
 `LegitimatedLevel1`: the client reaches `protection_level` 1, browses, reads and
 writes; `Client` and `AsyncClient` both work. Automatic 25-minute
 **renewal is disabled for family 03**: PLCSIM Advanced FW V2.8 resets the
