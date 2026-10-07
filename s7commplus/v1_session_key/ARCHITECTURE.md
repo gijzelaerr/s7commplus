@@ -368,18 +368,31 @@ supports only families 00 and 01, and `handshake.authenticate_session_key()`
 dispatches on the family.
 
 PLCSIM is **validated** on a real S7-PLCSIM Advanced V8 instance (CPU 1511-1 PN,
-FW V2.8 project, host `169.254.130.10`): connect, SecurityKey setup, session
-activation, `browse()`, and symbolic reads all work with the sync and async
-clients. It uses the S7-1500 request
-layouts. CreateObject is parsed structurally (attribute 233 carries the
-`03:…` fingerprint, 303 the 20-byte challenge; no fixed offsets are used). The
-SetupSession SecurityKey write **echoes the PLC's own ServerSessionVersion**,
-including elements 315–318; that is accepted here (return 0), unlike the stale
-captured values a fixed auth template would send (firmware error −258). One
-wire difference from real hardware was found and fixed: a multi-fragment V3
-response from PLCSIM chains its continuation digests **feed-forward**
-(`HMAC(key, digest_{n-1} ‖ fragment_n)`), while real firmware uses the
-finalized-state resume dialect; `FragmentHMACVerifier` now accepts either.
+FW V2.8 project, host `169.254.130.10`) with the sync and async clients:
+connect, SecurityKey setup, `browse()`, symbolic and byte-offset reads,
+symbolic and byte-offset writes, data subscriptions, and key handling. It uses
+the S7-1500 request layouts. CreateObject is parsed structurally (attribute 233
+carries the `03:…` fingerprint, 303 the 20-byte challenge; no fixed offsets are
+used). The SetupSession SecurityKey write **echoes the PLC's own
+ServerSessionVersion**, including elements 315–318; that is accepted here
+(return 0), unlike the stale captured values a fixed auth template would send
+(firmware error −258).
+
+Three PLCSIM-specific behaviours were found and fixed (#66):
+
+- A multi-fragment V3 response chains its continuation digests **feed-forward**
+  (`HMAC(key, digest_{n-1} ‖ fragment_n)`), while real firmware resumes the
+  finalized HMAC state; `FragmentHMACVerifier` now detects the dialect from the
+  second fragment and accepts either, so `browse()` works.
+- PLCSIM Advanced does **not** want the address-323 session activation
+  (`SET_VARIABLE` = USINT(5)) that real firmware needs: reads still work after
+  it, but the next `CreateObject` / `SetMultiVariables` (write, subscription,
+  delete) answers with a fatal SystemEvent and a TCP reset. The activation is now
+  skipped for family 03, as S7CommRust's validated legacy handshake does.
+- On the family-03 legacy session the response IntegrityId follows the body for
+  the set-side operations too (`SET`/`CREATE`/`DELETE_OBJECT`), not only for
+  `GET_MULTI_VARIABLES`/`EXPLORE`; those payloads are kept whole so the
+  per-item error list parses correctly.
 
 The post-auth legitimation stays skipped for family 03 (HarpoS7 has no PLCSIM
 legitimation and the validated project grants full access without one), so a
@@ -387,9 +400,11 @@ legitimation and the validated project grants full access without one), so a
 25-minute **renewal is disabled for family 03**: PLCSIM Advanced FW V2.8 resets
 the connection when a new SecurityKey is written to address 1830, in both the
 `SET_VARIABLE` and the `SET_MULTI_VARIABLES` layout, so a renewal would end a
-long-lived session instead of extending it. Byte-offset `db_read` works on a
-standard (non-optimized) DB and is refused with PLC error `0xA40013` on an
-optimized DB, exactly as on real hardware; use symbolic reads there.
+long-lived session instead of extending it. Byte-offset `db_read`/`db_write` work
+on a standard (non-optimized) DB and are refused with PLC error `0xA40013` on an
+optimized DB, exactly as on real hardware; use symbolic access there. Deleting
+the subscription container works once the payload uses the legacy object
+qualifier.
 
 [`MAINTAINER_GUIDE.md`](MAINTAINER_GUIDE.md) maps the stable handwritten
 interfaces, source/fixture evidence, failure triage, model limits and issue #1

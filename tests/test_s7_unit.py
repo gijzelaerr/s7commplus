@@ -1324,3 +1324,33 @@ class TestLegitimationOutcomes:
 
         _raw_payload, _ = self._integrity_id_first(integrity_id, 0)
         _check_v1_legitimation_response(b"", _raw_payload)
+
+
+class TestPlcsimResponseLayout:
+    """PLCSIM family 03 puts the response IntegrityId after the body for set ops."""
+
+    @staticmethod
+    def _connection(family: object) -> object:
+        from s7commplus.connection import S7CommPlusConnection
+
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._session_key = b"k" * 24
+        conn._protocol_version = ProtocolVersion.V1
+        conn._v1_session_key_family = family
+        return conn
+
+    def test_plcsim_set_response_keeps_the_body(self) -> None:
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        # return_value(00), empty error list(00), trailing IntegrityId(05), fill.
+        payload = bytes.fromhex("00 00 05 00 00 00 00")
+        conn = self._connection(KeyFamily.PLCSIM)
+        assert conn.legacy_s7_1500
+        assert conn._response_payload(FunctionCode.SET_MULTI_VARIABLES, payload) == payload
+
+    def test_other_family_set_response_strips_the_leading_id(self) -> None:
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        payload = bytes.fromhex("05 00 00 00 00")  # leading IntegrityId 5, return_value 0, fill
+        conn = self._connection(KeyFamily.S7_1500)
+        assert conn._response_payload(FunctionCode.SET_MULTI_VARIABLES, payload) == payload[1:]

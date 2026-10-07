@@ -1246,7 +1246,14 @@ class S7CommPlusConnection:
                 logger.info("V2 IntegrityId tracking enabled")
 
             if self._session_key is not None and self._session_setup_ok:
-                self._session_activate()
+                if self._v1_session_key_family == KeyFamily.PLCSIM:
+                    # PLCSIM Advanced resets the connection on the next CreateObject /
+                    # SetMultiVariables if the address-323 session activation was sent
+                    # first (reads still work). S7CommRust's validated legacy handshake
+                    # does not send it either.
+                    logger.info("PLCSIM session: skipping the address-323 session activation")
+                else:
+                    self._session_activate()
                 if self._connect_password:
                     self._post_auth_legitimation(password=self._connect_password)
                 else:
@@ -1779,6 +1786,11 @@ class S7CommPlusConnection:
     def _response_payload(self, function_code: int, payload: bytes) -> bytes:
         """Preserve legacy return values where IntegrityId follows the body."""
         self._last_raw_response_payload = payload
+        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.PLCSIM:
+            # PLCSIM Advanced places the response IntegrityId after the body for the
+            # set-side operations too (SET/CREATE/DELETE_OBJECT), while older real
+            # firmware leads with it outside GET_MULTI_VARIABLES/EXPLORE.
+            return payload
         return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
 
     def _verified_incoming_data(self, frame: bytes) -> bytes:

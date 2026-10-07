@@ -96,6 +96,16 @@ Other behaviour changes:
 * Automatic 25-minute SessionKey renewal is skipped on PLCSIM (key family 03):
   the simulator resets the connection when a new SecurityKey is written to
   address 1830, so a renewal would end a long-lived session (#66).
+* PLCSIM Advanced no longer receives the address-323 session activation:
+  S7CommPlus reads worked but the next `CreateObject`/`SetMultiVariables`
+  (writes, subscriptions, deletes) answered with a fatal SystemEvent and a TCP
+  reset. The activation is skipped for key family 03 (#66).
+* On a PLCSIM family-03 legacy session, `SET`/`CREATE`/`DELETE_OBJECT` response
+  payloads keep their body-leading bytes so the per-item error list parses; the
+  response IntegrityId follows the body there (#66).
+* `Client.write_symbolic`/`AsyncClient.write_symbolic` and the subscription
+  delete now use the session's `object_qualifier_version` like every other data
+  path, instead of the negotiated protocol version (#66).
 * Stop logging the SessionKey session challenge bytes (#44).
 * A V1 SessionKey connect without a password no longer sends the post-auth
   legitimation. S7-1200 PLCs with key family 01 reject it but still serve reads,
@@ -136,13 +146,15 @@ Other behaviour changes:
   with both the sync and async clients (#44). A V1 S7-1500 retest of the new
   code is still pending.
 * PLCSIM's legacy authentication (key family 03) is implemented (#56) and was
-  validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN, FW V2.8 project):
-  connect, browse and symbolic reads. It skips the post-auth legitimation and
+  validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN, FW V2.8 project) with
+  the sync and async clients: connect, browse, symbolic and byte-offset reads
+  and writes, and data subscriptions. It skips the post-auth legitimation and
   rejects a `password`, because the validated project grants full access without
   one; a no-access PLCSIM project is needed to settle whether PLCSIM expects the
-  real-PLC legitimation scheme. Automatic SessionKey renewal is skipped for
-  family 03 (the simulator resets the connection). Byte-offset reads are refused
-  on optimized blocks, as on real hardware; use symbolic reads (#66).
+  real-PLC legitimation scheme. Automatic SessionKey renewal and the address-323
+  session activation are skipped for family 03 (the simulator resets the
+  connection on both). Byte-offset reads/writes are refused on optimized blocks,
+  as on real hardware; use symbolic access there (#66).
 
 ### Thanks
 

@@ -525,7 +525,10 @@ class S7CommPlusAsyncClient:
                 logger.info("V2 IntegrityId tracking enabled")
 
             if self._session_key is not None:
-                await self._session_activate()
+                if self._v1_session_key_family == KeyFamily.PLCSIM:
+                    logger.info("PLCSIM session: skipping the address-323 session activation")
+                else:
+                    await self._session_activate()
                 if p["password"]:
                     await self._post_auth_legitimation(p["password"])
                 else:
@@ -1228,7 +1231,7 @@ class S7CommPlusAsyncClient:
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
-        payload = build_delete_subscription_request(self._subscription_container_id, self._protocol_version)
+        payload = build_delete_subscription_request(self._subscription_container_id, self.object_qualifier_version)
         await self._send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
             self._subscriptions.unregister(active_id)
@@ -1350,7 +1353,9 @@ class S7CommPlusAsyncClient:
         Set ``datatype`` to the target PLC datatype reported by browse().
         The legacy BLOB default is not a generic replacement for scalar types.
         """
-        payload = _build_symbolic_write_payload(access_area, lids, data, symbol_crc, self._protocol_version, datatype=datatype)
+        payload = _build_symbolic_write_payload(
+            access_area, lids, data, symbol_crc, self.object_qualifier_version, datatype=datatype
+        )
         response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
 
@@ -1662,6 +1667,8 @@ class S7CommPlusAsyncClient:
     def _response_payload(self, function_code: int, payload: bytes) -> bytes:
         """Preserve legacy return values where IntegrityId follows the body."""
         self._last_raw_response_payload = payload
+        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.PLCSIM:
+            return payload
         return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
 
     async def _verified_incoming_data(self, frame: bytes) -> bytes:

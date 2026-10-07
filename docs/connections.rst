@@ -89,11 +89,11 @@ determine it. The following combinations have been reported on real hardware:
    * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.8 project)
      - key family 03
      - V1, legacy SessionKey
-     - Validated (sync and async: connect, browse, symbolic reads; no password legitimation; renewal skipped)
+     - Validated (sync and async: connect, browse, reads, writes, data subscriptions; renewal skipped)
    * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.9 project)
      - V2.9
      - TLS
-     - Validated (connect, browse, symbolic and byte reads/writes)
+     - Validated (connect, browse, reads, writes, subscriptions and alarms)
    * - S7-1200
      - V4.1, V4.5, V4.7.3
      - TLS
