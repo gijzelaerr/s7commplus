@@ -286,7 +286,8 @@ class Ids(IntEnum):
     # Source: three EXPLORE replies of theCPUexecUnit (RID 52) captured on
     # PLCSIM Advanced V8.0, CPU 1511 FW V2.9, in RUN and STOP
     # (tests/fixtures/plcsim_cpu_exec_unit_20261008.py); all three carry struct
-    # id 0xD99. Not yet seen on real hardware. The
+    # id 0xD99. On hardware, a read-only probe of a CPU 1215C DC/DC/DC (FW V4.2)
+    # read the same struct id with code 8 in RUN; STOP is unverified there. The
     # writable counterpart OperatingStateREQ (0x877) takes the
     # OperatingStateRequest values. Names: thomas-v2/S7CommPlusDriver/Core/Ids.cs
     # (CPUexecUnit.*)
@@ -761,8 +762,9 @@ class OperatingStateRequest(IntEnum):
 
 # Values of the read-only OperatingState member (0xD9E) seen in TIA Portal
 # captures and in EXPLORE replies from PLCSIM Advanced (CPU 1511, FW V2.9):
-# 4 while stopped, 8 while running. Not yet confirmed on real hardware, and the
-# STARTUP/HOLD-family values in between are not pinned.
+# 4 while stopped, 8 while running. On real hardware only RUN (8) is confirmed,
+# read on a CPU 1215C (FW V4.2); STOP (4) is not, and the STARTUP/HOLD-family
+# values in between are not pinned.
 OPERATING_STATE_STOP_OBSERVED = 4
 OPERATING_STATE_RUN_OBSERVED = 8
 

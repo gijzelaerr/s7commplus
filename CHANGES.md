@@ -26,11 +26,13 @@ CHANGES
 
 * `get_cpu_state()` (both clients) reads the CPU's OperatingState code (member
   0xD9E of the struct attribute 0x8BD, struct id 0xD99: 8 = RUN, 4 = STOP)
-  and no longer returns `"UNKNOWN"` for a running PLCSIM Advanced CPU. That
-  code has been seen only on PLCSIM Advanced V8.0 (CPU 1511, FW V2.9), not
-  yet on hardware. The cycle-load attributes it read before are now only a
-  fallback when that code is absent. The server emulator reports its
-  `cpu_state` the same way.
+  and no longer returns `"UNKNOWN"` for a running PLCSIM Advanced CPU. The
+  4/8 values and the struct layout come from PLCSIM Advanced V8.0 (CPU 1511,
+  FW V2.9) and TIA Portal captures only. A read-only probe of a real CPU 1215C
+  (FW V4.2) has since read the same struct (id 0xD99) with code 8 in RUN;
+  STOP (4) remains unverified on hardware. The cycle-load attributes it read
+  before are now only a fallback when that code is absent. The server
+  emulator reports its `cpu_state` the same way.
 
 0.2.0 (2026-10-08)
 ------------------
