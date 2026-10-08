@@ -22,6 +22,12 @@ CHANGES
   checked right after the TLS handshake, before the session is created or a
   password is sent. A pin without `use_tls=True` is refused with `ValueError`
   before anything is sent, so a pinned certificate is never used in the clear.
+* `connect(use_tls="auto")` tries TLS first and continues without it only when
+  the TLS handshake does not complete and no `tls_cert_fingerprint`, `tls_ca`,
+  client certificate or `password` is given. A failure after the handshake is
+  never retried in the clear, each fallback is logged as a warning, and every
+  reconnect tries TLS first again. Without a pin, `"auto"` does not resist an
+  active attacker who breaks the handshake; see the connection docs.
 
 ### Behaviour changes
 
@@ -29,6 +35,14 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* A TLS handshake that does not complete now raises the new
+  `S7TlsHandshakeError`, and a PLC certificate that fails `tls_ca` verification
+  raises `S7CertificateError`, in both clients. Both are `S7ConnectionError`s;
+  before, the raw `ssl.SSLError` or socket error escaped `connect()`.
+  **Upgrading:** code that caught `ssl.SSLError` around `connect()` should catch
+  `S7ConnectionError` (the original error is the `__cause__`). `use_tls` now
+  accepts only `True`, `False` or `"auto"`; any other string
+  (such as `"false"`) is refused with `ValueError` instead of turning TLS on.
 
 0.2.0 (2026-10-08)
 ------------------

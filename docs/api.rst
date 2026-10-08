@@ -73,4 +73,4 @@ Exceptions
 ----------
 
 .. automodule:: s7commplus.error
-   :members: S7Error, S7ConnectionError, S7CertificateError, S7ProtocolError, S7TimeoutError, S7AuthenticationError, S7RateLimitError
+   :members: S7Error, S7ConnectionError, S7CertificateError, S7TlsHandshakeError, S7ProtocolError, S7TimeoutError, S7AuthenticationError, S7RateLimitError

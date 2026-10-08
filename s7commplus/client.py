@@ -7,9 +7,9 @@ import logging
 import struct
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Optional, TypeAlias, TypeVar
+from typing import Any, Literal, Optional, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError
+from .error import S7ConnectionError, S7ProtocolError, S7TlsHandshakeError
 
 from . import typeinfo
 from .alarm import (
@@ -37,6 +37,8 @@ from .connection import (
     S7CommPlusConnection,
     SessionKeyCandidateRejectedError,
     _check_certificate_pin,
+    _check_plaintext_fallback,
+    _resolve_use_tls,
 )
 from .protocol import (
     DataType,
@@ -184,7 +186,7 @@ class S7CommPlusClient:
         port: int = 102,
         rack: int = 0,
         slot: int = 1,
-        use_tls: bool = False,
+        use_tls: bool | Literal["auto"] = False,
         tls_cert: Optional[str] = None,
         tls_key: Optional[str] = None,
         tls_ca: Optional[str] = None,
@@ -203,7 +205,10 @@ class S7CommPlusClient:
             port: TCP port (default 102)
             rack: PLC rack number (unused, kept for API symmetry)
             slot: PLC slot number (unused, kept for API symmetry)
-            use_tls: Whether to activate TLS (required for V2)
+            use_tls: Whether to activate TLS (required for V2). ``"auto"``
+                tries TLS first and continues without it only when the TLS
+                handshake does not complete and no pin, CA, client certificate
+                or password is given; see :ref:`automatic-tls`.
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
@@ -231,15 +236,17 @@ class S7CommPlusClient:
                 verified against a PLC, so try ``"es"`` if the default is
                 refused.
         """
-        if legacy_s7_1500 and use_tls:
+        tls_first, auto_tls = _resolve_use_tls(use_tls)
+        if legacy_s7_1500 and tls_first:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
-        _check_certificate_pin(tls_cert_fingerprint, use_tls)  # validate early
+        _check_certificate_pin(tls_cert_fingerprint, tls_first)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
         self._symbol_catalog = None
         self._connect_params = {
             "host": host,
             "port": port,
-            "use_tls": use_tls,
+            "use_tls": tls_first,
+            "auto_tls": auto_tls,
             "tls_cert": tls_cert,
             "tls_key": tls_key,
             "tls_ca": tls_ca,
@@ -253,9 +260,28 @@ class S7CommPlusClient:
         self._open_connection()
 
     def _open_connection(self) -> None:
-        """(Re)open the connection using the stored ``connect()`` arguments."""
+        """(Re)open the connection using the stored ``connect()`` arguments.
+
+        With ``use_tls="auto"`` every (re)connect tries TLS first, so a
+        fallback to plaintext never outlives the connection it was made for.
+        """
         if self._connect_params is None:
             raise RuntimeError("Not connected")
+        p = self._connect_params
+        if not p["auto_tls"]:
+            self._open_connection_with_key_fallback()
+            return
+        p["use_tls"] = True
+        try:
+            self._open_connection_with_key_fallback()
+        except S7TlsHandshakeError as exc:
+            _check_plaintext_fallback(p, exc)
+            p["use_tls"] = False
+            self._open_connection_with_key_fallback()
+
+    def _open_connection_with_key_fallback(self) -> None:
+        """Open the connection, trying bundled same-family keys when the PLC withholds its key id."""
+        assert self._connect_params is not None
         p = self._connect_params
         cache_key = (p["host"], p["port"])
         cached = _LEGACY_KEY_CACHE.get(cache_key) if p["allow_legacy_key_fallback"] else None
