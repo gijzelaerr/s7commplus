@@ -5,6 +5,7 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 
 import logging
 import struct
+import threading
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Optional, TypeAlias, TypeVar
@@ -98,6 +99,10 @@ class S7CommPlusClient:
         self._alarm_subscription_ids: set[int] = set()
         self._alarm_notification_frames: deque[bytes] = deque(maxlen=100)
         self._symbol_catalog: Optional[SymbolCatalog] = None
+        # Sessions rebuilt by a reconnect. Reconnects are serialized so that one
+        # never tears down the session another has just built.
+        self._generation = 0
+        self._reconnect_lock = threading.Lock()
 
     @property
     def connected(self) -> bool:
@@ -172,6 +177,11 @@ class S7CommPlusClient:
         if self._connection is None:
             return None
         return self._connection.session_oms_version
+
+    @property
+    def connection_generation(self) -> int:
+        """Count of reconnects the client has performed; a change means the session was rebuilt."""
+        return self._generation
 
     def connect(
         self,
@@ -321,6 +331,15 @@ class S7CommPlusClient:
         symbolic ``GetMultiVariables`` read per connection, so multi-step flows
         such as :meth:`browse` need a fresh session to continue.
         """
+        with self._reconnect_lock:
+            self._rebuild_session()
+
+    def _rebuild_session(self) -> None:
+        """Replace the session using the stored parameters; the caller holds the reconnect lock.
+
+        A failed attempt keeps the parameters, so a later reconnect can still
+        succeed once the PLC is reachable again.
+        """
         self._subscriptions.clear()
         self._alarm_subscription_ids.clear()
         self._alarm_notification_frames.clear()
@@ -330,6 +349,25 @@ class S7CommPlusClient:
             except Exception:
                 pass
         self._open_connection()
+        self._generation += 1
+
+    def reconnect(self) -> None:
+        """Re-establish the connection with the parameters from the last connect().
+
+        The new session is legitimated with the password given to ``connect()``.
+        Data subscriptions that were live are remembered so :meth:`resubscribe`
+        can recreate them; alarm subscriptions must be created again, and
+        notifications from the gap are not replayed. A failed attempt keeps the
+        parameters, so ``reconnect()`` can be repeated once the PLC is back.
+
+        Raises:
+            RuntimeError: ``connect()`` was never called, or ``disconnect()``
+                cleared its parameters.
+        """
+        if self._connect_params is None:
+            raise RuntimeError("Not connected")
+        logger.info("Reconnecting to the PLC")
+        self._reconnect()
 
     def _with_reconnect(self, op: Callable[[], "_T"]) -> "_T":
         """Run ``op``; if the socket was RST by the PLC, reconnect once and retry.

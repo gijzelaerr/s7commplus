@@ -187,6 +187,12 @@ class S7CommPlusAsyncClient:
         self._notification_frame_overflows = 0
         self._connect_params: Optional[dict[str, Any]] = None
         self._symbol_catalog: Optional[SymbolCatalog] = None
+        # Sessions rebuilt by a reconnect. Reconnects are serialized so that one
+        # never tears down the session another has just built, and while one
+        # runs only its task may use the stream (see _blocked_by_rebuild).
+        self._generation = 0
+        self._reconnect_lock = asyncio.Lock()
+        self._rebuild_task: Optional[asyncio.Task[Any]] = None
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
@@ -387,6 +393,8 @@ class S7CommPlusAsyncClient:
             "tls_key": tls_key,
             "tls_ca": tls_ca,
             "password": password,
+            # A successful authenticate() replaces both, so a reconnect legitimates the same way.
+            "username": "",
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
             "legacy_s7_1500": legacy_s7_1500,
@@ -561,10 +569,14 @@ class S7CommPlusAsyncClient:
 
         if p["password"] is not None and self._tls_active:
             logger.info("Performing PLC legitimation (password authentication)")
-            await self.authenticate(p["password"])
+            await self.authenticate(p["password"], p["username"])
 
     async def authenticate(self, password: str, username: str = "") -> None:
         """Perform PLC password authentication (legitimation).
+
+        Once the PLC confirms the legitimation, the password and username
+        replace those of ``connect()``, so :meth:`reconnect` legitimates the new
+        session the same way. A refused attempt changes nothing.
 
         Args:
             password: PLC password
@@ -627,6 +639,9 @@ class S7CommPlusAsyncClient:
                 f"Legitimation failed, protection level unchanged at {self._protection_level}: the password was refused"
             )
         logger.info(f"PLC legitimation completed, protection level {level_before} -> {self._protection_level}")
+        if self._connect_params is not None:
+            self._connect_params["password"] = password
+            self._connect_params["username"] = username
 
     def _decide_legitimation_mode(self) -> Optional[LegitimationType]:
         """Return the legitimation exchange the PLC firmware expects, None if unsupported."""
@@ -765,6 +780,31 @@ class S7CommPlusAsyncClient:
         resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
         _check_set_variable_response(resp_payload)
 
+    @property
+    def connection_generation(self) -> int:
+        """Count of reconnects the client has performed; a change means the session was rebuilt."""
+        return self._generation
+
+    async def reconnect(self) -> None:
+        """Re-establish the connection with the parameters from the last connect().
+
+        The new session is legitimated with the password given to ``connect()``,
+        or with the password and username of the last successful
+        :meth:`authenticate`. Data subscriptions that were live are remembered
+        so :meth:`resubscribe` can recreate them; alarm subscriptions must be
+        created again, and notifications from the gap are not replayed. A failed
+        attempt keeps the parameters, so ``reconnect()`` can be repeated once
+        the PLC is back. Concurrent reconnects run one after the other.
+
+        Raises:
+            RuntimeError: ``connect()`` was never called, or ``disconnect()``
+                cleared its parameters.
+        """
+        if self._connect_params is None:
+            raise RuntimeError("Not connected")
+        logger.info("Reconnecting to the PLC")
+        await self._reconnect()
+
     async def disconnect(self) -> None:
         """Disconnect from PLC."""
         await self._close()
@@ -889,11 +929,30 @@ class S7CommPlusAsyncClient:
 
     async def _reconnect(self) -> None:
         """Tear down and re-establish the connection with the same parameters."""
+        async with self._reconnect_lock:
+            await self._rebuild_session()
+
+    async def _rebuild_session(self) -> None:
+        """Replace the session using the stored parameters; the caller holds the reconnect lock.
+
+        A failed attempt keeps the parameters, so a later reconnect can still
+        succeed once the PLC is reachable again. Until this returns, the stream
+        belongs to this task: other tasks' requests fail with "Not connected"
+        instead of interleaving with the handshake.
+        """
         if self._connect_params is None:
             raise S7ConnectionError("Not connected")
-        params = self._connect_params.copy()
-        await self.disconnect()
-        await self.connect(**params)
+        self._rebuild_task = asyncio.current_task()
+        try:
+            await self._close()
+            await self._open_connection()
+        finally:
+            self._rebuild_task = None
+        self._generation += 1
+
+    def _blocked_by_rebuild(self) -> bool:
+        """Whether another task is rebuilding the session right now."""
+        return self._rebuild_task is not None and asyncio.current_task() is not self._rebuild_task
 
     async def _with_reconnect(self, op: Callable[[], Awaitable[_T]]) -> _T:
         """Run ``op``; if the PLC dropped the socket, reconnect once and retry."""
@@ -1126,7 +1185,7 @@ class S7CommPlusAsyncClient:
                 return queued
         while True:
             async with self._lock:
-                if not self._connected:
+                if not self._connected or self._blocked_by_rebuild():
                     raise RuntimeError("Not connected")
                 if self._notification_frames:
                     frame = self._notification_frames.popleft()
@@ -1274,7 +1333,7 @@ class S7CommPlusAsyncClient:
                 frame = self._alarm_notification_frames.popleft()
             else:
                 async with self._lock:
-                    if not self._connected:
+                    if not self._connected or self._blocked_by_rebuild():
                         raise RuntimeError("Not connected")
                     if self._notification_frames:
                         frame = self._notification_frames.popleft()
@@ -1534,7 +1593,7 @@ class S7CommPlusAsyncClient:
         value = bytes([0x00, DataType.INT]) + struct.pack(">h", credit_limit)
         payload = _build_set_variable_payload(subscription_id, Ids.SUBSCRIPTION_CREDIT_LIMIT, value)
         async with self._lock:
-            if not self._connected or self._writer is None or self._reader is None:
+            if not self._connected or self._writer is None or self._reader is None or self._blocked_by_rebuild():
                 raise S7ConnectionError("Not connected")
             sequence = self._next_sequence_number()
             header = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.SET_VARIABLE, 0, sequence, self._session_id, 0x74)
@@ -1581,6 +1640,9 @@ class S7CommPlusAsyncClient:
         if self._session_key_refresh_error is not None:
             raise self._session_key_refresh_error
         if not (self._connected or self._transport_connected) or self._writer is None or self._reader is None:
+            raise S7ConnectionError("Not connected")
+        if self._blocked_by_rebuild():
+            # Another task's reconnect owns the stream until its handshake is done.
             raise S7ConnectionError("Not connected")
 
         seq_num = self._next_sequence_number()

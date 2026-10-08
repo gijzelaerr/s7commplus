@@ -14,6 +14,15 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `Client.reconnect()` and `AsyncClient.reconnect()` build a new session with the
+  parameters of the last `connect()` and legitimate it with the same password; on
+  `AsyncClient`, a successful `authenticate()` replaces that password and adds its
+  username, while a refused one changes nothing. `connection_generation` counts
+  the reconnects. A failed attempt keeps the parameters, so it can be repeated
+  once the PLC is back. Data subscriptions lost with the old session stay
+  restorable with `resubscribe()`; alarm subscriptions must be created again.
+  Reconnects are serialized, and while one runs, other `AsyncClient` tasks' requests
+  fail with "Not connected" instead of interleaving with its handshake.
 
 ### Behaviour changes
 
@@ -29,6 +38,12 @@ CHANGES
   firmware that resets the connection after a symbolic read, as `Client.browse()`
   does. Upgrade note: catch `S7ConnectionError` where you caught those exceptions
   from `AsyncClient` operations.
+
+### Bug fixes and hardening
+
+* A failed reconnect inside `AsyncClient.browse()` no longer discards the
+  `connect()` parameters, which made every later request fail with "Not
+  connected" until `connect()` was called again.
 
 0.2.0 (2026-10-08)
 ------------------

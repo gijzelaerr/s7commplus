@@ -182,6 +182,25 @@ The asyncio client separates connection from authentication:
 Never log passwords, session keys, challenges, private keys, or decrypted
 authentication material.
 
+Reconnecting
+------------
+
+After a dropped connection, ``reconnect()`` builds a new session with the
+parameters of the last ``connect()``:
+
+.. code-block:: python
+
+   client.reconnect()
+
+The new session is legitimated with the password given to ``connect()``; on the
+asyncio client, a successful ``authenticate()`` replaces that password and adds
+its username, while a refused one changes nothing. ``connection_generation``
+counts the reconnects, so a caller can tell that the session was rebuilt. A
+failed attempt keeps the parameters, so ``reconnect()`` can be called again
+once the PLC is back. Data subscriptions lost with the old session are restored
+with ``resubscribe()`` (see :doc:`subscriptions-alarms`); alarm subscriptions
+must be created again.
+
 Troubleshooting
 ---------------
 
