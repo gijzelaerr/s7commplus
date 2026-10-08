@@ -52,6 +52,57 @@ class S7RateLimitError(S7Error):
     pass
 
 
+class S7WriteError(S7Error, RuntimeError):
+    """A multi-item write that did not write every item.
+
+    ``db_write_multi`` raises it when the PLC refuses items, and when a batch
+    split over several requests is interrupted after its first request; the
+    interrupting exception is then its ``__cause__``. ``write_tags`` attaches
+    it to the tags an interrupted batch left unconfirmed. It is also a
+    ``RuntimeError``, which ``db_write_multi`` raised for refused items before.
+
+    Positions are 1-based and count across the whole batch. Every position not
+    in ``item_errors``, ``unknown`` or ``not_sent`` was written.
+
+    Attributes:
+        item_errors: The PLC error of each refused item, by position. An item
+            of a request the PLC refused as a whole has that request's return
+            value. ``write_tags`` reports refusals on their own tags and leaves
+            this empty.
+        unknown: Positions in the request that was in flight when the batch
+            was interrupted: the PLC may or may not have written them.
+        not_sent: Positions after it, which were never sent.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        item_errors: Optional[dict[int, int]] = None,
+        unknown: Optional[range] = None,
+        not_sent: Optional[range] = None,
+    ) -> None:
+        super().__init__(message)
+        self.item_errors: dict[int, int] = dict(item_errors or {})
+        self.unknown: range = unknown if unknown is not None else range(0)
+        self.not_sent: range = not_sent if not_sent is not None else range(0)
+
+
+class S7SubscriptionError(S7Error, RuntimeError):
+    """``create_subscriptions`` stopped after creating some of its subscriptions.
+
+    The error that stopped it is the ``__cause__``. Like the PLC's refusal of a
+    subscription, it is also a ``RuntimeError``.
+
+    Attributes:
+        created: IDs of the subscriptions already created, which cover the
+            first items in order. They stay active and registered.
+    """
+
+    def __init__(self, message: str, created: list[int]) -> None:
+        super().__init__(message)
+        self.created: list[int] = list(created)
+
+
 # S7 client error codes
 s7_client_errors = {
     0x00100000: "errNegotiatingPDU",

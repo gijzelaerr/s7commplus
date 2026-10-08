@@ -642,6 +642,7 @@ class TestIntegrityIdTracking:
         client._protocol_version = ProtocolVersion.V2
         response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 0, 0x34)
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
+        response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
         client._send_cotp_dt = AsyncMock()
         next_response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 1, 0x34)
         next_response_frame = encode_header(ProtocolVersion.V2, len(next_response)) + next_response

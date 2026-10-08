@@ -13,6 +13,7 @@ Reference: thomas-v2/S7CommPlusDriver/Core/S7p.cs
 """
 
 import struct
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from .protocol import PROTOCOL_ID, DataType, ElementID, Ids, ObjectId, ProtocolVersion
@@ -389,6 +390,29 @@ def encode_pvalue_blob(data: bytes) -> bytes:
     result += encode_uint32_vlq(len(data))
     result += data
     return bytes(result)
+
+
+@dataclass(frozen=True)
+class PValueArray:
+    """A write type sent as an array PValue of ``element``.
+
+    PLCs take some types this way: a STRING as a USINT array of
+    ``[max length, length, characters...]``, a WSTRING as a UINT array of the
+    same shape, and a DATE_AND_TIME as its eight BCD bytes (PLCSIM Advanced,
+    CPU 1511, FW V2.9 rejects the scalar forms).
+    """
+
+    element: DataType
+
+
+def encode_pvalue_array(element: DataType, data: bytes) -> bytes:
+    """Encode raw big-endian elements as an array PValue of fixed-size ``element``."""
+    size = _pvalue_element_size(element)
+    if size == 0:
+        raise ValueError(f"{DataType(element).name} arrays are not supported for writing")
+    if len(data) % size:
+        raise ValueError(f"{DataType(element).name} array data must be a multiple of {size} bytes, got {len(data)}")
+    return bytes((0x10, element)) + encode_uint32_vlq(len(data) // size) + data
 
 
 def encode_pvalue_typed(datatype: DataType, data: bytes) -> bytes:
