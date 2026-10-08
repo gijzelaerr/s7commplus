@@ -185,9 +185,10 @@ class S7CommPlusAsyncClient:
 
     Attributes:
         max_items_per_request: Most items one multi-item read or write request
-            carries (default 100; ``0`` sends a batch in one request). A larger
-            batch is split over several requests, in order. The default is not
-            a measured PLC limit.
+            carries (default 50; ``0`` sends a batch in one request). A larger
+            batch is split over several requests, in order. A CPU 1215C FW V4.2
+            refuses a read of more than 50 items; S7-1500 hardware has not been
+            measured.
         max_request_bytes: Largest request frame a multi-item read or write,
             or a subscription, sends (default 900; ``0`` disables the check),
             counted as for :class:`S7CommPlusClient`. A larger batch is split;
