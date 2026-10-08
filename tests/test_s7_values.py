@@ -1,4 +1,4 @@
-"""Typed tag values: per-type conversion of raw tag bytes.
+"""Typed tag values: per-type conversion and struct/array assembly.
 
 Known-answer vectors are the raw bytes PLCSIM Advanced (CPU 1511, FW V2.9) returned for the
 "Types DB" test block (one member per datatype) and the layouts it accepted on write.
@@ -257,3 +257,118 @@ def test_symbolic_tag_encodes_with_its_declared_string_length() -> None:
     assert _tag("w", T.WSTRING, string_length=2).encode_value("ä") == bytes.fromhex("0002000100e40000")
     with pytest.raises(ValueError, match="declared with 1 to 254 characters, got 300"):
         _tag("s", T.STRING, string_length=300).encode_value("x")
+
+
+# --- Structs and arrays ------------------------------------------------------------------
+
+
+def test_member_path() -> None:
+    assert values._member_path("DB.s", "DB.s.arr[1].x") == ("arr", (1,), "x")
+    assert values._member_path("DB.a", "DB.a[-2]") == ((-2,),)
+    assert values._member_path("DB.m", "DB.m[0,2]") == ((0, 2),)
+    with pytest.raises(ValueError):
+        values._member_path("DB.s", "DB.s]x")
+    assert values._is_member("DB.s", "DB.s.a") and values._is_member("DB.s", "DB.s[1]")
+    assert not values._is_member("DB.s", "DB.sx") and not values._is_member("DB.s", "DB.s")
+
+
+def test_assemble_arrays_structs_and_dtl() -> None:
+    leaves = [
+        ("T.arr2d[0,0]", 1),
+        ("T.arr2d[0,1]", 2),
+        ("T.arr2d[1,0]", 3),
+        ("T.arr2d[1,1]", 4),
+    ]
+    assert values.assemble("T.arr2d", leaves) == [[1, 2], [3, 4]]
+    assert values.assemble("T.neg", [("T.neg[0]", "b"), ("T.neg[-1]", "a")]) == ["a", "b"]
+    udts = [("T.u[1].a", 11), ("T.u[0].a", 0), ("T.u[0].b.c", 0.5), ("T.u[1].b.c", 1.5)]
+    assert values.assemble("T.u", udts) == [{"a": 0, "b": {"c": 0.5}}, {"a": 11, "b": {"c": 1.5}}]
+    dtl = list(zip(("T.d." + m for m in values._DTL_MEMBERS), (2026, 10, 8, 5, 7, 48, 1, 250_000_999)))
+    assert values.assemble("T.d", dtl) == dt.datetime(2026, 10, 8, 7, 48, 1, 250000)
+    invalid = list(zip(("T.d." + m for m in values._DTL_MEMBERS), (2026, 13, 8, 5, 7, 48, 1, 0)))
+    assert values.assemble("T.d", invalid)["MONTH"] == 13  # not a date: stays a dict
+
+
+def test_assemble_rejects_inconsistent_leaves() -> None:
+    with pytest.raises(ValueError):
+        values.assemble("T.s", [("T.s.a", 1), ("T.s.a.b", 2)])
+    with pytest.raises(ValueError):
+        values.assemble("T.s", [("T.s", 1)])
+
+
+ARRAY_NAMES = [f"T.m[{i},{j}]" for i in range(2) for j in range(3)]
+
+
+def test_split_inverts_assemble() -> None:
+    names = ["T.u[0].a", "T.u[0].b.c", "T.u[1].a", "T.u[1].b.c"]
+    assert values.split("T.u", [{"a": 1, "b": {"c": 0.5}}, {"a": 2, "b": {"c": 1.5}}], names) == {
+        "T.u[0].a": 1,
+        "T.u[0].b.c": 0.5,
+        "T.u[1].a": 2,
+        "T.u[1].b.c": 1.5,
+    }
+    assert values.split("T.m", [[1, 2, 3], [4, 5, 6]], ARRAY_NAMES) == dict(zip(ARRAY_NAMES, range(1, 7)))
+    assert values.split("T.n", [7, 8], ["T.n[-1]", "T.n[0]"]) == {"T.n[-1]": 7, "T.n[0]": 8}
+
+
+def test_split_accepts_partial_dicts_and_index_keys() -> None:
+    names = ["T.s.a", "T.s.b.c", "T.s.f[0]", "T.s.f[1]"]
+    assert values.split("T.s", {"b": {"c": 1.0}}, names) == {"T.s.b.c": 1.0}
+    assert values.split("T.s", {"f": {1: True}}, names) == {"T.s.f[1]": True}
+    assert values.split("T.m", {(1, 2): 9}, ARRAY_NAMES) == {"T.m[1,2]": 9}
+
+
+def test_split_takes_a_datetime_for_a_dtl() -> None:
+    names = ["T.d." + member for member in values._DTL_MEMBERS]
+    split = values.split("T.d", dt.datetime(2026, 10, 4, 7, 48, 1, 250000), names)  # a Sunday
+    assert split["T.d.WEEKDAY"] == 1 and split["T.d.NANOSECOND"] == 250_000_000 and split["T.d.YEAR"] == 2026
+
+
+DTL_NAMES = ["T.s.stamp." + member for member in values._DTL_MEMBERS] + ["T.s.t.a", "T.s.t.b"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"t": dt.datetime(2026, 10, 8, 7, 48)},
+        # Regression: the member dict built for "stamp" was a temporary checked by id();
+        # a later one could reuse its id, skip the check and silently drop "t".
+        {"stamp": dt.datetime(2026, 10, 8, 7, 48), "t": dt.datetime(2026, 10, 8, 7, 48)},
+        {"t": dt.datetime(2026, 10, 8, 7, 48), "stamp": dt.datetime(2026, 10, 8, 7, 48)},
+    ],
+)
+def test_split_takes_a_datetime_only_for_a_dtl(value: dict[str, Any]) -> None:
+    with pytest.raises(TypeError, match=r"T\.s\.t is a struct; give a dict, got datetime"):
+        values.split("T.s", value, DTL_NAMES)
+
+
+@pytest.mark.parametrize(
+    ("when", "match"),
+    [
+        (dt.datetime(2026, 10, 8, 12, tzinfo=UTC_PLUS_2), "DTL stores no time zone"),
+        (dt.datetime(1969, 12, 31, 23, 59), "DTL holds 1970-01-01 to 2262-04-11"),
+        (dt.datetime(2262, 4, 11, 23, 47, 16, 854776), "DTL holds 1970-01-01 to 2262-04-11"),
+    ],
+)
+def test_split_rejects_a_dtl_it_cannot_hold(when: dt.datetime, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        values.split("T.s", {"stamp": when}, DTL_NAMES)
+
+
+@pytest.mark.parametrize(
+    ("value", "error", "match"),
+    [
+        ({"a": 1, "typo": 2}, ValueError, "no member or element 'typo'"),
+        ({"f": [True]}, ValueError, "has 2 elements, got 1"),
+        ({"f": True}, TypeError, "is an array"),
+        ([1, 2], TypeError, "is a struct"),
+    ],
+)
+def test_split_rejects_mismatched_values(value: Any, error: type[Exception], match: str) -> None:
+    with pytest.raises(error, match=match):
+        values.split("T.s", value, ["T.s.a", "T.s.f[0]", "T.s.f[1]"])
+
+
+def test_split_rejects_a_wrong_multi_dimensional_shape() -> None:
+    with pytest.raises(ValueError, match="dimension 2 has 3 elements"):
+        values.split("T.m", [[1, 2], [3, 4]], ARRAY_NAMES)

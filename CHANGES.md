@@ -15,11 +15,13 @@ CHANGES
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
 * The new `s7commplus.values` module converts raw tag values to Python values
-  and back (`decode()`, `encode()`; `SymbolicTag.encode_value()` is new).
+  and back (`decode()`, `encode()`; `SymbolicTag.encode_value()` is new) and
+  builds structs and arrays from their leaves (`assemble()`, `split()`).
   Date and time values are naive: no PLC date or time type stores a time zone,
   so an aware `datetime` or `time` raises `ValueError` instead of being shifted
   or stripped. Ranges follow the TIA Portal data type documentation (DATE to
-  2168-12-31, LDT 1970-01-01 to 2262-04-11).
+  2168-12-31, LDT and DTL 1970-01-01 to 2262-04-11). `SymbolCatalog.members()`
+  lists the leaf tags of a struct, UDT, DTL or array.
 
 ### Behaviour changes
 

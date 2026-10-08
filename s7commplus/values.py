@@ -1,8 +1,10 @@
-"""Python values for PLC tags: conversion of raw tag bytes by PLC datatype.
+"""Python values for PLC tags: per-type conversion and struct/array assembly.
 
 A tag's raw bytes are what :meth:`Client.read_tags` returns and
 :meth:`Client.write_tags` sends. This module turns them into Python values and
-back, by the tag's PLC datatype.
+back, by the tag's PLC datatype, and rebuilds structs and arrays from the
+browsed leaves (the tag catalog lists one tag per scalar leaf: every struct,
+UDT and DTL member and every array element).
 
 The layouts were read from, and the writes accepted by, PLCSIM Advanced (CPU
 1511, FW V2.9) with one member per datatype; they follow the TIA Portal
@@ -10,9 +12,9 @@ memory formats. They are not yet checked on real hardware.
 
 The value ranges are those of the TIA Portal data type documentation (STEP 7
 online help, "Date and time" and "Character strings" data types), not verified
-on hardware: DATE 1990-01-01 to 2168-12-31, DATE_AND_TIME 1990 to 2089, LDT
-1970-01-01 to 2262-04-11 23:47:16.854775807, STRING up to 254 and WSTRING up to
-16382 characters.
+on hardware: DATE 1990-01-01 to 2168-12-31, DATE_AND_TIME 1990 to 2089, LDT and
+DTL 1970-01-01 to 2262-04-11 23:47:16.854775807, STRING up to 254 and WSTRING
+up to 16382 characters.
 
 No PLC date or time type stores a time zone, so these functions take and give
 naive :class:`datetime.datetime` and :class:`datetime.time` values; an aware
@@ -24,12 +26,14 @@ Convert it first, for example with
 from __future__ import annotations
 
 import datetime
+import re
 import struct
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .typeinfo import Softdatatype
 
-__all__ = ["decode", "encode"]
+__all__ = ["assemble", "decode", "encode", "split"]
 
 _EPOCH_1990 = datetime.date(1990, 1, 1)
 _EPOCH_1970 = datetime.datetime(1970, 1, 1)
@@ -352,3 +356,200 @@ def encode(softdatatype: Softdatatype, value: Any, *, string_length: int = 0) ->
         fields = (value.year % 100, value.month, value.day, value.hour, value.minute, value.second, milliseconds // 10)
         return bytes(_to_bcd(field) for field in fields) + bytes([(milliseconds % 10) << 4 | weekday])
     raise TypeError(f"Writing {name} values is not supported")
+
+
+# --- Structs and arrays from catalog leaves ----------------------------------------------
+
+_TOKEN = re.compile(r"\.([^.\[\]]+)|\[(-?\d+(?:,-?\d+)*)\]")
+
+# A member path: member names and array indices (one int per dimension).
+_Path = tuple[str | tuple[int, ...], ...]
+
+# The members of a DTL, which the catalog lists as leaves of the DTL tag.
+_DTL_MEMBERS = ("YEAR", "MONTH", "DAY", "WEEKDAY", "HOUR", "MINUTE", "SECOND", "NANOSECOND")
+# DTL#2262-04-11-23:47:16.854775807, LDT's limit (TIA Portal documentation; not verified on hardware)
+_DTL_MAX = _EPOCH_1970 + datetime.timedelta(microseconds=_LDT_MAX_NS // 1000)
+
+
+def _member_path(prefix: str, name: str) -> _Path:
+    """Split the part of ``name`` after ``prefix`` into member names and array indices.
+
+    ``_member_path("DB.s", "DB.s.arr[1].x")`` is ``("arr", (1,), "x")``. Names that
+    themselves contain ``.`` or ``[`` are split too, so such members nest one level
+    deeper than declared.
+    """
+    rest = name[len(prefix) :]
+    path: list[str | tuple[int, ...]] = []
+    position = 0
+    while position < len(rest):
+        match = _TOKEN.match(rest, position)
+        if match is None:
+            raise ValueError(f"Cannot split {name!r} below {prefix!r}")
+        member, indices = match.groups()
+        path.append(member if member is not None else tuple(int(index) for index in indices.split(",")))
+        position = match.end()
+    return tuple(path)
+
+
+def _is_member(prefix: str, name: str) -> bool:
+    """Whether catalog name ``name`` lies inside the struct or array ``prefix``."""
+    return len(name) > len(prefix) and name.startswith(prefix) and name[len(prefix)] in ".["
+
+
+def _dtl(members: Mapping[str, Any]) -> Any:
+    try:
+        return datetime.datetime(
+            members["YEAR"],
+            members["MONTH"],
+            members["DAY"],
+            members["HOUR"],
+            members["MINUTE"],
+            members["SECOND"],
+            members["NANOSECOND"] // 1000,
+        )
+    except (TypeError, ValueError):
+        return dict(members)
+
+
+def _finish(node: Any) -> Any:
+    if not isinstance(node, dict):
+        return node
+    if node and all(isinstance(key, tuple) for key in node):
+        return _nest_indices({key: _finish(value) for key, value in node.items()})
+    members = {key: _finish(value) for key, value in node.items()}
+    if set(members) == set(_DTL_MEMBERS):
+        return _dtl(members)
+    return members
+
+
+def _nest_indices(elements: dict[Any, Any]) -> list[Any]:
+    """Turn ``{(i, j, ...): value}`` into nested lists ordered by index."""
+    if all(len(index) == 1 for index in elements):
+        return [elements[index] for index in sorted(elements)]
+    groups: dict[int, dict[Any, Any]] = {}
+    for index, value in elements.items():
+        groups.setdefault(index[0], {})[index[1:]] = value
+    return [_nest_indices(groups[first]) for first in sorted(groups)]
+
+
+def assemble(prefix: str, leaves: Sequence[tuple[str, Any]]) -> Any:
+    """Build the struct (``dict``) or array (``list``) at ``prefix`` from its decoded leaves.
+
+    Arrays become lists in index order (index 0 of the list is the declared lower
+    bound); a multi-dimensional array becomes nested lists. A struct whose members
+    are exactly a DTL's becomes a naive :class:`datetime.datetime` (nanoseconds
+    truncated); one with an invalid date stays a ``dict``.
+    """
+    root: dict[Any, Any] = {}
+    for name, value in leaves:
+        path = _member_path(prefix, name)
+        if not path:
+            raise ValueError(f"{name!r} is not inside {prefix!r}")
+        node = root
+        for step in path[:-1]:
+            child = node.setdefault(step, {})
+            if not isinstance(child, dict):
+                raise ValueError(f"{name!r} nests below the leaf {step!r}")
+            node = child
+        if path[-1] in node:
+            raise ValueError(f"{name!r} names a leaf twice or below another leaf")
+        node[path[-1]] = value
+    return _finish(root)
+
+
+def _dtl_members(value: datetime.datetime) -> dict[str, int]:
+    _require_naive(value, "DTL")
+    if not _EPOCH_1970 <= value <= _DTL_MAX:
+        raise ValueError(f"DTL holds {_LDT_RANGE}, got {value}")
+    return {
+        "YEAR": value.year,
+        "MONTH": value.month,
+        "DAY": value.day,
+        "WEEKDAY": value.isoweekday() % 7 + 1,  # 1 = Sunday
+        "HOUR": value.hour,
+        "MINUTE": value.minute,
+        "SECOND": value.second,
+        "NANOSECOND": value.microsecond * 1000,
+    }
+
+
+def split(prefix: str, value: Any, leaf_names: Sequence[str]) -> dict[str, Any]:
+    """Map ``value`` for the struct or array at ``prefix`` onto its leaf names.
+
+    The inverse of :func:`assemble`. A ``dict`` may give only some members (the
+    others are not written) but no unknown ones; a ``list`` or ``tuple`` must give
+    every element of its array (nested lists for a multi-dimensional one), and a
+    ``dict`` keyed by index may give some. A naive ``datetime`` is accepted for a
+    DTL, and only for a DTL.
+
+    Raises:
+        TypeError: A struct is not given as a ``dict`` (or a DTL as a ``datetime``)
+            or an array as a list.
+        ValueError: A ``dict`` names an unknown member, a list has the wrong
+            length, or a DTL's ``datetime`` is aware or out of range.
+    """
+    paths = {name: _member_path(prefix, name) for name in leaf_names}
+    children: dict[_Path, list[Any]] = {}
+    for path in paths.values():
+        for depth, step in enumerate(path):
+            known = children.setdefault(path[:depth], [])
+            if step not in known:
+                known.append(step)
+    # The node at a path is the same for every leaf below it, so its keys are
+    # checked once per path. (Keyed by id(), a DTL's temporary member dict could
+    # share an id with a later one and skip that check.)
+    checked: set[_Path] = set()
+    result: dict[str, Any] = {}
+    for name, path in paths.items():
+        node: Any = value
+        for depth, step in enumerate(path):
+            here = path[:depth]
+            if isinstance(node, datetime.datetime) and set(children[here]) == set(_DTL_MEMBERS):
+                node = _dtl_members(node)
+            if isinstance(node, Mapping):
+                if here not in checked:
+                    _check_keys(prefix, here, node, children[here])
+                    checked.add(here)
+                key = _key(node, step)
+                if key is None:
+                    break  # not given: this leaf is left unwritten
+                node = node[key]
+            elif isinstance(step, tuple):
+                if not isinstance(node, (list, tuple)):
+                    raise TypeError(f"{prefix}{_render(here)} is an array; give a list, got {type(node).__name__}")
+                node = _element(node, step, children[here], f"{prefix}{_render(here)}")
+            else:
+                raise TypeError(f"{prefix}{_render(here)} is a struct; give a dict, got {type(node).__name__}")
+        else:
+            result[name] = node
+    return result
+
+
+def _key(node: Mapping[Any, Any], step: str | tuple[int, ...]) -> Any:
+    if step in node:
+        return step
+    if isinstance(step, tuple) and len(step) == 1 and step[0] in node:
+        return step[0]  # a one-dimensional index given as a plain int
+    return None
+
+
+def _check_keys(prefix: str, here: _Path, node: Mapping[Any, Any], allowed: list[Any]) -> None:
+    for key in node:
+        if key not in allowed and not (isinstance(key, int) and (key,) in allowed):
+            raise ValueError(f"{prefix}{_render(here)} has no member or element {key!r}")
+
+
+def _element(node: Sequence[Any], step: tuple[int, ...], indices: list[Any], where: str) -> Any:
+    """Pick element ``step`` of an array given as a list (nested lists per dimension)."""
+    for dimension, index in enumerate(step):
+        values = sorted({full[dimension] for full in indices if full[:dimension] == step[:dimension]})
+        if not isinstance(node, (list, tuple)):
+            raise TypeError(f"{where} dimension {dimension + 1} must be a list, got {type(node).__name__}")
+        if len(node) != len(values):
+            raise ValueError(f"{where} dimension {dimension + 1} has {len(values)} elements, got {len(node)}")
+        node = node[values.index(index)]
+    return node
+
+
+def _render(path: _Path) -> str:
+    return "".join(f".{step}" if isinstance(step, str) else f"[{','.join(map(str, step))}]" for step in path)

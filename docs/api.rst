@@ -28,7 +28,7 @@ Symbolic tags
    :members:
 
 .. automodule:: s7commplus.values
-   :members: decode, encode
+   :members: decode, encode, assemble, split
 
 Subscriptions and alarms
 ------------------------

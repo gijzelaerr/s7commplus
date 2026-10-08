@@ -145,6 +145,14 @@ class SymbolCatalog:
     def from_browse(cls, variables: list[dict[str, Any]]) -> "SymbolCatalog":
         return cls([SymbolicTag.from_browse(variable) for variable in variables])
 
+    def members(self, name: str) -> list[SymbolicTag]:
+        """The leaf tags inside the struct, UDT, DTL or array ``name``, in catalog order.
+
+        ``members("DB.s")`` lists ``DB.s.a`` and ``DB.s.arr[0]`` but not ``DB.sx``.
+        It is empty when ``name`` is a leaf or not in the catalog.
+        """
+        return [tag for tag in self._tags.values() if values._is_member(name, tag.name)]
+
     def resolve(self, name: str) -> SymbolicTag:
         try:
             return self._tags[name]
