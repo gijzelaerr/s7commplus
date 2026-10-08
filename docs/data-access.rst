@@ -127,6 +127,25 @@ Failed items are reported per tag and never retried automatically; after a
 download that changes the PLC layout, call ``refresh_tag_catalog``. Unknown
 names and unsupported PLC datatypes raise before a request is sent.
 
+``refresh_caches_if_program_changed()`` checks before rebuilding: it compares the
+PLC's data-block list with the one the catalog was built from and, if that is
+unchanged, each cached data block's type-info modification time (one small
+EXPLORE per block), and rebuilds the catalog only when something changed. A
+recorded time that no longer answers counts as a change, since a download may
+have replaced the type-info object. The check narrows the window in which a
+stale address is used; it does not close it:
+
+- a change confined to a nested UDT or the PLC tag table may not show in the
+  block's own modification time;
+- an instance DB moved to another FB keeps its name, number and RID, and only
+  its old type-info object is checked;
+- a block whose time the PLC does not report is checked by block list only (the
+  time was seen only on PLCSIM Advanced V8.0, CPU 1511, FW V2.9).
+
+So call ``refresh_tag_catalog()`` after a known download, and
+``refresh_caches_if_program_changed()`` before writing after a possible one: a
+write to a stale address can succeed on whatever variable is there now.
+
 The async client provides the same methods as coroutines, except
 ``invalidate_tag_catalog``, which is immediate:
 

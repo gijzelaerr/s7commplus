@@ -14,6 +14,16 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `refresh_caches_if_program_changed()` (both clients, opt-in) rebuilds the tag
+  catalog when it finds that the PLC program changed: the data-block list
+  differs from the one the catalog was built from, or a cached data block's
+  type-info modification time (attribute 529) differs or no longer answers. This
+  narrows the window in which a cached address names a different variable after
+  a download, but does not close it: a change confined to a nested UDT or the PLC
+  tag table, an instance DB moved to another FB, or a PLC that does not report
+  the time can go unnoticed. Call it before writing after a possible download.
+  The modification time was seen only on PLCSIM Advanced V8.0 (CPU 1511,
+  FW V2.9).
 
 ### Behaviour changes
 
