@@ -9,7 +9,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Optional, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError
+from .error import S7ConnectionError, S7ProtocolError, S7WriteError
 
 from . import typeinfo
 from .alarm import (
@@ -81,10 +81,115 @@ def _normalize_symbolic_read_item(item: SymbolicReadItem) -> tuple[int, list[int
     return access_area, lids, symbol_crc
 
 
+def _chunks(items: Sequence[_T], size: int) -> Iterator[list[_T]]:
+    """Yield ``items`` in batches of at most ``size``; ``size <= 0`` means no split."""
+    if size <= 0:
+        yield list(items)
+        return
+    for start in range(0, len(items), size):
+        yield list(items[start : start + size])
+
+
+def _request_chunks(
+    items: Sequence[_T], max_items: int, build_payload: Callable[[list[_T]], bytes]
+) -> list[tuple[list[_T], bytes]]:
+    """Split ``items``, in order, into requests of at most ``max_items`` and build each payload.
+
+    ``max_items <= 0`` puts every item in one request. All payloads are built
+    before the caller sends the first, so an item that cannot be encoded raises
+    before anything reaches the PLC.
+    """
+    if not items:
+        return []
+    return [(chunk, build_payload(chunk)) for chunk in _chunks(items, max_items)]
+
+
+def _db_read_values(response: bytes, count: int) -> list[bytes]:
+    """Return one value per item of a GetMultiVariables answer for ``count`` DB regions.
+
+    An item the PLC could not read is ``b""``, and so is every item of a request
+    it refused as a whole. An answer that does not account for each item exactly
+    once raises, so a value can never land on another item.
+    """
+    parsed = _parse_read_response(response, expected_count=count)
+    if not parsed:  # refused as a whole; the parser logged the return value
+        parsed = [None] * count
+    if len(parsed) != count:
+        raise RuntimeError(f"Multi-read failed: PLC returned {len(parsed)} of {count} items")
+    return [value if value is not None else b"" for value in parsed]
+
+
+def _write_item_errors(response: bytes, count: int) -> dict[int, int]:
+    """Return the PLC error of each refused item in a SetMultiVariables answer, numbered from 1.
+
+    A request refused as a whole (non-zero return value) refuses each of its
+    ``count`` items with that value. An answer naming an item outside
+    ``1..count``, or one item twice, raises ``RuntimeError``.
+    """
+    return_value, _ = decode_uint64_vlq(response, 0)
+    if return_value != 0:
+        return dict.fromkeys(range(1, count + 1), return_value)
+    return _parse_write_response_errors(response, expected_count=count)
+
+
+def _write_refused(item_errors: dict[int, int]) -> S7WriteError:
+    """The error for a batch in which the PLC refused ``item_errors``, keyed by batch position."""
+    listed = ", ".join(f"item {position}: error {code}" for position, code in list(item_errors.items())[:10])
+    more = f" and {len(item_errors) - 10} more" if len(item_errors) > 10 else ""
+    return S7WriteError(f"Write failed: {listed}{more}", item_errors)
+
+
+def _write_interrupted(item_errors: dict[int, int], answered: int, count: int, total: int, error: Exception) -> S7WriteError:
+    """The error for a batch of ``total`` items that ``error`` stopped after ``answered`` items.
+
+    The ``count`` items of the request in flight may or may not have been
+    written; the ones after it were never sent.
+    """
+    unknown = range(answered + 1, answered + count + 1)
+    not_sent = range(answered + count + 1, total + 1)
+    message = (
+        f"Write interrupted after {answered} of {total} items were answered: "
+        f"items {unknown.start}-{unknown.stop - 1} may or may not have been written"
+    )
+    if not_sent:
+        message += f" and items {not_sent.start}-{total} were not sent"
+    interrupted = S7WriteError(f"{message} ({error})", item_errors, unknown=unknown, not_sent=not_sent)
+    interrupted.__cause__ = error
+    return interrupted
+
+
+def _record_tag_writes(results: list[TagResult], start: int, count: int, response: bytes) -> None:
+    """Set the outcome of ``results[start:start + count]`` from one SetMultiVariables answer."""
+    try:
+        errors = _parse_write_response_errors(response, expected_count=count)
+    except RuntimeError as error:
+        for index in range(start, start + count):
+            results[index] = TagResult(tag=results[index].tag, error=error)
+        return
+    for number, code in errors.items():
+        tag = results[start + number - 1].tag
+        results[start + number - 1] = TagResult(
+            tag=tag, error=RuntimeError(f"Symbolic write failed for {tag.name!r}: PLC error {code}")
+        )
+
+
+def _interrupt_tag_writes(results: list[TagResult], start: int, count: int, error: Exception) -> None:
+    """Mark every tag from ``start`` on as unconfirmed after ``error`` stopped the batch."""
+    interrupted = _write_interrupted({}, start, count, len(results), error)
+    for index in range(start, len(results)):
+        results[index] = TagResult(tag=results[index].tag, error=interrupted)
+
+
 class S7CommPlusClient:
     """S7CommPlus client for S7-1200/1500 PLCs.
 
     Use ``from s7commplus import Client`` to instantiate.
+
+    Attributes:
+        max_items_per_request: Most items one multi-item read or write request
+            carries (default 100; ``0`` sends a batch in one request). A larger
+            batch is split over several requests, in order. The default is not
+            a measured PLC limit.
     """
 
     def __init__(self) -> None:
@@ -98,10 +203,19 @@ class S7CommPlusClient:
         self._alarm_subscription_ids: set[int] = set()
         self._alarm_notification_frames: deque[bytes] = deque(maxlen=100)
         self._symbol_catalog: Optional[SymbolCatalog] = None
+        # Most items one multi-item read or write request carries; a larger batch
+        # is split over several requests, in order, and 0 sends it in one. 100 is
+        # not a measured limit: PLCSIM Advanced V8 (CPU 1511, FW V2.9) answered
+        # reads of up to 80 items, and no hardware limit has been checked.
+        self.max_items_per_request = 100
 
     @property
     def connected(self) -> bool:
         return self._connection is not None and self._connection.connected
+
+    def _plan_requests(self, items: Sequence[_T], build_payload: Callable[[list[_T]], bytes]) -> list[tuple[list[_T], bytes]]:
+        """Split a batch into the requests it needs, in order, with their payloads."""
+        return _request_chunks(items, self.max_items_per_request, build_payload)
 
     @property
     def protocol_version(self) -> int:
@@ -405,12 +519,25 @@ class S7CommPlusClient:
         self.db_write_multi([(db_number, start, data, datatype)])
 
     def db_write_multi(self, items: list[DBWriteItem]) -> None:
-        """Write multiple data block regions in a single request.
+        """Write multiple data block regions.
+
+        A batch over :attr:`max_items_per_request` items is split over several
+        requests, sent in order, so it is not atomic. The PLC writes every item
+        it does not refuse, and a refused item does not stop the batch.
 
         Args:
             items: ``(db_number, start_offset, data, datatype)`` tuples.
                 The datatype must match the target PLC variable. BLOB is not
                 a generic replacement for scalar datatypes.
+
+        Raises:
+            S7WriteError: After the last request, if the PLC refused any item;
+                ``item_errors`` is keyed by position in ``items``. Also when a
+                connection, timeout or protocol failure interrupts a split batch
+                after its first request (the failure is the ``__cause__``):
+                ``unknown`` and ``not_sent`` then name the items that may or may
+                not have been written and the ones never sent. A failure of the
+                first request propagates unchanged, as for a single request.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -423,9 +550,24 @@ class S7CommPlusClient:
                 self._db_write_substreamed(db_number, start, data, datatype)
             return
 
-        payload = _build_write_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
-        _parse_write_response(response)
+        def build_write(chunk: list[DBWriteItem]) -> bytes:
+            assert self._connection is not None
+            return _build_write_payload(chunk, self._connection.object_qualifier_version)
+
+        item_errors: dict[int, int] = {}
+        answered = 0
+        for chunk, payload in self._plan_requests(items, build_write):
+            try:
+                response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+                errors = _write_item_errors(response, len(chunk))
+            except Exception as error:
+                if answered == 0:
+                    raise
+                raise _write_interrupted(item_errors, answered, len(chunk), len(items), error) from error
+            item_errors.update((answered + number, code) for number, code in errors.items())
+            answered += len(chunk)
+        if item_errors:
+            raise _write_refused(item_errors)
 
     def write_multi(self, items: list[DBWriteItem]) -> None:
         """Alias for :meth:`db_write_multi`."""
@@ -445,13 +587,21 @@ class S7CommPlusClient:
         self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload)
 
     def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
-        """Read multiple data block regions in a single request.
+        """Read multiple data block regions.
+
+        A batch over :attr:`max_items_per_request` items is split over several
+        requests, sent in order, and the values are merged.
 
         Args:
             items: List of (db_number, start_offset, size) tuples
 
         Returns:
-            List of raw bytes for each item
+            One value per item, in item order. An item the PLC could not read,
+            including every item of a request it refused as a whole, is ``b""``.
+
+        Raises:
+            RuntimeError: If an answer does not account for each of its items
+                exactly once.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -459,10 +609,15 @@ class S7CommPlusClient:
         if self._connection.requires_substreamed:
             return [self._db_read_substreamed(db, start, size) for db, start, size in items]
 
-        payload = _build_read_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
-        parsed = _parse_read_response(response)
-        return [r if r is not None else b"" for r in parsed]
+        def build_read(chunk: list[tuple[int, int, int]]) -> bytes:
+            assert self._connection is not None
+            return _build_read_payload(chunk, self._connection.object_qualifier_version)
+
+        results: list[bytes] = []
+        for chunk, payload in self._plan_requests(items, build_read):
+            response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            results.extend(_db_read_values(response, len(chunk)))
+        return results
 
     def read_area(self, area_rid: int, start: int, size: int) -> bytes:
         """Read raw bytes from a controller memory area (M, I, Q, counters, timers).
@@ -574,6 +729,9 @@ class S7CommPlusClient:
 
         .. warning:: This method is **experimental** and may change.
 
+        A batch over :attr:`max_items_per_request` items is split over several
+        requests, sent in order, and the values are merged.
+
         Args:
             items: ``(access_area, lids)`` tuples, or three-tuples adding a
                 symbol CRC.
@@ -589,11 +747,17 @@ class S7CommPlusClient:
         if not items:
             return []
 
-        payload = _build_multi_symbolic_read_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
-        results = _parse_read_response(response, expected_count=len(items))
-        if len(results) != len(items):
-            raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(results)} of {len(items)} items")
+        def build_read(chunk: list[SymbolicReadItem]) -> bytes:
+            assert self._connection is not None
+            return _build_multi_symbolic_read_payload(chunk, self._connection.object_qualifier_version)
+
+        results: list[Optional[bytes]] = []
+        for chunk, payload in self._plan_requests(items, build_read):
+            response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            parsed = _parse_read_response(response, expected_count=len(chunk))
+            if len(parsed) != len(chunk):
+                raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
+            results.extend(parsed)
         return results
 
     def write_symbolic(
@@ -651,7 +815,10 @@ class S7CommPlusClient:
         return result.value
 
     def read_tags(self, names: Sequence[str]) -> list[TagResult]:
-        """Read names in one request and return a success/error for every item.
+        """Read names and return a success/error for every item.
+
+        A batch over :attr:`max_items_per_request` names is split over several
+        requests, as in :meth:`read_symbolic_multi`.
 
         Requests carry SymbolCRC 0 (no layout check): the browsed per-entry CRC
         is not the value the PLC validates, and real CPUs reject it. Failed
@@ -677,7 +844,17 @@ class S7CommPlusClient:
             raise result.error
 
     def write_tags(self, values: Mapping[str, bytes]) -> list[TagResult]:
-        """Write names in one request and return a success/error per item.
+        """Write names and return a success/error per item.
+
+        A batch over :attr:`max_items_per_request` names is split over several
+        requests, sent in order, so it is not atomic; a tag the PLC refuses
+        does not stop the batch. If a connection, timeout or protocol failure
+        interrupts the batch after its first request, the tags written so far
+        keep their results and every later tag gets one
+        :class:`~s7commplus.error.S7WriteError`, raised from that failure, whose
+        ``unknown`` positions may or may not have been written and whose
+        ``not_sent`` positions were never sent. A failure of the first request
+        propagates unchanged, as for a single request.
 
         Writes are deliberately never retried: a transport failure can leave
         the caller unable to know whether the PLC applied the request.
@@ -695,18 +872,24 @@ class S7CommPlusClient:
             for tag, data in zip(tags, values.values())
             if tag.datatype is not None
         ]
-        payload = _build_multi_symbolic_write_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
-        try:
-            errors = _parse_write_response_errors(response, expected_count=len(tags))
-        except RuntimeError as error:
-            return [TagResult(tag=tag, error=error) for tag in tags]
-        return [
-            TagResult(tag=tag, error=RuntimeError(f"Symbolic write failed for {tag.name!r}: PLC error {errors[index]}"))
-            if index in errors
-            else TagResult(tag=tag)
-            for index, tag in enumerate(tags, 1)
-        ]
+
+        def build_write(chunk: list[SymbolicWriteItem]) -> bytes:
+            assert self._connection is not None
+            return _build_multi_symbolic_write_payload(chunk, self._connection.object_qualifier_version)
+
+        results: list[TagResult] = [TagResult(tag=tag) for tag in tags]
+        answered = 0
+        for chunk, payload in self._plan_requests(items, build_write):
+            try:
+                response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+            except Exception as error:
+                if answered == 0:
+                    raise
+                _interrupt_tag_writes(results, answered, len(chunk), error)
+                break
+            _record_tag_writes(results, answered, len(chunk), response)
+            answered += len(chunk)
+        return results
 
     def explore(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> bytes:
         """Browse the PLC object tree.

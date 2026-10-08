@@ -14,6 +14,12 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `read_tags`, `read_symbolic_multi`, `db_read_multi`, `db_write_multi` and
+  `write_tags` (both clients) split a large batch over several requests of at
+  most `max_items_per_request` items (default 100; `0` sends a batch in one
+  request) and return the results in item order. The default is not a measured
+  PLC limit: PLCSIM Advanced V8 (CPU 1511, FW V2.9) answered reads of up to 80
+  items, and no hardware limit has been checked.
 
 ### Behaviour changes
 
@@ -21,6 +27,22 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* A `db_write_multi` or `write_tags` batch split over several requests is not
+  atomic. The requests go out in order and a refused item does not stop the
+  batch; `db_write_multi` then raises the new `s7commplus.error.S7WriteError`
+  after the last request, with `item_errors` keyed by position in the whole
+  batch. A connection, timeout or protocol failure after the first request
+  stops the batch: `db_write_multi` raises `S7WriteError` from it, and
+  `write_tags` returns its results with that error on every tag it could not
+  confirm; `unknown` and `not_sent` name the items that may or may not have been
+  written and the ones never sent. A failure of the first request propagates
+  unchanged. Upgrade note: `S7WriteError` is a `RuntimeError`, so existing
+  handlers still catch refused writes; keep a batch to one request if it must
+  not be applied in part.
+* `db_read_multi` returns `b""` for each item of a request the PLC refuses as a
+  whole, where it returned a shorter list, and raises `RuntimeError` when an
+  answer skips or repeats an item, so no value can land on another item. The
+  multi-item methods send no request for an empty batch.
 
 ### Bug fixes and hardening
 
