@@ -27,6 +27,9 @@ classifiers = [
 ]
 dependencies = ["cryptography>=41"]
 
+[project.scripts]
+s7commplus = "s7commplus.cli:main"
+
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio", "pytest-bdd>=8.1,<9", "pytest-cov", "hypothesis", "mypy", "ruff"]
 docs = ["sphinx>=7.2", "furo>=2024.8.6"]

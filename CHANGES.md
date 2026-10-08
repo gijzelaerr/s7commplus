@@ -22,6 +22,13 @@ CHANGES
   checked right after the TLS handshake, before the session is created or a
   password is sent. A pin without `use_tls=True` is refused with `ValueError`
   before anything is sent, so a pinned certificate is never used in the clear.
+* A `s7commplus` command-line tool: `browse`, `read`, `write`, `db-read`,
+  `db-write` and `state`, carrying the same connection and TLS options as the
+  clients, including certificate pinning. The TLS options imply `--tls`. The
+  password comes from the `S7COMMPLUS_PASSWORD` environment variable, a
+  no-echo `--ask-password` prompt or `--password`, and is never logged. `read`
+  decodes scalar tags and `--json` emits strict JSON. The exit status is 0 on
+  success, 1 when the operation fails and 2 for a usage error.
 
 ### Behaviour changes
 
