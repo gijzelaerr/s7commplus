@@ -30,9 +30,9 @@ CHANGES
   the session activation and SessionKey renewal, the response IntegrityId
   placement, the legitimation layout and the `write_symbolic`/subscription-delete
   ObjectQualifier version all apply to key family 03 only, so the other families
-  send the same requests as in 0.2.0. The one shared change, in the V1 fragment
-  HMAC check, only adds a dialect: every response accepted before is accepted as
-  before.
+  send the same requests as in 0.2.0, apart from the S7-1200 subscription fix
+  below. The one shared change, in the V1 fragment HMAC check, only adds a
+  dialect: every response accepted before is accepted as before.
 
 ### Behaviour changes
 
@@ -58,6 +58,13 @@ CHANGES
 * On a PLCSIM family-03 legacy session, `SET`/`CREATE`/`DELETE_OBJECT` response
   payloads keep their body-leading bytes so the per-item error list parses; the
   response IntegrityId follows the body there (#66).
+* `create_subscription()` failed on a CPU 1215C FW V4.2 without TLS (V1
+  SessionKey, key family 01) the way it did on PLCSIM: after the address-323
+  session activation the PLC answered the subscription's `CreateObject` with a
+  SystemEvent and a TCP reset, while reads kept working. Its `CreateObject`
+  response also starts with the return value, not with an IntegrityId. Key
+  family 01 now skips the activation and keeps that response whole, in both
+  clients; S7-1500 sessions (key family 00) are unchanged.
 * On a PLCSIM family-03 session, `Client.write_symbolic`/`AsyncClient.write_symbolic`
   and the subscription delete use the session's `object_qualifier_version` like
   every other data path, instead of the negotiated protocol version. Other PLCs
