@@ -22,6 +22,15 @@ CHANGES
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
 
+### Bug fixes and hardening
+
+* Password legitimation with the new (AES) exchange was refused on S7-PLCSIM
+  Advanced V8.0 whatever the password: the encrypted credentials wrote their
+  username and password Blobs without the blob root id that every Blob
+  carries, so the PLC could not read them. With it, the correct password is
+  accepted there. Real S7-1500 V3.1+ and S7-1200 V4.7+ build the same payload
+  but are untested; the new exchange had not been validated on any PLC before.
+
 0.2.0 (2026-10-08)
 ------------------
 

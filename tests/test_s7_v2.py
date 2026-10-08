@@ -348,6 +348,28 @@ class TestLegitimationPayload:
         assert payload[10] == 0x04  # UDInt type for legit_type
         assert payload[11] == 0x02  # legit_type = 2
 
+    def test_password_only_payload_bytes(self) -> None:
+        """The layout PLCSIM Advanced V8.0 accepted, live, on 2026-10-08."""
+        assert _build_legitimation_payload("x") == bytes.fromhex(
+            "0017"
+            "00009dd0"  # struct 40400, LegitimationPayloadStruct
+            "82bb51 0004 01"  # 40401 type: UDInt 1, legacy-style credentials
+            "82bb52 0014 00 00"  # 40402 username: Blob, root id 0, empty
+            "82bb53 0014 00 14"  # 40403 password: Blob, root id 0, 20 bytes ...
+            "11f6ad8ec52a2984abaafd7c3b516503785c2072"  # ... SHA-1("x")
+            "00"  # terminator
+        )
+
+    def test_username_payload_bytes(self) -> None:
+        assert _build_legitimation_payload("pw", "admin") == bytes.fromhex(
+            "0017"
+            "00009dd0"
+            "82bb51 0004 02"  # type: UDInt 2, username and password
+            "82bb52 0014 00 05 61646d696e"  # username: root id 0, "admin"
+            "82bb53 0014 00 02 7077"  # password in plain text: root id 0, "pw"
+            "00"
+        )
+
 
 class TestLegitimationState:
     """Test LegitimationState tracker."""

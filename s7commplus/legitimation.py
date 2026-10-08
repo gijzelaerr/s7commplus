@@ -17,6 +17,7 @@ import logging
 import struct
 from typing import Optional
 
+from .codec import encode_pvalue_blob
 from .protocol import DataType, Ids, LegitimationType
 from .vlq import decode_uint32_vlq, encode_uint32_vlq
 
@@ -321,8 +322,12 @@ def _build_legitimation_payload(password: str, username: str = "") -> bytes:
     """Build the plaintext payload that new-mode legitimation encrypts.
 
     An empty username selects legacy-style credentials, where the password travels as its SHA-1 hash.
+    Both credentials are Blob values, so each carries a blob root id (0) before its length, as
+    every other Blob does. Without it, PLCSIM Advanced V8.0 refused every attempt, whatever the
+    password.
 
-    Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
+    Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs (buildLegitimationPayload)
+    and Core/PValue.cs (ValueBlob.Serialize), commit dbd61e4
     """
     if username:
         legitimation_type = LegitimationType.NEW
@@ -342,16 +347,11 @@ def _build_legitimation_payload(password: str, username: str = "") -> bytes:
 
     # Element 2: Username blob
     result += encode_uint32_vlq(Ids.LEGITIMATION_PAYLOAD_USERNAME)
-    username_data = username.encode("utf-8")
-    result += bytes([0x00, DataType.BLOB])
-    result += encode_uint32_vlq(len(username_data))
-    result += username_data
+    result += encode_pvalue_blob(username.encode("utf-8"))
 
     # Element 3: Password blob
     result += encode_uint32_vlq(Ids.LEGITIMATION_PAYLOAD_PASSWORD)
-    result += bytes([0x00, DataType.BLOB])
-    result += encode_uint32_vlq(len(password_data))
-    result += password_data
+    result += encode_pvalue_blob(password_data)
 
     result += bytes([0x00])  # list terminator
     return bytes(result)
