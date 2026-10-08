@@ -53,6 +53,17 @@ CHANGES
   call and once every 10 seconds, so a tag that keeps failing or a misspelt name
   does not add 1 + N requests to every poll. A write that reached the PLC is
   never resent, and a write to a stale address does not trigger the check.
+* The new `s7commplus.values` module converts raw tag values to Python values
+  and back (`decode()`, `encode()`; `SymbolicTag.encode_value()` is new) and
+  builds structs and arrays from their leaves (`assemble()`, `split()`).
+  Date and time values are naive: no PLC date or time type stores a time zone,
+  so an aware `datetime` or `time` raises `ValueError` instead of being shifted
+  or stripped. Ranges follow the TIA Portal data type documentation (DATE to
+  2168-12-31, LDT and DTL 1970-01-01 to 2262-04-11). A STRING or WSTRING is
+  encoded with its declared length (`string_length`), which sets its header and
+  padding; when the catalog does not give it (`0`), encoding raises `ValueError`
+  instead of assuming 254. `SymbolCatalog.members()` lists the leaf tags of a
+  struct, UDT, DTL or array.
 
 ### Behaviour changes
 
@@ -91,6 +102,11 @@ CHANGES
   the default that is about 40 to 46 items with a one-level LID path. Upgrade
   note: call `create_subscriptions()` for more items, or set
   `max_request_bytes = 0` to send the request anyway.
+* `SymbolicTag.decode_value()`, and with it subscription `decoded_values`, now
+  decodes STRING and WSTRING by their length header (it used to decode the
+  header bytes as text), CHAR, WCHAR, the date and time types, and array
+  elements, which it used to leave as bytes. Bytes that are not a valid value
+  of the type, or lie outside its range, are still returned unchanged.
 
 ### Bug fixes and hardening
 
