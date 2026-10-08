@@ -2288,7 +2288,7 @@ class S7CommPlusAsyncClient:
             writer.write(tpkt)
             await writer.drain()
         except OSError as exc:
-            self._connection_lost(writer)
+            self._close_failed_stream(writer)
             raise S7ConnectionError(f"Send failed: {exc}") from exc
 
     async def _read_tpkt(self) -> bytes:
@@ -2306,13 +2306,13 @@ class S7CommPlusAsyncClient:
             _, _, length = struct.unpack(">BBH", tpkt_header)
             return await reader.readexactly(length - 4)
         except asyncio.IncompleteReadError as exc:
-            self._connection_lost(writer)
+            self._close_failed_stream(writer)
             raise S7ConnectionError("Connection closed by peer") from exc
         except OSError as exc:
-            self._connection_lost(writer)
+            self._close_failed_stream(writer)
             raise S7ConnectionError(f"Receive failed: {exc}") from exc
 
-    def _connection_lost(self, writer: Optional[asyncio.StreamWriter]) -> None:
+    def _close_failed_stream(self, writer: Optional[asyncio.StreamWriter]) -> None:
         """Close the session whose stream failed, keeping the connect parameters.
 
         Only the stream that failed is closed: a reconnect may already have

@@ -432,7 +432,7 @@ async def test_async_read_reconnects_once_the_plc_is_back(server: tuple[S7CommPl
     client._auto_reconnect_min_interval = 0.0
     try:
         srv.stop()  # the PLC goes down and drops the connection
-        client._connection_lost(client._writer)
+        client._close_failed_stream(client._writer)
         with pytest.raises((S7ConnectionError, OSError)):
             await client.db_read(1, 0, 4)  # the reconnect attempt is refused
         _start(srv, port)  # the PLC is back
@@ -448,7 +448,7 @@ async def test_async_tasks_that_find_the_same_drop_share_one_reconnect(server: t
     await client.connect("127.0.0.1", port=port, auto_reconnect=True)
     client._auto_reconnect_min_interval = 0.0  # only the generation check may prevent extra reconnects
     try:
-        client._connection_lost(client._writer)
+        client._close_failed_stream(client._writer)
         results = await asyncio.gather(*(client.db_read(1, 0, 4) for _ in range(5)))
         assert results == [DB1] * 5
         assert client.connection_generation == 1
