@@ -22,6 +22,7 @@ import sys
 from typing import Any, Callable, Iterator, Optional, TypeAlias
 
 from ..client import S7CommPlusClient as Client
+from ..connection import _parse_certificate_fingerprint
 
 PASSWORD_ENV = "S7COMMPLUS_PASSWORD"
 
@@ -29,6 +30,16 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_INTERRUPTED = 130
+
+
+class UsageError(Exception):
+    """A usage problem a command finds before connecting; ``main()`` exits with 2.
+
+    A check that argparse cannot make raises this, never ``ValueError``: a
+    ``ValueError`` that reaches ``main()`` comes from the library and means the
+    operation failed (exit 1).
+    """
+
 
 #: What ``add_subparsers()`` returns; each command's ``register()`` takes it.
 Subparsers: TypeAlias = "argparse._SubParsersAction[argparse.ArgumentParser]"
@@ -46,9 +57,10 @@ exit status:
   0    success
   1    the operation failed: connection, protocol, TLS, certificate or
        authentication error, a certificate or key file that cannot be
-       loaded, or the PLC rejected a read or write
-  2    usage error: invalid arguments or values, a missing certificate or
-       key file, or an unknown tag
+       loaded, a value the library could not encode or decode once
+       connected, or the PLC rejected a read or write
+  2    usage error: invalid arguments or values, found before connecting,
+       a missing certificate or key file, or an unknown tag
   130  interrupted
 """
 
@@ -114,6 +126,15 @@ def existing_file(text: str) -> str:
     return text
 
 
+def parse_pin(text: str) -> str:
+    """An argparse ``type`` for ``--pin``: a SHA-256 fingerprint, checked as the client checks it."""
+    try:
+        _parse_certificate_fingerprint(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return text
+
+
 def add_command(subparsers: Subparsers, name: str, summary: str) -> argparse.ArgumentParser:
     """Add the subparser of command ``name``, with ``summary`` as its one-line help.
 
@@ -151,6 +172,7 @@ def add_connection_options(parser: argparse.ArgumentParser) -> None:
         "--tls-cert-fingerprint",
         "--pin",
         dest="tls_cert_fingerprint",
+        type=parse_pin,
         metavar="SHA256",
         help="pin the PLC TLS certificate by its SHA-256 fingerprint (hex)",
     )
@@ -194,7 +216,7 @@ def resolve_password(args: argparse.Namespace) -> Optional[str]:
         try:
             return getpass.getpass("PLC password: ") or None
         except EOFError:
-            raise ValueError("--ask-password: no password entered") from None
+            raise UsageError("--ask-password: no password entered") from None
     return os.environ.get(PASSWORD_ENV) or None
 
 

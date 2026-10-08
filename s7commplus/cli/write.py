@@ -18,6 +18,15 @@ def _parse_real(text: str) -> float:
     return value
 
 
+def _parse_text(text: str) -> str:
+    """An argparse ``type`` for ``--string``: text that UTF-8 can encode."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:  # a lone surrogate, e.g. from undecodable command-line bytes
+        raise argparse.ArgumentTypeError(f"not encodable as UTF-8: {text!r}") from None
+    return text
+
+
 def register(subparsers: Subparsers) -> None:
     """Add the ``write`` command."""
     parser = add_command(subparsers, "write", "write one named tag")
@@ -29,7 +38,7 @@ def register(subparsers: Subparsers) -> None:
     value.add_argument("--int", dest="int_value", type=int_in_range("INT", -(2**15), 2**15 - 1), help="INT (2 bytes)")
     value.add_argument("--dint", dest="dint_value", type=int_in_range("DINT", -(2**31), 2**31 - 1), help="DINT (4 bytes)")
     value.add_argument("--real", dest="real_value", type=_parse_real, help="REAL (4 bytes)")
-    value.add_argument("--string", dest="string_value", help="STRING/WSTRING text")
+    value.add_argument("--string", dest="string_value", type=_parse_text, help="STRING/WSTRING text")
     parser.set_defaults(handler=run)
 
 

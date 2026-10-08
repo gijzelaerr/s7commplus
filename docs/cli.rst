@@ -70,6 +70,9 @@ Write
 A write requires exactly one value encoding: ``--bool``, ``--int`` (2 bytes),
 ``--dint`` (4 bytes), ``--real`` (4 bytes), ``--string``, or ``--hex`` for raw
 big-endian bytes. A value outside the type's range is refused before connecting.
+The option must also match the tag's type: the library checks that once
+connected, and refuses for example ``--int`` (2 bytes) for a ``REAL`` tag with
+exit status 1.
 
 Raw data blocks and state
 -------------------------
@@ -112,13 +115,19 @@ Exit status
    Success.
 ``1``
    The operation failed: a connection, protocol, TLS, certificate or
-   authentication error, a certificate or key file that cannot be loaded, or a
-   PLC that rejected a read or write (including any tag ``read`` could not read).
+   authentication error, a certificate or key file that cannot be loaded, a
+   value the library could not encode or decode once connected, or a PLC that
+   rejected a read or write (including any tag ``read`` could not read).
 ``2``
-   Usage error: invalid arguments or values, a missing certificate or key file,
-   or an unknown tag.
+   Usage error: invalid arguments or values, found before connecting, a missing
+   certificate or key file, or an unknown tag.
 ``130``
    Interrupted.
+
+Only the checks of the arguments made before connecting, and an unknown tag
+name, give status 2. An error the library raises once the connection is open,
+including a ``ValueError``, gives status 1 with its message, for example
+``write --int`` to a ``REAL`` tag (``REAL requires 4 encoded bytes, got 2``).
 
 Adding a command
 ----------------

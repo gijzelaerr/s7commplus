@@ -23,6 +23,7 @@ import pytest
 from s7commplus.catalog import SymbolicTag, TagResult
 from s7commplus.cli import COMMANDS, browse, build_parser, db_read, db_write, main, read, state, write
 from s7commplus.cli._common import add_command, json_safe, parse_hex
+from s7commplus.client import S7CommPlusClient
 from s7commplus.protocol import ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from tests.conftest import get_free_tcp_port
@@ -265,8 +266,17 @@ def test_runs_as_python_m_s7commplus_cli() -> None:
 
 
 def test_pin_is_an_alias_for_tls_cert_fingerprint() -> None:
-    args = build_parser().parse_args(["state", "--host", "plc", "--pin", "aabb"])
-    assert args.tls_cert_fingerprint == "aabb"
+    pin = "AB:" * 31 + "AB"  # passed on as given; the client ignores the separators
+    args = build_parser().parse_args(["state", "--host", "plc", "--pin", pin])
+    assert args.tls_cert_fingerprint == pin
+
+
+@pytest.mark.parametrize("pin", ["aabb", "ab" * 31, "zz" * 32, "ab" * 33])
+def test_cli_malformed_pin_is_a_usage_error(fake_client: _FakeClient, pin: str, capsys: pytest.CaptureFixture[str]) -> None:
+    # The client refuses it too, with a ValueError; the CLI checks it before connecting.
+    assert _exit_code(["state", "--host", "plc", "--pin", pin]) == 2
+    assert "argument --tls-cert-fingerprint/--pin: certificate fingerprint" in capsys.readouterr().err
+    assert not fake_client.connected
 
 
 def test_cli_prints_the_fingerprint_when_tls(fake_client: _FakeClient, capsys: pytest.CaptureFixture[str]) -> None:
@@ -463,6 +473,7 @@ def test_cli_write_encodes_the_value(
         ["db-read", "1", "0", "0"],
         ["db-write", "1", "4294967296", "--hex", "00"],
         ["state", "--port", "70000"],
+        ["write", "DB1.x", "--string", "bad \udcff"],  # a lone surrogate, which UTF-8 cannot encode
     ],
 )
 def test_cli_rejects_an_out_of_range_value_as_a_usage_error(
@@ -473,6 +484,33 @@ def test_cli_rejects_an_out_of_range_value_as_a_usage_error(
     assert not fake_client.connected
     assert fake_client.writes == {}
     assert fake_client.db_writes == []
+
+
+@pytest.mark.parametrize(
+    ("method", "argv", "message"),
+    [
+        ("connect", ["state"], "missing PValue header"),
+        ("get_cpu_state", ["state"], "expected a scalar UDInt, got flags=0x10 datatype=0x02"),
+        ("db_read", ["db-read", "1", "0", "4"], "Invalid protocol ID: 0x00, expected 0x72"),
+        ("write_tag", ["write", "DB1.Motor.Speed", "--int", "1"], "REAL requires 4 encoded bytes, got 2"),
+    ],
+)
+def test_cli_value_error_from_the_library_once_connected_exits_1(
+    fake_client: _FakeClient,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    method: str,
+    argv: list[str],
+    message: str,
+) -> None:
+    # Messages of ValueErrors the library raises while it talks to the PLC.
+    # main() used to report any ValueError as a usage error, exit 2.
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise ValueError(message)
+
+    monkeypatch.setattr(fake_client, method, fail)
+    assert main([*argv, "--host", "plc"]) == 1
+    assert capsys.readouterr().err.strip() == f"error: {message}"
 
 
 def test_cli_write_rejected_by_the_plc_exits_1(
@@ -656,6 +694,17 @@ def test_cli_db_write_end_to_end(emulator: tuple[S7CommPlusServer, int], capsys:
     capsys.readouterr()
     assert main(["db-read", "--host", "127.0.0.1", "--port", str(port), "1", "0", "4"]) == 0
     assert capsys.readouterr().out.strip() == "deadbeef"
+
+
+def test_cli_write_the_library_cannot_encode_exits_1(
+    emulator: tuple[S7CommPlusServer, int], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --int gives 2 bytes for a REAL tag. The client raises ValueError while it
+    # builds the write request, with the connection open: not a usage error.
+    _srv, port = emulator
+    monkeypatch.setattr(S7CommPlusClient, "browse", lambda self: [dict(_BROWSE_ITEM)])
+    assert main(["write", "--host", "127.0.0.1", "--port", str(port), "DB1.Motor.Speed", "--int", "1"]) == 1
+    assert capsys.readouterr().err.strip() == "error: REAL requires 4 encoded bytes, got 2"
 
 
 def test_cli_debug_logging_end_to_end(emulator: tuple[S7CommPlusServer, int], capsys: pytest.CaptureFixture[str]) -> None:

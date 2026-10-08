@@ -20,8 +20,9 @@ before sharing it.
 
 Exit status: 0 on success; 1 when the operation fails (a connection, protocol,
 TLS, certificate or authentication error, a certificate or key file that cannot
-be loaded, or a PLC that rejects a read or write); 2 for a usage error (invalid
-arguments or values, a missing certificate or key file, or an unknown tag);
+be loaded, a ``ValueError`` the library raises once connected, or a PLC that
+rejects a read or write); 2 for a usage error (invalid arguments or values,
+found before connecting, a missing certificate or key file, or an unknown tag);
 130 when interrupted.
 
 Each command is a module of this package with a ``register(subparsers)``
@@ -47,6 +48,7 @@ from ._common import (
     EXIT_INTERRUPTED,
     EXIT_USAGE,
     Subparsers,
+    UsageError,
     check_connection_options,
     has_connection_options,
     library_logging,
@@ -105,17 +107,23 @@ def _run(args: argparse.Namespace) -> int:
     """Run the command's handler and turn what it raises into an exit status."""
     try:
         return int(args.handler(args))
-    except (S7Error, OSError, RuntimeError) as exc:
+    except UsageError as exc:
+        # A check made before connecting that argparse could not make.
+        report_error(exc)
+        return EXIT_USAGE
+    except KeyError as exc:
+        # An unknown tag name, which the client looks up before it sends the read or write.
+        report_error(exc)
+        return EXIT_USAGE
+    except (S7Error, OSError, RuntimeError, ValueError) as exc:
         # OSError covers socket errors, ssl.SSLError (a failed handshake or
         # certificate verification, an unloadable certificate or key) and
         # unreadable files; RuntimeError is how the client reports a PLC that
-        # rejected a read or write. ssl.SSLCertVerificationError is also a
-        # ValueError, so this clause must come before the usage-error one.
+        # rejected a read or write. Argument values are all checked before
+        # connecting, so a ValueError here comes from the library: a response
+        # it cannot parse, or a value it cannot encode for the tag's type.
         report_error(exc)
         return EXIT_FAILED
-    except (KeyError, ValueError) as exc:
-        report_error(exc)
-        return EXIT_USAGE
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return EXIT_INTERRUPTED

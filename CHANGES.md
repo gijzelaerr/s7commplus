@@ -30,8 +30,9 @@ CHANGES
   `--ask-password` prompt or `--password`, and is never logged. `read` decodes
   scalar tags and `--json` emits strict JSON. `-v` sends the library's INFO log
   to stderr and `-vv` its DEBUG log, which holds the raw protocol frames. The
-  exit status is 0 on success, 1 when the operation fails and 2 for a usage
-  error.
+  exit status is 0 on success, 1 when the operation fails, including any
+  `ValueError` the library raises once connected, and 2 for a usage error found
+  before connecting or an unknown tag.
 
 ### Behaviour changes
 
