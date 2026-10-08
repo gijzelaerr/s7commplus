@@ -161,6 +161,15 @@ class TestClientServerIntegration:
             assert client.connected
         assert not client.connected
 
+    @pytest.mark.parametrize(
+        ("cpu_state", "expected"), [(CPUState.RUN, "RUN"), (CPUState.STOP, "STOP"), (CPUState.UNKNOWN, "UNKNOWN")]
+    )
+    def test_get_cpu_state(self, server: S7CommPlusServer, cpu_state: CPUState, expected: str) -> None:
+        server.cpu_state = cpu_state
+        with S7CommPlusClient() as client:
+            client.connect("127.0.0.1", port=TEST_PORT)
+            assert client.get_cpu_state() == expected
+
     def test_read_real(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
         client.connect("127.0.0.1", port=TEST_PORT)
@@ -470,12 +479,14 @@ class TestAsyncClientServerIntegration:
             value = struct.unpack(">f", data)[0]
             assert abs(value - 55.5) < 0.1
 
-    async def test_get_cpu_state(self, server: S7CommPlusServer) -> None:
-        """Test get_cpu_state returns a valid state string."""
+    @pytest.mark.parametrize(
+        ("cpu_state", "expected"), [(CPUState.RUN, "RUN"), (CPUState.STOP, "STOP"), (CPUState.UNKNOWN, "UNKNOWN")]
+    )
+    async def test_get_cpu_state(self, server: S7CommPlusServer, cpu_state: CPUState, expected: str) -> None:
+        server.cpu_state = cpu_state
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=TEST_PORT)
-            state = await client.get_cpu_state()
-            assert state in ("RUN", "STOP", "UNKNOWN")
+            assert await client.get_cpu_state() == expected
 
     async def test_set_plc_operating_state(self, server: S7CommPlusServer) -> None:
         """Test set_plc_operating_state sends an INVOKE request."""

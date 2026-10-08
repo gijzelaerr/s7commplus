@@ -2,7 +2,9 @@
 
 import hashlib
 import hmac
+import importlib.util
 import struct
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -201,16 +203,109 @@ def test_area_byte_offset_uses_classic_blob_marker_and_zero_based_offset(payload
     assert lids == [Ids.LID_OMS_STB_CLASSIC_BLOB, 12, 4]
 
 
+_PLCSIM_FIXTURE = Path(__file__).parent / "fixtures" / "plcsim_cpu_exec_unit_20261008.py"
+_plcsim_spec = importlib.util.spec_from_file_location("plcsim_cpu_exec_unit_20261008", _PLCSIM_FIXTURE)
+assert _plcsim_spec is not None and _plcsim_spec.loader is not None
+plcsim = importlib.util.module_from_spec(_plcsim_spec)
+_plcsim_spec.loader.exec_module(plcsim)
+
+
+def _operating_state_attribute(code: bytes, struct_id: bytes = bytes.fromhex("00000d99")) -> bytes:
+    """Attribute 0x8BD with OperatingState (0xD9E) between two other members, as PLCSIM sends it."""
+    return bytes.fromhex("a3913d0017") + struct_id + bytes.fromhex("9b1a000800") + bytes.fromhex("9b1e0008") + code + b"\x00"
+
+
 class TestParseCpuState:
     # Exact attribute sequence isolated by the hardware RUN/STOP capture in #878.
     RUN_ATTRIBUTES = bytes.fromhex("a3bf0000030001a3bf0100030007a3be5400030000")
     STOP_ATTRIBUTES = bytes.fromhex("a3bf0000030000a3bf0100030000a3be540003ffff")
+    # The operating-state struct exactly as the PLCSIM captures carry it.
+    PLCSIM_STATE_RUN = bytes.fromhex(
+        "a3913d001700000d999b1a0008009b1b000c000000009b1c000b00019b1d000c000080009b1e0008089b1f0014000000"
+    )
+    PLCSIM_STATE_STOP = PLCSIM_STATE_RUN.replace(bytes.fromhex("9b1e000808"), bytes.fromhex("9b1e000804"))
 
     def test_run_capture(self) -> None:
         assert _parse_cpu_state(b"\x00\x00" + self.RUN_ATTRIBUTES + b"\xa2") == "RUN"
 
     def test_stop_capture(self) -> None:
         assert _parse_cpu_state(b"\x00\x00" + self.STOP_ATTRIBUTES + b"\xa2") == "STOP"
+
+    @pytest.mark.parametrize(
+        ("response", "expected"),
+        [
+            (plcsim.explore_cpu_exec_unit_run, "RUN"),
+            (plcsim.explore_cpu_exec_unit_run_after_restart, "RUN"),
+            (plcsim.explore_cpu_exec_unit_stop, "STOP"),
+        ],
+        ids=["run", "run-after-restart", "stop"],
+    )
+    def test_plcsim_capture(self, response: bytes, expected: str) -> None:
+        # PLCSIM Advanced in RUN reports 0x1F80/0x1F81 as 0/10 or 0/8, which the
+        # hardware-derived pair check alone read as UNKNOWN.
+        assert _parse_cpu_state(response) == expected
+
+    def test_plcsim_captures_carry_the_state_struct(self) -> None:
+        assert self.PLCSIM_STATE_RUN in plcsim.explore_cpu_exec_unit_run
+        assert self.PLCSIM_STATE_RUN in plcsim.explore_cpu_exec_unit_run_after_restart
+        assert self.PLCSIM_STATE_STOP in plcsim.explore_cpu_exec_unit_stop
+
+    def test_state_struct_alone(self) -> None:
+        assert _parse_cpu_state(self.PLCSIM_STATE_RUN) == "RUN"
+        assert _parse_cpu_state(self.PLCSIM_STATE_STOP) == "STOP"
+
+    def test_state_code_decides_over_load_attributes(self) -> None:
+        # 0x1F80/0x1F81 are cycle-load values; the state code wins when present.
+        assert _parse_cpu_state(self.PLCSIM_STATE_RUN + self.STOP_ATTRIBUTES) == "RUN"
+        assert _parse_cpu_state(self.STOP_ATTRIBUTES + self.PLCSIM_STATE_RUN) == "RUN"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            _operating_state_attribute(b"\x00"),  # no state
+            _operating_state_attribute(b"\x06"),  # startup-family code, not pinned
+            _operating_state_attribute(b"\x08") + _operating_state_attribute(b"\x04"),  # conflicting duplicate
+            # An unpinned code is not overridden by the fallback attributes.
+            _operating_state_attribute(b"\x06") + bytes.fromhex("a3bf0000030001a3bf0100030007"),
+        ],
+    )
+    def test_unknown_state_code(self, response: bytes) -> None:
+        assert _parse_cpu_state(response) == "UNKNOWN"
+
+    def test_state_code_is_signed_vlq(self) -> None:
+        # DINT values are signed VLQs; 0x7f is -1, not 127, and a multi-byte 8 is still 8.
+        assert _parse_cpu_state(_operating_state_attribute(b"\x7f")) == "UNKNOWN"
+        assert _parse_cpu_state(_operating_state_attribute(b"\x80\x08")) == "RUN"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            bytes.fromhex("a3913d00170000"),  # truncated struct id
+            bytes.fromhex("a3913d0003000008"),  # attribute is not a struct
+            bytes.fromhex("a3913d001700000d999b1e000208"),  # member is USINT, not DINT
+            bytes.fromhex("a3913d001700000d999b1e001008"),  # member flagged as an array
+            bytes.fromhex("a3913d001700000d999b1e0008"),  # value missing
+            bytes.fromhex("a3913d001700000d99009b1e000808"),  # member after the terminator
+            bytes.fromhex("a3913d001700000d99812000ff009b1e000808"),  # unwalkable member type
+        ],
+    )
+    def test_malformed_state_struct_is_unknown(self, response: bytes) -> None:
+        assert _parse_cpu_state(response) == "UNKNOWN"
+
+    def test_state_struct_with_another_id_is_not_read(self) -> None:
+        # Every capture carries struct id 0xD99; a struct with another id is ignored.
+        other_id = bytes.fromhex("00000d9a")
+        assert _parse_cpu_state(_operating_state_attribute(b"\x08", struct_id=other_id)) == "UNKNOWN"
+        assert _parse_cpu_state(_operating_state_attribute(b"\x08", struct_id=other_id) + self.STOP_ATTRIBUTES) == "STOP"
+
+    def test_malformed_state_struct_falls_back_to_load_attributes(self) -> None:
+        assert _parse_cpu_state(bytes.fromhex("a3913d001700000d999b1e000208") + self.STOP_ATTRIBUTES) == "STOP"
+
+    @pytest.mark.parametrize("capture", ["explore_cpu_exec_unit_run", "explore_cpu_exec_unit_stop"])
+    def test_truncated_capture_never_raises(self, capture: str) -> None:
+        response = getattr(plcsim, capture)
+        for end in range(len(response) + 1):
+            assert _parse_cpu_state(response[:end]) in ("RUN", "STOP", "UNKNOWN")
 
     @pytest.mark.parametrize(
         "response",
