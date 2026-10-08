@@ -627,7 +627,7 @@ class S7CommPlusClient:
             lids,
             data,
             symbol_crc,
-            protocol_version=self._connection.object_qualifier_version,
+            protocol_version=self._connection.write_delete_qualifier_version,
             datatype=datatype,
         )
         response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
@@ -1154,7 +1154,7 @@ class S7CommPlusClient:
         # Subscription children are owned by the session's second CreateObject
         # result. The reference driver deletes that container, not the child ID.
         payload = build_delete_subscription_request(
-            self._connection.subscription_container_id, self._connection.object_qualifier_version
+            self._connection.subscription_container_id, self._connection.write_delete_qualifier_version
         )
         self._connection.send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:

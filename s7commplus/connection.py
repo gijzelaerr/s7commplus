@@ -958,6 +958,17 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
     return frame + struct.pack(">BBH", 0x72, protocol_version, 0x0000)
 
 
+def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_version: int, object_qualifier_version: int) -> int:
+    """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
+
+    PLCSIM Advanced V8 (key family 03) needs the layout of the session's other
+    data requests there too (V2 on a V1 SessionKey session, #66). Other PLCs keep
+    the negotiated protocol version these two requests have always used: neither
+    layout of them has been checked on a hardware PLC.
+    """
+    return object_qualifier_version if family == KeyFamily.PLCSIM else protocol_version
+
+
 def _v1_session_key_profile(override: Optional[bool], session_key: Optional[bytes], protocol_version: int) -> bool:
     """Whether the non-TLS V1 SessionKey request profile applies.
 
@@ -1155,6 +1166,15 @@ class S7CommPlusConnection:
         negotiated V1; its PLCs reset the connection on the V1 layout.
         """
         return ProtocolVersion.V2 if self.legacy_s7_1500 else self._protocol_version
+
+    @property
+    def write_delete_qualifier_version(self) -> int:
+        """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
+
+        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
+        other PLCs the negotiated protocol version.
+        """
+        return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
 
     @property
     def requires_substreamed(self) -> bool:

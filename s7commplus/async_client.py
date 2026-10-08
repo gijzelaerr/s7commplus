@@ -83,6 +83,7 @@ from .connection import (
     _set_s7_groups,
     _strip_response_integrity_id,
     _v1_session_key_profile,
+    _write_delete_qualifier_version,
     _v1_integrity_tail,
     _v1_legitimation_integrity_tail,
     _validate_response_header,
@@ -322,6 +323,15 @@ class S7CommPlusAsyncClient:
         negotiated V1; its PLCs reset the connection on the V1 layout.
         """
         return ProtocolVersion.V2 if self.legacy_s7_1500 else self._protocol_version
+
+    @property
+    def write_delete_qualifier_version(self) -> int:
+        """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
+
+        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
+        other PLCs the negotiated protocol version.
+        """
+        return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
 
     async def connect(
         self,
@@ -1232,7 +1242,7 @@ class S7CommPlusAsyncClient:
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
-        payload = build_delete_subscription_request(self._subscription_container_id, self.object_qualifier_version)
+        payload = build_delete_subscription_request(self._subscription_container_id, self.write_delete_qualifier_version)
         await self._send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
             self._subscriptions.unregister(active_id)
@@ -1355,7 +1365,7 @@ class S7CommPlusAsyncClient:
         The legacy BLOB default is not a generic replacement for scalar types.
         """
         payload = _build_symbolic_write_payload(
-            access_area, lids, data, symbol_crc, self.object_qualifier_version, datatype=datatype
+            access_area, lids, data, symbol_crc, self.write_delete_qualifier_version, datatype=datatype
         )
         response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)

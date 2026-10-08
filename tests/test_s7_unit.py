@@ -1,9 +1,10 @@
 """Unit tests for S7CommPlus client payload builders, connection parsing, and error paths."""
 
+import asyncio
 import hashlib
 import hmac
 import struct
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -1354,3 +1355,72 @@ class TestPlcsimResponseLayout:
         payload = bytes.fromhex("05 00 00 00 00")  # leading IntegrityId 5, return_value 0, fill
         conn = self._connection(KeyFamily.S7_1500)
         assert conn._response_payload(FunctionCode.SET_MULTI_VARIABLES, payload) == payload[1:]
+
+
+class TestWriteDeleteQualifierVersion:
+    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM only.
+
+    A real S7-1200/1500 V1 SessionKey session keeps the negotiated V1 layout of
+    these two requests, as before #66; every other data path already sends V2.
+    """
+
+    _WRITE_ARGS = (0x8A0E0001, [1], b"\x00\x2a", 0)
+
+    @staticmethod
+    def _expected_write(version: int) -> bytes:
+        from s7commplus.client import _build_symbolic_write_payload
+
+        area, lids, data, crc = TestWriteDeleteQualifierVersion._WRITE_ARGS
+        return _build_symbolic_write_payload(area, lids, data, crc, protocol_version=version, datatype=DataType.INT)
+
+    @staticmethod
+    def _expected_delete(version: int) -> bytes:
+        from s7commplus.subscription import build_delete_subscription_request
+
+        return build_delete_subscription_request(0x70000F90, version)
+
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    def test_sync_client(self, family: str, version: int) -> None:
+        from s7commplus.client import S7CommPlusClient
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        conn = TestPlcsimResponseLayout._connection(KeyFamily[family])
+        conn._subscription_container_id = 0x70000F90
+        conn.send_request = MagicMock(return_value=b"\x00\x00")  # return value 0, no item errors
+        client = S7CommPlusClient()
+        client._connection = conn
+        assert conn.write_delete_qualifier_version == version
+
+        area, lids, data, crc = self._WRITE_ARGS
+        client.write_symbolic(area, lids, data, crc, datatype=DataType.INT)
+        client.delete_subscription(0x70000F91)
+        (_, write_payload), _ = conn.send_request.call_args_list[0]
+        (_, delete_payload), _ = conn.send_request.call_args_list[1]
+        assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
+        assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
+
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    def test_async_client(self, family: str, version: int) -> None:
+        from s7commplus.async_client import S7CommPlusAsyncClient
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        client = S7CommPlusAsyncClient()
+        client._connected = True
+        client._session_key = b"k" * 24
+        client._protocol_version = ProtocolVersion.V1
+        client._v1_session_key_family = KeyFamily[family]
+        client._subscription_container_id = 0x70000F90
+        client._send_request = AsyncMock(return_value=b"\x00\x00")  # type: ignore[method-assign]
+        assert client.write_delete_qualifier_version == version
+
+        area, lids, data, crc = self._WRITE_ARGS
+
+        async def run() -> None:
+            await client.write_symbolic(area, lids, data, crc, datatype=DataType.INT)
+            await client.delete_subscription(0x70000F91)
+
+        asyncio.run(run())
+        (_, write_payload), _ = client._send_request.call_args_list[0]
+        (_, delete_payload), _ = client._send_request.call_args_list[1]
+        assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
+        assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)

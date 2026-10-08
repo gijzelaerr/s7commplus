@@ -25,6 +25,14 @@ CHANGES
   but get no values yet.
   Byte-offset reads/writes are refused on optimized blocks, as on real
   hardware; use symbolic access there (#66).
+  A real S7-1200 or S7-1500 is not affected by these family-03 changes, most of
+  which are verified on PLCSIM only: the ServerSessionVersion rewrite, skipping
+  the session activation and SessionKey renewal, the response IntegrityId
+  placement, the legitimation layout and the `write_symbolic`/subscription-delete
+  ObjectQualifier version all apply to key family 03 only, so the other families
+  send the same requests as in 0.2.0. The one shared change, in the V1 fragment
+  HMAC check, only adds a dialect: every response accepted before is accepted as
+  before.
 
 ### Behaviour changes
 
@@ -50,9 +58,10 @@ CHANGES
 * On a PLCSIM family-03 legacy session, `SET`/`CREATE`/`DELETE_OBJECT` response
   payloads keep their body-leading bytes so the per-item error list parses; the
   response IntegrityId follows the body there (#66).
-* `Client.write_symbolic`/`AsyncClient.write_symbolic` and the subscription
-  delete now use the session's `object_qualifier_version` like every other data
-  path, instead of the negotiated protocol version (#66).
+* On a PLCSIM family-03 session, `Client.write_symbolic`/`AsyncClient.write_symbolic`
+  and the subscription delete use the session's `object_qualifier_version` like
+  every other data path, instead of the negotiated protocol version. Other PLCs
+  keep the negotiated version these two requests have always used (#66).
 * PLCSIM family-03 sessions rewrite ServerSessionVersion elements 315–318 to the
   real-PLC values in the session setup. Echoing PLCSIM's own values back was
   accepted for the setup and reads, but it made the post-auth legitimation fail;
