@@ -26,8 +26,10 @@ CHANGES
   the TLS handshake does not complete and no `tls_cert_fingerprint`, `tls_ca`,
   client certificate or `password` is given. A failure after the handshake is
   never retried in the clear, each fallback is logged as a warning, and every
-  reconnect tries TLS first again. Without a pin, `"auto"` does not resist an
-  active attacker who breaks the handshake; see the connection docs.
+  reconnect tries TLS first again. With none of those set, `"auto"` is not
+  secure against an active attacker: anyone on the network path who resets
+  the TLS handshake makes the client continue in plaintext (see the
+  connection docs).
 
 ### Behaviour changes
 

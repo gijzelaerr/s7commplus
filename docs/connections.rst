@@ -200,10 +200,12 @@ strings than ``"auto"`` are refused with ``ValueError``.
 
 .. warning::
 
-   Without a pin, ``"auto"`` protects against passive eavesdropping only. An
-   active attacker on the network can make the handshake fail and so steer the
-   client to plaintext. Use ``use_tls=True`` (with ``tls_cert_fingerprint`` or
-   ``tls_ca``) wherever that matters.
+   ``use_tls="auto"`` with none of ``tls_cert_fingerprint``, ``tls_ca``, a
+   client certificate or ``password`` set is **not secure against an active
+   attacker**: anyone on the network path who resets the TLS handshake makes the
+   client continue in plaintext. It protects against passive eavesdropping only.
+   Use ``use_tls=True`` (with ``tls_cert_fingerprint`` or ``tls_ca``) wherever
+   that matters.
 
 A failed handshake raises :class:`~s7commplus.error.S7TlsHandshakeError` for
 ``use_tls=True`` too, with the ``ssl`` or socket error as its ``__cause__``; a
