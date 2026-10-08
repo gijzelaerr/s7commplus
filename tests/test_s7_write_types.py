@@ -146,6 +146,39 @@ def test_write_types_follow_what_plcsim_accepts() -> None:
     assert _write_type(dtl) is None
 
 
+# Raw value -> the PValue write_tags() sent in 0.2.0 and sends with legacy_write_forms set:
+# the value's bytes as given, as SymbolicTag.datatype.
+LEGACY_WRITES = {
+    "DB.c": ("5a", "000a5a"),  # CHAR as a BYTE
+    "DB.s": ("6869", "0019026869"),  # STRING: the bytes as given, in an S7STRING
+    "DB.w": ("c3a4", "001502c3a4"),  # WSTRING: the bytes as given, in a WSTRING
+    "DB.dt": ("2610021234561236", "00102610021234561236"),  # DATE_AND_TIME as a TIMESTAMP
+    "DB.i": ("fb2e", "0007fb2e"),  # unchanged
+}
+# The item values of the request 0.2.0's write_tags() built for LEGACY_WRITES (mocked transport).
+LEGACY_VALUES_0_2_0 = "01 000a5a 02 0019026869 03 001502c3a4 04 00102610021234561236 05 0007fb2e 00"
+
+
+def test_legacy_write_types_are_the_pre_0_3_forms() -> None:
+    catalog = SymbolCatalog.from_browse(STRING_BROWSE)
+    expected = {
+        "DB.c": DataType.BYTE,
+        "DB.s": DataType.S7STRING,
+        "DB.w": DataType.WSTRING,
+        "DB.dt": DataType.TIMESTAMP,
+        "DB.i": DataType.INT,
+    }
+    for name, datatype in expected.items():
+        tag = catalog.resolve(name)
+        assert _write_type(tag, legacy_forms=True) == datatype
+        assert tag.datatype == datatype  # unchanged from 0.2.0
+
+
+def test_clients_send_the_new_write_forms_by_default() -> None:
+    assert S7CommPlusClient().legacy_write_forms is False
+    assert S7CommPlusAsyncClient().legacy_write_forms is False
+
+
 def test_encode_pvalue_array() -> None:
     assert encode_pvalue_array(DataType.USINT, bytes.fromhex("0a027071")) == bytes.fromhex("1002040a027071")
     assert encode_pvalue_array(DataType.UINT, bytes.fromhex("00fe0001006b")) == bytes.fromhex("10030300fe0001006b")
@@ -161,8 +194,8 @@ def test_symbolic_write_payload_sends_a_string_as_a_usint_array() -> None:
     assert bytes.fromhex("0110020c0a027071") + bytes(8) in payload
 
 
-def _assert_string_writes(payload: bytes) -> None:
-    for index, (_raw, pvalue) in enumerate(STRING_WRITES.values(), 1):
+def _assert_string_writes(payload: bytes, writes: dict[str, tuple[str, str]] = STRING_WRITES) -> None:
+    for index, (_raw, pvalue) in enumerate(writes.values(), 1):
         assert bytes([index]) + bytes.fromhex(pvalue) in payload
 
 
@@ -189,6 +222,37 @@ async def test_async_write_tags_sends_strings_chars_and_date_and_time_as_plcsim_
 
     assert all(result.success for result in results)
     _assert_string_writes(client._send_request.await_args.args[1])
+
+
+def test_write_tags_sends_the_pre_0_3_forms_when_selected() -> None:
+    client = S7CommPlusClient()
+    client.legacy_write_forms = True
+    client._connection = MagicMock(protocol_version=ProtocolVersion.V2, object_qualifier_version=ProtocolVersion.V2)
+    client._connection.send_request.return_value = encode_uint64_vlq(0) + encode_uint32_vlq(0)
+    client._symbol_catalog = SymbolCatalog.from_browse(STRING_BROWSE)
+
+    results = client.write_tags({name: bytes.fromhex(raw) for name, (raw, _pvalue) in LEGACY_WRITES.items()})
+
+    assert all(result.success for result in results)
+    payload = client._connection.send_request.call_args.args[1]
+    _assert_string_writes(payload, LEGACY_WRITES)
+    assert bytes.fromhex(LEGACY_VALUES_0_2_0) in payload
+
+
+async def test_async_write_tags_sends_the_pre_0_3_forms_when_selected() -> None:
+    client = S7CommPlusAsyncClient()
+    client.legacy_write_forms = True
+    client._connected = True
+    client._protocol_version = ProtocolVersion.V2
+    client._symbol_catalog = SymbolCatalog.from_browse(STRING_BROWSE)
+    client._send_request = AsyncMock(return_value=encode_uint64_vlq(0) + encode_uint32_vlq(0))  # type: ignore[method-assign]
+
+    results = await client.write_tags({name: bytes.fromhex(raw) for name, (raw, _pvalue) in LEGACY_WRITES.items()})
+
+    assert all(result.success for result in results)
+    payload = client._send_request.await_args.args[1]
+    _assert_string_writes(payload, LEGACY_WRITES)
+    assert bytes.fromhex(LEGACY_VALUES_0_2_0) in payload
 
 
 def test_write_tags_rejects_a_wstring_of_odd_length_before_sending() -> None:

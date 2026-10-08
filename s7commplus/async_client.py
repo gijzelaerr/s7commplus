@@ -193,6 +193,13 @@ class S7CommPlusAsyncClient:
             counted as for :class:`S7CommPlusClient`. A larger batch is split;
             an item too large for one request raises ``ValueError`` before
             anything is sent.
+        legacy_write_forms: Send CHAR, STRING, WSTRING and DATE_AND_TIME from
+            :meth:`write_tags` in the forms used before 0.3 (default ``False``),
+            as described for :class:`S7CommPlusClient`: a CHAR as a BYTE, a
+            STRING or WSTRING as an S7STRING or WSTRING PValue of the value's
+            bytes as given, and a DATE_AND_TIME as a TIMESTAMP. The default
+            forms are verified on PLCSIM Advanced only, and neither has been
+            checked on a hardware PLC.
     """
 
     def __init__(self) -> None:
@@ -214,6 +221,9 @@ class S7CommPlusAsyncClient:
         # or write; see S7CommPlusClient for the defaults' evidence.
         self.max_items_per_request = 50
         self.max_request_bytes = 900
+        # Send CHAR, STRING, WSTRING and DATE_AND_TIME in their pre-0.3 forms; see
+        # S7CommPlusClient.
+        self.legacy_write_forms: bool = False
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
@@ -1553,7 +1563,9 @@ class S7CommPlusAsyncClient:
         :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
         characters...]`` and a WSTRING the same as big-endian UINTs, both padded
         with zeros to the declared length (``SymbolicTag.string_length``); a
-        DATE_AND_TIME is its eight BCD bytes.
+        DATE_AND_TIME is its eight BCD bytes. With :attr:`legacy_write_forms`
+        set, CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3
+        forms instead, and a STRING or WSTRING value is sent as given.
 
         Writes are deliberately never retried: a transport failure can leave
         the caller unable to know whether the PLC applied the request.
@@ -1567,13 +1579,14 @@ class S7CommPlusAsyncClient:
         if not values:
             return []
         tags = [await self.resolve_tag(name) for name in values]
-        unsupported = [tag.name for tag in tags if _write_type(tag) is None]
+        legacy = self.legacy_write_forms
+        unsupported = [tag.name for tag in tags if _write_type(tag, legacy) is None]
         if unsupported:
             raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
         items: list[SymbolicWriteItem] = [
             (tag.access_area, list(tag.lids), data, 0, write_type)
             for tag, data in zip(tags, values.values())
-            if (write_type := _write_type(tag)) is not None
+            if (write_type := _write_type(tag, legacy)) is not None
         ]
 
         def build_write(chunk: list[SymbolicWriteItem]) -> bytes:

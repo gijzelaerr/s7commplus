@@ -88,14 +88,19 @@ CHANGES
 * `write_tags()` sends CHAR as a USINT, STRING and WSTRING as USINT and UINT
   arrays of `[max length, length, characters]` padded to the declared length,
   and DATE_AND_TIME as an array of its eight BCD bytes. PLCSIM Advanced (V8.0,
-  CPU 1511, FW V2.9) rejected every named write of these types in the previous
-  forms; not yet checked on hardware. `SymbolicTag.datatype` of a CHAR is now
-  `USINT`. **Upgrade note:** `write_tags()` and `write_tag()` now take a STRING
-  or WSTRING value only in the layout a read returns, `[max length, length,
-  characters]` padded with zeros to the declared length (a WSTRING as
-  big-endian UINTs), and send it as that array; bytes in another form, such as
-  the characters alone, are no longer wrapped in a string PValue. DATE_AND_TIME
-  data is still its eight BCD bytes.
+  CPU 1511, FW V2.9 with TLS and FW V2.8 without) rejected every named write of
+  these types in the previous forms and accepts the new ones. The new forms are
+  verified on PLCSIM only, not on a hardware PLC. The new `legacy_write_forms`
+  attribute (both clients, default `False`) sends the previous forms instead:
+  CHAR as BYTE, STRING as S7STRING, WSTRING as WSTRING and DATE_AND_TIME as
+  TIMESTAMP, each value's bytes as given. That is the 0.2.0 behaviour; it was
+  not checked on a hardware PLC either. **Upgrade note:** by default,
+  `write_tags()` and `write_tag()` now take a STRING or WSTRING value only in
+  the layout a read returns, `[max length, length, characters]` padded with
+  zeros to the declared length (a WSTRING as big-endian UINTs), and send it as
+  that array; bytes in another form, such as the characters alone, are no
+  longer wrapped in a string PValue. Set `legacy_write_forms = True` to keep
+  the 0.2.0 forms. DATE_AND_TIME data is still its eight BCD bytes.
 
 ### Documentation
 
