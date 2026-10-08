@@ -22,8 +22,11 @@ CHANGES
   a download, but does not close it: a change confined to a nested UDT or the PLC
   tag table, an instance DB moved to another FB, or a PLC that does not report
   the time can go unnoticed. Call it before writing after a possible download.
-  The modification time was seen only on PLCSIM Advanced V8.0 (CPU 1511,
-  FW V2.9).
+  The modification time was seen on PLCSIM Advanced V8.0 (CPU 1511, FW V2.9)
+  and, read-only, on a real CPU 1215C FW V4.2, where 42 of its 54 data blocks
+  report it; that it changes on a download is not verified on hardware. The
+  attribute's name has a single source, the attribute-id table of Wireshark's
+  S7CommPlus dissector, at an unverified line.
 * Setting `auto_refresh_tags = True` (both clients, opt-in) runs that check when
   a tag read reports a failed item or a name is unknown and, if the program
   changed, resolves and reads the names again, once. It checks at most once per

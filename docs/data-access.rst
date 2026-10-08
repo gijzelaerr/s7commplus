@@ -141,7 +141,8 @@ stale address is used; it does not close it:
 - an instance DB moved to another FB keeps its name, number and RID, and only
   its old type-info object is checked;
 - a block whose time the PLC does not report is checked by block list only (the
-  time was seen only on PLCSIM Advanced V8.0, CPU 1511, FW V2.9).
+  time was seen on PLCSIM Advanced V8.0, CPU 1511, FW V2.9, and on a CPU 1215C,
+  FW V4.2, where 12 of 54 data blocks did not report it).
 
 So call ``refresh_tag_catalog()`` after a known download, and
 ``refresh_caches_if_program_changed()`` before writing after a possible one: a

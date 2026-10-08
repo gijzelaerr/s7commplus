@@ -273,11 +273,14 @@ class Ids(IntEnum):
     # Object attributes for EXPLORE responses
     OBJECT_VARIABLE_TYPE_NAME = 233
     # VariableTypeStructModificationTime: when a type-info object's layout last
-    # changed. Seen only on PLCSIM Advanced V8.0 (CPU 1511, FW V2.9), as
+    # changed. Seen on PLCSIM Advanced V8.0 (CPU 1511, FW V2.9), as
     # ``a3 84 11 00 05 ...`` (attribute 529, a ULInt) in the EXPLORE response
-    # pinned by tests/test_s7_stale_tags.py; not verified on a hardware PLC.
-    # The name follows the attribute-id table of Wireshark's S7CommPlus
-    # dissector (packet-s7comm_plus.c); its line and version are unverified.
+    # pinned by tests/test_s7_stale_tags.py, and in a read-only probe of a real
+    # CPU 1215C DC/DC/DC (FW V4.2): 42 of its 54 data blocks' type-info objects
+    # reported it, stable on repeated reads and equal in the browse and a
+    # filtered EXPLORE. That it changes on a download is not verified on hardware.
+    # The name is single-source: it follows the attribute-id table of Wireshark's
+    # S7CommPlus dissector (packet-s7comm_plus.c), at an unverified line and version.
     VARIABLE_TYPE_STRUCT_MODIFICATION_TIME = 529
     BLOCK_BLOCK_NUMBER = 2521
     DATA_INTERFACE_INTERFACE_DESCRIPTION = 2544
