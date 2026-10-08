@@ -21,6 +21,14 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* `AsyncClient` raises `S7ConnectionError` when the PLC closes or resets the
+  connection during a request, as `Client` already did, instead of letting
+  `asyncio.IncompleteReadError` or an `OSError` such as `ConnectionResetError`
+  escape. It also ends the session (`connected` turns false), so the next request
+  fails at once with "Not connected", and `AsyncClient.browse()` now reconnects on
+  firmware that resets the connection after a symbolic read, as `Client.browse()`
+  does. Upgrade note: catch `S7ConnectionError` where you caught those exceptions
+  from `AsyncClient` operations.
 
 0.2.0 (2026-10-08)
 ------------------

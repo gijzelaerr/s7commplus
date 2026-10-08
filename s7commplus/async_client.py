@@ -1820,12 +1820,9 @@ class S7CommPlusAsyncClient:
         cr_pdu = struct.pack(">B", 6 + len(params)) + base_pdu[1:] + params
 
         tpkt = struct.pack(">BBH", 3, 0, 4 + len(cr_pdu)) + cr_pdu
-        self._writer.write(tpkt)
-        await self._writer.drain()
+        await self._write_tpkt(tpkt)
 
-        tpkt_header = await self._reader.readexactly(4)
-        _, _, length = struct.unpack(">BBH", tpkt_header)
-        payload = await self._reader.readexactly(length - 4)
+        payload = await self._read_tpkt()
 
         if len(payload) < 7:
             raise S7ConnectionError(f"COTP CC response too short: {len(payload)} bytes")
@@ -2117,22 +2114,13 @@ class S7CommPlusAsyncClient:
 
     async def _send_cotp_raw(self, data: bytes) -> None:
         """Send raw bytes wrapped in COTP DT + TPKT (no TLS)."""
-        if self._writer is None:
-            raise S7ConnectionError("Not connected")
-
         cotp_dt = struct.pack(">BBB", 2, _COTP_DT, 0x80) + data
         tpkt = struct.pack(">BBH", 3, 0, 4 + len(cotp_dt)) + cotp_dt
-        self._writer.write(tpkt)
-        await self._writer.drain()
+        await self._write_tpkt(tpkt)
 
     async def _recv_cotp_raw(self) -> bytes:
         """Receive one TPKT + COTP DT frame and return the payload (no TLS)."""
-        if self._reader is None:
-            raise S7ConnectionError("Not connected")
-
-        tpkt_header = await self._reader.readexactly(4)
-        _, _, length = struct.unpack(">BBH", tpkt_header)
-        payload = await self._reader.readexactly(length - 4)
+        payload = await self._read_tpkt()
 
         if len(payload) < 3:
             raise S7ConnectionError(f"COTP DT response too short: {len(payload)} bytes")
@@ -2140,6 +2128,56 @@ class S7CommPlusAsyncClient:
             raise S7ConnectionError(f"Expected COTP DT, got {payload[1]:#04x}")
 
         return payload[3:]
+
+    async def _write_tpkt(self, tpkt: bytes) -> None:
+        """Write one TPKT frame; a peer that closed or reset the stream is a dropped connection."""
+        writer = self._writer
+        if writer is None:
+            raise S7ConnectionError("Not connected")
+        try:
+            writer.write(tpkt)
+            await writer.drain()
+        except OSError as exc:
+            self._connection_lost(writer)
+            raise S7ConnectionError(f"Send failed: {exc}") from exc
+
+    async def _read_tpkt(self) -> bytes:
+        """Read one TPKT frame and return what follows its header.
+
+        A peer that closed (end of stream) or reset the connection raises
+        ``S7ConnectionError``, as the synchronous transport does, and closes
+        the session so the next request fails fast with "Not connected".
+        """
+        reader, writer = self._reader, self._writer
+        if reader is None:
+            raise S7ConnectionError("Not connected")
+        try:
+            tpkt_header = await reader.readexactly(4)
+            _, _, length = struct.unpack(">BBH", tpkt_header)
+            return await reader.readexactly(length - 4)
+        except asyncio.IncompleteReadError as exc:
+            self._connection_lost(writer)
+            raise S7ConnectionError("Connection closed by peer") from exc
+        except OSError as exc:
+            self._connection_lost(writer)
+            raise S7ConnectionError(f"Receive failed: {exc}") from exc
+
+    def _connection_lost(self, writer: Optional[asyncio.StreamWriter]) -> None:
+        """Close the session whose stream failed, keeping the connect parameters.
+
+        Only the stream that failed is closed: a reconnect may already have
+        replaced it. No DeleteObject is sent over the dead stream, and the
+        subscription registries are left for ``disconnect()`` or a reconnect to
+        clear.
+        """
+        if writer is None or writer is not self._writer:
+            return
+        self._connected = False
+        self._session_ready = False
+        self._transport_connected = False
+        self._reader = None
+        self._writer = None
+        writer.close()
 
     def _next_sequence_number(self) -> int:
         seq = self._sequence_number

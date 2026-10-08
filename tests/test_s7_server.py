@@ -544,6 +544,30 @@ class TestRstAfterSymbolicRead:
         finally:
             client.disconnect()
 
+    async def test_async_peer_close_raises_connection_error(self, rst_server: S7CommPlusServer) -> None:
+        """A peer that closed the socket is an S7ConnectionError and ends the session, as in the sync client."""
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=RST_PORT)
+        try:
+            await client.db_read(1, 0, 4)  # answered, then the server closes the socket
+            with pytest.raises(S7ConnectionError):
+                await client.db_read(1, 0, 4)
+            assert not client.connected
+            with pytest.raises(S7ConnectionError, match="Not connected"):
+                await client.db_read(1, 0, 4)
+        finally:
+            await client.disconnect()
+
+    async def test_async_browse_reconnects_on_rst(self, rst_server: S7CommPlusServer) -> None:
+        """AsyncClient.browse() recovers from the RST like the sync client does."""
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=RST_PORT)
+        try:
+            variables = await client.browse()
+            assert isinstance(variables, list)
+        finally:
+            await client.disconnect()
+
 
 class TestSessionKeyServer:
     """Test the server's SessionKey handshake emulation."""
