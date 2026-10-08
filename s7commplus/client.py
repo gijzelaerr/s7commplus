@@ -5,11 +5,12 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 
 import logging
 import struct
+import time
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Optional, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError
+from .error import S7ConnectionError, S7ProtocolError, S7TimeoutError
 
 from . import typeinfo
 from .alarm import (
@@ -189,6 +190,7 @@ class S7CommPlusClient:
         *,
         timeout: float = 5.0,
         request_timeout: Optional[float] = None,
+        notification_timeout: Optional[float] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
     ) -> None:
@@ -215,6 +217,9 @@ class S7CommPlusClient:
                 ``None`` to use ``timeout``. A reply that does not arrive in
                 time raises ``S7TimeoutError`` and closes the session, as its
                 state is then unknown; ``connected`` turns ``False``.
+            notification_timeout: Seconds a notification receiver waits by
+                default (subscriptions and alarms), or ``None`` to use the
+                request timeout.
             legacy_s7_1500: Override the non-TLS V1 SessionKey profile (structured
                 browse, V2 object qualifier, trailing IntegrityId, chained fragment
                 HMAC). ``None`` (default) selects it automatically for every V1
@@ -234,6 +239,7 @@ class S7CommPlusClient:
         remote_tsap_for_connection_type(connection_type)  # validate early
         _check_timeout("timeout", timeout, optional=False)
         _check_timeout("request_timeout", request_timeout)
+        _check_timeout("notification_timeout", notification_timeout)
         self._symbol_catalog = None
         self._connect_params = {
             "host": host,
@@ -247,6 +253,7 @@ class S7CommPlusClient:
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
             "timeout": timeout,
             "request_timeout": request_timeout,
+            "notification_timeout": notification_timeout,
             "legacy_s7_1500": legacy_s7_1500,
             "connection_type": connection_type,
         }
@@ -294,6 +301,7 @@ class S7CommPlusClient:
         self._connection.connect(
             timeout=p["timeout"],
             request_timeout=p["request_timeout"],
+            notification_timeout=p["notification_timeout"],
             use_tls=p["use_tls"],
             tls_cert=p["tls_cert"],
             tls_key=p["tls_key"],
@@ -1096,16 +1104,27 @@ class S7CommPlusClient:
         """Stop remembering the subscriptions lost with the previous session."""
         self._subscriptions.forget_pending_restore()
 
-    def receive_subscription_notification(self, subscription_id: int | None = None) -> SubscriptionNotification:
-        """Block until one routed data notification is available."""
+    def receive_subscription_notification(
+        self, subscription_id: int | None = None, timeout: Optional[float] = None
+    ) -> SubscriptionNotification:
+        """Block until one routed data notification is available.
+
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
+        """
+        _check_timeout("timeout", timeout)
         if self._connection is None:
             raise RuntimeError("Not connected")
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         if subscription_id is not None:
             queued = self._subscriptions.pop(subscription_id)
             if queued is not None:
                 return queued
         while True:
-            frame = self._connection.receive_notification()
+            frame = self._next_notification_frame(deadline, wait)
             frame_subscription_id = notification_subscription_id(frame)
             if frame_subscription_id in self._alarm_subscription_ids:
                 self._alarm_notification_frames.append(frame)
@@ -1226,18 +1245,27 @@ class S7CommPlusClient:
         self._connection._notification_frames.clear()
         logger.info(f"Alarm subscription {subscription_id:#x} deleted")
 
-    def receive_alarm_notification(self, language_ids: Optional[list[LanguageId | int]] = None) -> AlarmNotification:
+    def receive_alarm_notification(
+        self, language_ids: Optional[list[LanguageId | int]] = None, timeout: Optional[float] = None
+    ) -> AlarmNotification:
         """Block until the PLC sends one alarm notification.
 
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
         Data notifications encountered first are routed to their bounded queues.
         """
+        _check_timeout("timeout", timeout)
         if self._connection is None:
             raise RuntimeError("Not connected")
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         while True:
             frame = (
                 self._alarm_notification_frames.popleft()
                 if self._alarm_notification_frames
-                else self._connection.receive_notification()
+                else self._next_notification_frame(deadline, wait)
             )
             frame_subscription_id = notification_subscription_id(frame)
             if self._subscriptions.contains(frame_subscription_id):
@@ -1247,6 +1275,25 @@ class S7CommPlusClient:
                     self._connection.send_subscription_credit(frame_subscription_id, credit_update)
                 continue
             return parse_alarm_notification(frame, language_ids)
+
+    def _notification_wait(self, timeout: Optional[float]) -> float:
+        """Seconds a notification wait may take: per call, else notification_timeout, else the request timeout."""
+        if timeout is not None:
+            return timeout
+        p = self._connect_params or {}
+        for key in ("notification_timeout", "request_timeout", "timeout"):
+            if p.get(key) is not None:
+                return float(p[key])
+        return 5.0
+
+    def _next_notification_frame(self, deadline: float, wait: float) -> bytes:
+        """Receive one notification frame by ``deadline`` (``time.monotonic()``), else raise S7TimeoutError."""
+        assert self._connection is not None
+        left = deadline - time.monotonic()
+        if left <= 0:
+            # Nothing of a next frame was read, so the session stays usable.
+            raise S7TimeoutError(f"No notification from the PLC within {wait}s")
+        return self._connection.receive_notification(left)
 
     def read_alarms(self, language_ids: Optional[list[LanguageId | int]] = None) -> list[Alarm]:
         """Return the PLC's current active alarm state.

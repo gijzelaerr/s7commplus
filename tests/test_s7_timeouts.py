@@ -1,4 +1,4 @@
-"""Connect and request timeouts, and what a timeout leaves of the session.
+"""Connect, request and notification timeouts, and what a timeout leaves of the session.
 
 A request timeout or a frame cut off part-way closes the session (the stream
 position is unknown); a notification wait that runs out before any byte of the
@@ -15,17 +15,20 @@ import threading
 import time
 from collections.abc import Iterator
 from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
+from s7commplus.codec import encode_header, encode_pvalue_blob
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.error import S7ConnectionError, S7TimeoutError
+from s7commplus.protocol import Opcode, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
-from s7commplus.subscription import SubscriptionItem
+from s7commplus.subscription import SubscriptionItem, SubscriptionRegistry
 from s7commplus.transport import ISOTCPConnection, _configure_tcp_socket
+from s7commplus.vlq import encode_uint32_vlq
 from tests.conftest import get_free_tcp_port
 
 # The header of a TPKT frame announcing 32 bytes; sent alone, the frame stops part-way.
@@ -195,7 +198,7 @@ def socket_pair() -> Iterator[tuple[ISOTCPConnection, socket.socket]]:
 
 
 @pytest.mark.parametrize("value", BAD_TIMEOUTS)
-@pytest.mark.parametrize("name", ["timeout", "request_timeout"])
+@pytest.mark.parametrize("name", ["timeout", "request_timeout", "notification_timeout"])
 def test_sync_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
     client = S7CommPlusClient()
     with pytest.raises(ValueError, match=f"^{name} must"):
@@ -204,7 +207,7 @@ def test_sync_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: st
 
 
 @pytest.mark.parametrize("value", BAD_TIMEOUTS)
-@pytest.mark.parametrize("name", ["timeout", "request_timeout"])
+@pytest.mark.parametrize("name", ["timeout", "request_timeout", "notification_timeout"])
 def test_connection_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
     conn = S7CommPlusConnection("127.0.0.1", port=1)
     with patch.object(conn._iso_conn, "connect") as iso_connect, pytest.raises(ValueError, match=f"^{name} must"):
@@ -213,7 +216,7 @@ def test_connection_connect_rejects_a_timeout_that_is_not_positive_and_finite(na
 
 
 @pytest.mark.parametrize("value", BAD_TIMEOUTS)
-@pytest.mark.parametrize("name", ["timeout", "request_timeout"])
+@pytest.mark.parametrize("name", ["timeout", "request_timeout", "notification_timeout"])
 async def test_async_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
     client = S7CommPlusAsyncClient()
     with pytest.raises(ValueError, match=f"^{name} must"):
@@ -242,11 +245,12 @@ def test_isotcp_connect_timeout_is_the_request_timeout_until_set() -> None:
 def test_client_forwards_the_timeouts_to_the_connection() -> None:
     client = S7CommPlusClient()
     with patch("s7commplus.client.S7CommPlusConnection") as factory:
-        client.connect("plc", timeout=1.5, request_timeout=2.5)
+        client.connect("plc", timeout=1.5, request_timeout=2.5, notification_timeout=3.5)
 
     kwargs = factory.return_value.connect.call_args.kwargs
     assert kwargs["timeout"] == 1.5
     assert kwargs["request_timeout"] == 2.5
+    assert kwargs["notification_timeout"] == 3.5
 
 
 def test_the_request_timeout_applies_once_connected(emulator: int) -> None:
@@ -493,7 +497,7 @@ async def test_async_notification_wait_that_runs_out_keeps_the_session(emulator:
     client = S7CommPlusAsyncClient()
     await client.connect("127.0.0.1", port=emulator)
     try:
-        with pytest.raises(asyncio.TimeoutError):
+        with pytest.raises(S7TimeoutError):
             await client.receive_subscription_notification(timeout=0.3)
         assert client.connected
         assert await client.db_read(1, 0, 2) == b"\x00\x00"
@@ -508,7 +512,7 @@ async def test_async_notification_cut_off_part_way_closes_the_session(proxy: _Pr
     await client.connect("127.0.0.1", port=proxy.port)
     try:
         proxy.pipe.inject(PARTIAL_FRAME)
-        with pytest.raises(asyncio.TimeoutError):
+        with pytest.raises(S7TimeoutError):
             await client.receive_subscription_notification(timeout=0.3)
         assert not client.connected
     finally:
@@ -537,3 +541,206 @@ async def test_async_read_cancelled_before_a_frame_keeps_the_session(emulator: i
         assert await client.db_read(1, 0, 2) == b"\x00\x00"
     finally:
         await client.disconnect()
+
+
+# --- Notification timeout: per call, else notification_timeout, else the request timeout --------
+
+SUBSCRIPTION_A = 0x70400025
+SUBSCRIPTION_B = 0x70400026
+RECEIVERS = ["receive_subscription_notification", "receive_alarm_notification"]
+
+
+def _data_notification(subscription_id: int, sequence_number: int = 1) -> bytes:
+    data = bytearray([Opcode.NOTIFICATION])
+    data += struct.pack(">IHHH", subscription_id, 4, 0, 0)
+    data += bytes([3]) + encode_uint32_vlq(sequence_number) + bytes([1])
+    data += b"\x92" + struct.pack(">I", 7) + encode_pvalue_blob(b"\x12\x34")
+    data += b"\x00\xaa"
+    return encode_header(ProtocolVersion.V2, len(data)) + bytes(data) + bytes([0x72, ProtocolVersion.V2, 0, 0])
+
+
+def _register(registry: SubscriptionRegistry, *subscription_ids: int) -> None:
+    for subscription_id in subscription_ids:
+        registry.register(
+            subscription_id,
+            [SubscriptionItem.from_access_sequence("8A0E0007.A")],
+            change_counter=1,
+            credit_limit=-1,
+            credit_step=0,
+            queue_size=2,
+        )
+
+
+@pytest.mark.parametrize("value", BAD_TIMEOUTS)
+@pytest.mark.parametrize("receiver", RECEIVERS)
+def test_sync_receivers_reject_a_bad_per_call_timeout(receiver: str, value: float) -> None:
+    client = S7CommPlusClient()
+    client._connection = MagicMock()
+    with pytest.raises(ValueError, match="^timeout must"):
+        getattr(client, receiver)(timeout=value)
+    client._connection.receive_notification.assert_not_called()
+
+
+@pytest.mark.parametrize("value", BAD_TIMEOUTS)
+@pytest.mark.parametrize("receiver", RECEIVERS)
+async def test_async_receivers_reject_a_bad_per_call_timeout(receiver: str, value: float) -> None:
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    receive = AsyncMock()
+    client._recv_cotp_dt = receive  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="^timeout must"):
+        await getattr(client, receiver)(timeout=value)
+    receive.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", BAD_TIMEOUTS)
+def test_connection_receive_notification_rejects_a_bad_timeout(value: float) -> None:
+    conn = S7CommPlusConnection("127.0.0.1")
+    conn._connected = True
+    receive = MagicMock()
+    conn._recv_s7_data = receive  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="^timeout must"):
+        conn.receive_notification(timeout=value)
+    receive.assert_not_called()
+
+
+def test_connection_notification_wait_falls_back_to_the_request_timeout() -> None:
+    conn = S7CommPlusConnection("127.0.0.1")
+    conn._connected = True
+    receive = MagicMock(return_value=_data_notification(SUBSCRIPTION_A))
+    conn._recv_s7_data = receive  # type: ignore[method-assign]
+    conn._request_timeout = 4.0
+    conn.receive_notification()
+    conn._notification_timeout = 9.0
+    conn.receive_notification()
+    conn.receive_notification(timeout=1.5)
+    assert [call.args[0] for call in receive.call_args_list] == [4.0, 9.0, 1.5]
+    assert all(call.kwargs == {"idle_ok": True} for call in receive.call_args_list)
+
+
+def test_sync_notification_timeout_takes_precedence_over_the_request_timeout(emulator: int) -> None:
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, request_timeout=30.0, notification_timeout=0.3)
+    try:
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            client.receive_subscription_notification()
+        with pytest.raises(S7TimeoutError):
+            client.receive_alarm_notification()
+        assert time.monotonic() - start < 4
+        assert client.db_read(1, 0, 2) == b"\x00\x00"
+    finally:
+        client.disconnect()
+
+
+def test_sync_per_call_timeout_takes_precedence_over_notification_timeout(emulator: int) -> None:
+    # Regression: the sync alarm receiver took no timeout at all.
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, notification_timeout=30.0)
+    try:
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            client.receive_subscription_notification(timeout=0.2)
+        with pytest.raises(S7TimeoutError):
+            client.receive_alarm_notification(timeout=0.2)
+        assert time.monotonic() - start < 4
+    finally:
+        client.disconnect()
+
+
+def test_sync_per_call_timeout_applies_to_that_call_only() -> None:
+    client = S7CommPlusClient()
+    client._connect_params = {"timeout": 5.0, "request_timeout": None, "notification_timeout": 7.0}
+    connection = MagicMock()
+    connection.receive_notification.side_effect = S7TimeoutError("no notification")
+    client._connection = connection
+    for receiver in RECEIVERS:
+        with pytest.raises(S7TimeoutError):
+            getattr(client, receiver)(timeout=0.5)
+        with pytest.raises(S7TimeoutError):
+            getattr(client, receiver)()
+    waits = [call.args[0] for call in connection.receive_notification.call_args_list]
+    assert 0 < waits[0] <= 0.5 and 6.5 < waits[1] <= 7.0
+    assert 0 < waits[2] <= 0.5 and 6.5 < waits[3] <= 7.0
+
+
+async def test_async_notification_wait_defaults_to_the_request_timeout(emulator: int) -> None:
+    # Regression: without a timeout the async waits never ended, although the
+    # docs (and the sync client) use the request timeout.
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=emulator, request_timeout=0.3)
+    try:
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            await asyncio.wait_for(client.receive_subscription_notification(), timeout=5)
+        with pytest.raises(S7TimeoutError):
+            await asyncio.wait_for(client.receive_alarm_notification(), timeout=5)
+        assert time.monotonic() - start < 4
+        assert client.connected
+    finally:
+        await client.disconnect()
+
+
+async def test_async_notification_timeout_and_per_call_timeout_take_precedence(emulator: int) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=emulator, request_timeout=30.0, notification_timeout=0.3)
+    try:
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            await asyncio.wait_for(client.receive_alarm_notification(), timeout=5)
+        with pytest.raises(S7TimeoutError):
+            await asyncio.wait_for(client.receive_subscription_notification(timeout=0.2), timeout=5)
+        assert time.monotonic() - start < 4
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("receiver", RECEIVERS)
+def test_sync_notification_wait_bounds_the_whole_call(receiver: str) -> None:
+    # Regression: the wait restarted with every frame, so a wait for one
+    # subscription never ended while another one kept notifying.
+    client = S7CommPlusClient()
+    _register(client._subscriptions, SUBSCRIPTION_A, SUBSCRIPTION_B)
+    frames = 0
+
+    def other_subscription(timeout: float) -> bytes:
+        nonlocal frames
+        frames += 1
+        assert frames < 200, "the wait never ended"
+        time.sleep(0.02)
+        return _data_notification(SUBSCRIPTION_B, frames)
+
+    connection = MagicMock()
+    connection.receive_notification.side_effect = other_subscription
+    client._connection = connection
+    start = time.monotonic()
+    with pytest.raises(S7TimeoutError):
+        if receiver == RECEIVERS[0]:
+            client.receive_subscription_notification(SUBSCRIPTION_A, timeout=0.3)
+        else:
+            client.receive_alarm_notification(timeout=0.3)
+    assert time.monotonic() - start < 3
+
+
+@pytest.mark.parametrize("receiver", RECEIVERS)
+async def test_async_notification_wait_bounds_the_whole_call(receiver: str) -> None:
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    _register(client._subscriptions, SUBSCRIPTION_A, SUBSCRIPTION_B)
+    frames = 0
+
+    async def other_subscription() -> bytes:
+        nonlocal frames
+        frames += 1
+        await asyncio.sleep(0.02)
+        return _data_notification(SUBSCRIPTION_B, frames)
+
+    client._recv_cotp_dt = other_subscription  # type: ignore[method-assign]
+    start = time.monotonic()
+    with pytest.raises(S7TimeoutError):
+        if receiver == RECEIVERS[0]:
+            await asyncio.wait_for(client.receive_subscription_notification(SUBSCRIPTION_A, timeout=0.3), timeout=5)
+        else:
+            await asyncio.wait_for(client.receive_alarm_notification(timeout=0.3), timeout=5)
+    assert time.monotonic() - start < 3
+    assert client.connected

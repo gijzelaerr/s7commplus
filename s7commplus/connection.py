@@ -1030,6 +1030,9 @@ class S7CommPlusConnection:
         # time.monotonic() deadline of the handshake while connect() runs it.
         self._request_timeout = 5.0
         self._handshake_deadline: Optional[float] = None
+        # Default wait in seconds for an unsolicited notification; None uses
+        # the request timeout.
+        self._notification_timeout: Optional[float] = None
         self._notification_frames: deque[bytes] = deque(maxlen=_MAX_QUEUED_NOTIFICATION_FRAMES)
         self._notification_frame_overflows = 0
         # Reentrant because integrity failures disconnect from inside a
@@ -1167,6 +1170,7 @@ class S7CommPlusConnection:
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         *,
         request_timeout: Optional[float] = None,
+        notification_timeout: Optional[float] = None,
         _session_key_fingerprint: Optional[str] = None,
     ) -> None:
         """Establish S7CommPlus connection.
@@ -1193,6 +1197,9 @@ class S7CommPlusConnection:
                 after step 4 (and for each further part of a multi-part
                 reply), or ``None`` to use ``timeout``. A reply that does not
                 arrive in time raises ``S7TimeoutError`` and closes the session.
+            notification_timeout: Default wait in seconds of
+                :meth:`receive_notification`, or ``None`` to use the request
+                timeout.
         """
         if self._legacy_s7_1500 and use_tls:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
@@ -1200,11 +1207,13 @@ class S7CommPlusConnection:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
         _check_timeout("timeout", timeout, optional=False)
         _check_timeout("request_timeout", request_timeout)
+        _check_timeout("notification_timeout", notification_timeout)
         self._session_key_refresh_interval = legacy_session_key_refresh_interval
         self._session_key_refresh_error = None
         self._connect_password = password
         self._session_key_fingerprint_override = _session_key_fingerprint
         self._request_timeout = timeout if request_timeout is None else request_timeout
+        self._notification_timeout = notification_timeout
         try:
             # Steps 1-4 share one deadline: the connect timeout bounds the
             # TCP connect and the whole handshake, as in the async client.
@@ -1881,7 +1890,7 @@ class S7CommPlusConnection:
         except (IndexError, ValueError, S7ConnectionError, S7ProtocolError):
             return False
 
-    def receive_notification(self) -> bytes:
+    def receive_notification(self, timeout: Optional[float] = None) -> bytes:
         """Receive one unsolicited S7CommPlus notification frame.
 
         Notifications observed while waiting for a request response are queued,
@@ -1889,15 +1898,25 @@ class S7CommPlusConnection:
         method must not run concurrently with :meth:`send_request` because both
         consume the same connection stream.
 
-        The wait is bounded by the request timeout. When it runs out before any
-        byte of a frame arrived, ``S7TimeoutError`` is raised and the session
-        stays usable; a frame cut off part-way closes the session.
+        Args:
+            timeout: Seconds to wait for the frame, or ``None`` for the
+                ``notification_timeout`` passed to :meth:`connect`, else the
+                request timeout.
+
+        Raises:
+            S7TimeoutError: The wait ran out. When no byte of a frame had
+                arrived the session stays usable; a frame cut off part-way
+                closes it.
         """
+        _check_timeout("timeout", timeout)
         if not self._connected:
             from .error import S7ConnectionError
 
             raise S7ConnectionError("Not connected")
-        frame = self._notification_frames.popleft() if self._notification_frames else self._recv_s7_data(idle_ok=True)
+        if self._notification_frames:
+            frame = self._notification_frames.popleft()
+        else:
+            frame = self._recv_s7_data(self._notification_wait(timeout), idle_ok=True)
         data = self._verified_incoming_data(frame)
         if not data or data[0] != Opcode.NOTIFICATION:
             from .error import S7ConnectionError
@@ -2433,6 +2452,14 @@ class S7CommPlusConnection:
             self._tls_flush_outgoing()
         else:
             self._iso_conn.send_data(data)
+
+    def _notification_wait(self, timeout: Optional[float]) -> float:
+        """Seconds a notification wait may take: per call, else notification_timeout, else the request timeout."""
+        if timeout is not None:
+            return timeout
+        if self._notification_timeout is not None:
+            return self._notification_timeout
+        return self._request_timeout
 
     def _receive_timeout(self) -> float:
         """Seconds the next frame may take: what is left of the handshake, else the request timeout."""

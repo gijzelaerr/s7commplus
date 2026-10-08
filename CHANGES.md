@@ -23,6 +23,12 @@ CHANGES
   `ValueError`. The async client now bounds the connect, the handshake, every
   reply and every send, so a silent PLC raises `S7TimeoutError` instead of
   hanging an `await`, and it tunes TCP keepalive like the sync client.
+* `connect()` on both clients also takes the keyword-only
+  `notification_timeout`, the default wait of the notification receivers
+  (default: the request timeout); `S7CommPlusConnection.connect()` takes it by
+  keyword. The sync `receive_subscription_notification()` and
+  `receive_alarm_notification()` gain the per-call `timeout` the async ones
+  have, and `S7CommPlusConnection.receive_notification()` takes one too.
 
 ### Behaviour changes
 
@@ -30,6 +36,20 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* An async notification wait (`receive_subscription_notification()`,
+  `receive_alarm_notification()`, `AsyncSubscriptionQueue.get()`) without a
+  `timeout` used to wait forever; it now ends after `notification_timeout`,
+  else the request timeout (5 s by default), as in the sync client. In both
+  clients a notification wait now bounds the whole call rather than each
+  frame, so notifications for other subscriptions no longer extend it.
+  PLCSIM Advanced (V8.0, CPU 1511, FW V2.9; not checked on hardware) sends a
+  notification every subscription cycle even without changes, so an active
+  subscription with a short cycle does not run into the default. Upgrade
+  note: an expired async notification wait raises `S7TimeoutError` instead of
+  `asyncio.TimeoutError`, so catch `S7TimeoutError`; pass a larger
+  `notification_timeout` to `connect()` for long cycles or alarm waits. A
+  per-call `timeout` that is zero, negative or not finite now raises
+  `ValueError`, as the connect timeouts do.
 
 ### Bug fixes and hardening
 

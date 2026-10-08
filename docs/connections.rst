@@ -185,7 +185,7 @@ authentication material.
 Timeouts
 --------
 
-``connect()`` takes two timeouts in seconds, by keyword:
+``connect()`` takes three timeouts in seconds, by keyword:
 
 ``timeout`` (default 5)
    bounds the TCP connect and the COTP, InitSSL, TLS and CreateObject
@@ -194,10 +194,26 @@ Timeouts
    bounds the wait for each reply once the handshake is done, and for each
    further part of a multi-part reply. Raise it for a PLC that is slow on long
    answers.
+``notification_timeout`` (default: the request timeout)
+   bounds a wait for subscription data or alarms.
 
 .. code-block:: python
 
    client.connect("192.168.1.10", timeout=5.0, request_timeout=15.0)
+
+``receive_subscription_notification()`` and ``receive_alarm_notification()``
+also take a per-call ``timeout`` that overrides ``notification_timeout``. The
+wait bounds the whole call: notifications for other subscriptions that arrive
+meanwhile are queued for them and do not extend it. When it runs out, both
+clients raise ``S7TimeoutError``. PLCSIM Advanced (V8.0, CPU 1511, FW V2.9;
+not checked on hardware) sends a notification every subscription cycle even
+when no value changed, so an active subscription with a cycle shorter than the
+wait does not run into it. Raise ``notification_timeout`` for longer cycles,
+or for alarms, which arrive only when one changes:
+
+.. code-block:: python
+
+   await client.connect("192.168.1.10", notification_timeout=3600.0)
 
 A timeout that is zero, negative or not finite raises ``ValueError``. The
 asyncio client bounds every network wait the same way, including a send that
@@ -218,9 +234,7 @@ What a timeout leaves of the session depends on where it struck:
   In the asyncio client this includes a read cancelled from outside, for
   example by ``asyncio.wait_for()`` around a call.
 * A notification wait that runs out before any byte of the next frame arrived
-  is clean: the session stays usable. The synchronous receivers wait for the
-  request timeout and raise ``S7TimeoutError``; the asyncio receivers wait for
-  their ``timeout`` argument, if given, and raise ``asyncio.TimeoutError``.
+  is clean: the session stays usable.
 
 Troubleshooting
 ---------------

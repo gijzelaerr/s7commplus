@@ -61,7 +61,8 @@ old ID to its new one (fetch queues and iterators again for the new IDs), and
 example because a tag was renamed. Those stay pending, so another call retries
 them, and ``forget_lost_subscriptions()`` drops them. Notifications from the
 gap are not replayed, and alarm subscriptions are not restored. The
-synchronous receiver blocks; arrange cancellation by closing the connection.
+synchronous receiver blocks until a notification arrives or its timeout runs
+out (see :doc:`connections`).
 
 .. code-block:: python
 
@@ -104,11 +105,13 @@ Alarm notifications
    finally:
        client.delete_alarm_subscription(subscription_id)
 
-The asyncio alarm receiver additionally accepts a timeout:
+Both alarm receivers take a per-call ``timeout`` in seconds; without one they
+wait for the ``notification_timeout`` passed to ``connect()``, else the request
+timeout, and raise ``S7TimeoutError`` when it runs out:
 
 .. code-block:: python
 
-   notification = await client.receive_alarm_notification(timeout=10.0)
+   notification = client.receive_alarm_notification(timeout=600.0)
 
 Alarm and data notifications are routed to their respective receivers when
 the client encounters them on the same connection. Keep one active receive

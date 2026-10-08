@@ -9,6 +9,7 @@ import hmac
 import logging
 import ssl
 import struct
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Awaitable, Callable, Optional, TypeVar
@@ -183,6 +184,7 @@ class S7CommPlusAsyncClient:
         self._protocol_version: int = 0
         self._transport_connected = False
         self._request_timeout = 5.0
+        self._notification_timeout: Optional[float] = None
         # True while part of a message (a frame, or a reply still missing
         # fragments) has been read: a wait cut short then closes the session.
         self._rx_partial = False
@@ -344,6 +346,7 @@ class S7CommPlusAsyncClient:
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         timeout: float = 5.0,
         request_timeout: Optional[float] = None,
+        notification_timeout: Optional[float] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
     ) -> None:
@@ -373,6 +376,9 @@ class S7CommPlusAsyncClient:
                 ``timeout``. Running out raises ``S7TimeoutError`` and closes
                 the session, as its state is then unknown; ``connected`` turns
                 ``False``.
+            notification_timeout: Seconds a notification receiver waits by
+                default (subscriptions and alarms), or ``None`` to use the
+                request timeout.
             legacy_s7_1500: Override the non-TLS V1 SessionKey profile (structured
                 browse, V2 object qualifier, trailing IntegrityId, chained fragment
                 HMAC). ``None`` (default) selects it automatically for every V1
@@ -394,6 +400,7 @@ class S7CommPlusAsyncClient:
         remote_tsap_for_connection_type(connection_type)  # validate early
         _check_timeout("timeout", timeout, optional=False)
         _check_timeout("request_timeout", request_timeout)
+        _check_timeout("notification_timeout", notification_timeout)
         self._symbol_catalog = None
         self._connect_params = {
             "host": host,
@@ -409,6 +416,7 @@ class S7CommPlusAsyncClient:
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
             "timeout": timeout,
             "request_timeout": request_timeout,
+            "notification_timeout": notification_timeout,
             "legacy_s7_1500": legacy_s7_1500,
             "connection_type": connection_type,
         }
@@ -480,6 +488,7 @@ class S7CommPlusAsyncClient:
         self._session_key_refresh_error = None
         self._session_key_fingerprint_override = fingerprint
         self._request_timeout = p["timeout"] if p["request_timeout"] is None else p["request_timeout"]
+        self._notification_timeout = p["notification_timeout"]
 
         # TCP connect and steps 1-4 share one deadline: the connect timeout
         # bounds the TCP connect and the whole handshake, as in the sync client.
@@ -1188,7 +1197,16 @@ class S7CommPlusAsyncClient:
     async def receive_subscription_notification(
         self, subscription_id: int | None = None, timeout: Optional[float] = None
     ) -> SubscriptionNotification:
-        """Wait for one routed data notification."""
+        """Wait for one routed data notification.
+
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
+        """
+        _check_timeout("timeout", timeout)
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         if subscription_id is not None:
             queued = self._subscriptions.pop(subscription_id)
             if queued is not None:
@@ -1200,7 +1218,7 @@ class S7CommPlusAsyncClient:
                 if self._notification_frames:
                     frame = self._notification_frames.popleft()
                 else:
-                    frame = await self._recv_notification_frame(timeout)
+                    frame = await self._recv_notification_frame(deadline, wait)
                 await self._verified_incoming_data(frame)
             frame_subscription_id = notification_subscription_id(frame)
             if frame_subscription_id in self._alarm_subscription_ids:
@@ -1333,10 +1351,17 @@ class S7CommPlusAsyncClient:
     async def receive_alarm_notification(
         self, language_ids: Optional[list[LanguageId | int]] = None, timeout: Optional[float] = None
     ) -> AlarmNotification:
-        """Wait for one alarm notification, optionally with a timeout in seconds.
+        """Wait for one alarm notification.
 
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
         Data notifications encountered first are routed to their bounded queues.
         """
+        _check_timeout("timeout", timeout)
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         while True:
             if self._alarm_notification_frames:
                 frame = self._alarm_notification_frames.popleft()
@@ -1347,7 +1372,7 @@ class S7CommPlusAsyncClient:
                     if self._notification_frames:
                         frame = self._notification_frames.popleft()
                     else:
-                        frame = await self._recv_notification_frame(timeout)
+                        frame = await self._recv_notification_frame(deadline, wait)
                     await self._verified_incoming_data(frame)
             frame_subscription_id = notification_subscription_id(frame)
             if self._subscriptions.contains(frame_subscription_id):
@@ -1358,19 +1383,25 @@ class S7CommPlusAsyncClient:
                 continue
             return parse_alarm_notification(frame, language_ids)
 
-    async def _recv_notification_frame(self, timeout: Optional[float]) -> bytes:
-        """Receive one unsolicited frame within ``timeout`` seconds (``None``: no limit).
+    def _notification_wait(self, timeout: Optional[float]) -> float:
+        """Seconds a notification wait may take: per call, else notification_timeout, else the request timeout."""
+        if timeout is not None:
+            return timeout
+        if self._notification_timeout is not None:
+            return self._notification_timeout
+        return self._request_timeout
+
+    async def _recv_notification_frame(self, deadline: float, wait: float) -> bytes:
+        """Receive one unsolicited frame by ``deadline`` (``time.monotonic()``), else raise S7TimeoutError.
 
         A wait that runs out before any byte of the frame was read keeps the
-        session; one cut off part-way closes it. Either raises
-        ``asyncio.TimeoutError``.
+        session; one cut off part-way closes it.
         """
-        try:
-            return await self._receive_bounded(
-                self._recv_cotp_dt(), timeout, f"No notification from the PLC within {timeout}s", idle_ok=True
-            )
-        except S7TimeoutError as exc:
-            raise asyncio.TimeoutError(str(exc)) from exc
+        message = f"No notification from the PLC within {wait}s"
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise S7TimeoutError(message)
+        return await self._receive_bounded(self._recv_cotp_dt(), left, message, idle_ok=True)
 
     async def read_alarms(self, language_ids: Optional[list[LanguageId | int]] = None) -> list[Alarm]:
         """Return a snapshot of the PLC's active alarms without consuming notifications."""
@@ -1758,10 +1789,8 @@ class S7CommPlusAsyncClient:
             await self._invalidate_integrity_failure()
             raise
 
-    async def _receive_bounded(
-        self, receive: Awaitable[_T], timeout: Optional[float], message: str, *, idle_ok: bool = False
-    ) -> _T:
-        """Await one receive for at most ``timeout`` seconds (``None``: no limit).
+    async def _receive_bounded(self, receive: Awaitable[_T], timeout: float, message: str, *, idle_ok: bool = False) -> _T:
+        """Await one receive for at most ``timeout`` seconds.
 
         A reply that does not arrive in time leaves the session in an unknown
         state, so the session is closed (see :meth:`_connection_lost`) before
@@ -1773,8 +1802,6 @@ class S7CommPlusAsyncClient:
         message.
         """
         try:
-            if timeout is None:
-                return await receive
             return await asyncio.wait_for(receive, timeout)
         except asyncio.TimeoutError as exc:
             if not idle_ok or self._rx_partial:
