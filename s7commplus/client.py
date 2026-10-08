@@ -32,7 +32,12 @@ from .codec import (
     parse_create_object_session_id,
 )
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
-from .connection import FamilyOnlyFingerprintError, S7CommPlusConnection, SessionKeyCandidateRejectedError
+from .connection import (
+    FamilyOnlyFingerprintError,
+    S7CommPlusConnection,
+    SessionKeyCandidateRejectedError,
+    _check_certificate_pin,
+)
 from .protocol import (
     DataType,
     ElementID,
@@ -187,6 +192,7 @@ class S7CommPlusClient:
         allow_legacy_key_fallback: bool = True,
         legacy_session_key_refresh_interval: Optional[float] = 25 * 60.0,
         *,
+        tls_cert_fingerprint: Optional[str] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
     ) -> None:
@@ -201,6 +207,11 @@ class S7CommPlusClient:
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
+            tls_cert_fingerprint: Expected SHA-256 fingerprint of the PLC's TLS
+                certificate, as hex (``:``/``-``/spaces allowed). Refuses the
+                connection unless the PLC presents that exact certificate; use it
+                instead of ``tls_ca`` for a self-signed PLC certificate. Requires
+                ``use_tls=True``: a pin is never used on a plaintext connection.
             password: PLC password for legitimation (V2+ with TLS)
             allow_legacy_key_fallback: Try known same-family public keys on
                 fresh sessions when a legacy PLC omits its key id.
@@ -222,6 +233,7 @@ class S7CommPlusClient:
         """
         if legacy_s7_1500 and use_tls:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
+        _check_certificate_pin(tls_cert_fingerprint, use_tls)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
         self._symbol_catalog = None
         self._connect_params = {
@@ -231,6 +243,7 @@ class S7CommPlusClient:
             "tls_cert": tls_cert,
             "tls_key": tls_key,
             "tls_ca": tls_ca,
+            "tls_cert_fingerprint": tls_cert_fingerprint,
             "password": password,
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
@@ -283,6 +296,7 @@ class S7CommPlusClient:
             tls_cert=p["tls_cert"],
             tls_key=p["tls_key"],
             tls_ca=p["tls_ca"],
+            tls_cert_fingerprint=p["tls_cert_fingerprint"],
             password=p["password"] or "",
             legacy_session_key_refresh_interval=p["legacy_session_key_refresh_interval"],
             _session_key_fingerprint=fingerprint,
@@ -354,6 +368,16 @@ class S7CommPlusClient:
             self._connection = None
         self._connect_params = None
         self._symbol_catalog = None
+
+    def peer_certificate_fingerprint(self) -> Optional[bytes]:
+        """SHA-256 of the PLC's TLS certificate, or None without TLS.
+
+        The raw 32-byte digest; ``.hex()`` gives the hex string that
+        ``tls_cert_fingerprint`` takes.
+        """
+        if self._connection is None:
+            return None
+        return self._connection.peer_certificate_fingerprint()
 
     def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block.

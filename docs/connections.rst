@@ -152,6 +152,33 @@ TLS records are carried inside COTP data frames by the library. Wrapping the
 TCP socket in a conventional TLS socket is not equivalent and will encrypt the
 wrong protocol layer.
 
+Certificate pinning
+~~~~~~~~~~~~~~~~~~~
+
+PLC certificates are usually self-signed, so a CA file is often unavailable. Pin
+the exact certificate instead with ``tls_cert_fingerprint`` — the SHA-256
+fingerprint as hex (``:``, ``-`` and whitespace are ignored, and the whole
+``sha256 Fingerprint=...`` line ``openssl x509 -noout -fingerprint -sha256``
+prints is accepted):
+
+.. code-block:: python
+
+   client.connect(
+       "192.168.1.10",
+       use_tls=True,
+       tls_cert_fingerprint="AA:BB:CC:...",  # openssl x509 -fingerprint -sha256
+   )
+
+The connection is refused unless the certificate the PLC presents matches, with
+:class:`~s7commplus.error.S7CertificateError`. Read the presented fingerprint
+back with ``client.peer_certificate_fingerprint()`` (the raw 32-byte digest;
+``.hex()`` gives the hex form to pin). Supplying ``tls_ca`` *and*
+``tls_cert_fingerprint`` requires both the chain and the pin to match. A
+fingerprint without ``use_tls=True`` is refused with ``ValueError`` before
+anything is sent, so a pinned certificate is never used on a plaintext
+connection. The pin is checked right after the TLS handshake, before the session
+is created or a password is sent.
+
 Password authentication
 -----------------------
 
