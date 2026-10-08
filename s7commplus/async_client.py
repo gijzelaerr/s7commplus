@@ -9,6 +9,7 @@ import hmac
 import logging
 import ssl
 import struct
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Awaitable, Callable, Optional, TypeVar
@@ -18,6 +19,7 @@ from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
 from . import typeinfo
 from .blob_decompressor import find_and_decompress
 from .client import (
+    _AUTO_REFRESH_MIN_INTERVAL,
     _block_signature,
     _type_info_times,
     _LEGACY_KEY_CACHE,
@@ -194,6 +196,12 @@ class S7CommPlusAsyncClient:
         # of each data block whose time the PLC reported.
         self._block_layout_signature: Optional[list[tuple[str, int, int]]] = None
         self._type_info_times: dict[int, bytes] = {}
+        # Opt-in: an unknown tag name, or a failed item in read_tags(), runs that
+        # check (once per call, at most every _AUTO_REFRESH_MIN_INTERVAL seconds)
+        # and, if the program changed, resolves and reads again. Writes that reached
+        # the PLC are never resent.
+        self.auto_refresh_tags: bool = False
+        self._last_auto_refresh_check: Optional[float] = None
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
@@ -1437,18 +1445,59 @@ class S7CommPlusAsyncClient:
         return result.value
 
     async def read_tags(self, names: Sequence[str]) -> list[TagResult]:
-        """Read names in one request and return a success/error for every item."""
+        """Read names in one request and return a success/error for every item.
+
+        With ``auto_refresh_tags`` set, an unknown name or a failed item runs
+        :meth:`refresh_caches_if_program_changed` and, when the program did
+        change, resolves and reads the names again, once. The check runs at
+        most once per call, not when this call browsed the catalog itself, and
+        not within 10 seconds of the previous automatic check. A failed item
+        carries no PLC error code, so any failure triggers it; a name still
+        unknown afterwards raises ``KeyError``.
+        """
         if not names:
             return []
-        tags = [await self.resolve_tag(name) for name in names]
+        tags, may_check = await self._resolve_tags(names)
+        results = await self._read_resolved_tags(tags)
+        if may_check and any(result.error is not None for result in results) and await self._auto_refresh_check():
+            results = await self._read_resolved_tags([await self.resolve_tag(name) for name in names])
+        return results
+
+    async def _resolve_tags(self, names: Sequence[str]) -> tuple[list[SymbolicTag], bool]:
+        """Resolve names; with ``auto_refresh_tags``, an unknown name checks for a program change.
+
+        Also returns whether the caller may still run an automatic check: not
+        after one ran here, and not when resolving browsed the catalog, which is
+        then current.
+        """
+        may_check = bool(self._symbol_catalog)  # resolve_tag() browses a missing or empty catalog
+        try:
+            return [await self.resolve_tag(name) for name in names], may_check
+        except KeyError:
+            if not (may_check and await self._auto_refresh_check()):
+                raise
+        return [await self.resolve_tag(name) for name in names], False
+
+    async def _auto_refresh_check(self) -> bool:
+        """Run the automatic program-change check, unless one ran recently; ``True`` if it refreshed."""
+        if not self.auto_refresh_tags:
+            return False
+        now = time.monotonic()
+        last = self._last_auto_refresh_check
+        if last is not None and now - last < _AUTO_REFRESH_MIN_INTERVAL:
+            logger.debug("Skipping the automatic program-change check; the last one ran %.1f s ago", now - last)
+            return False
+        self._last_auto_refresh_check = now
+        return await self.refresh_caches_if_program_changed()
+
+    async def _read_resolved_tags(self, tags: Sequence[SymbolicTag]) -> list[TagResult]:
         values = await self.read_symbolic_multi([(tag.access_area, list(tag.lids), 0) for tag in tags])
-        results = [
+        return [
             TagResult(tag=tag, value=value)
             if value is not None
             else TagResult(tag=tag, error=RuntimeError(f"Symbolic read failed for {tag.name!r}"))
             for tag, value in zip(tags, values)
         ]
-        return results
 
     async def write_tag(self, name: str, data: bytes) -> None:
         """Write one symbolic tag by name using its resolved PValue datatype."""
@@ -1457,12 +1506,18 @@ class S7CommPlusAsyncClient:
             raise result.error
 
     async def write_tags(self, values: Mapping[str, bytes]) -> list[TagResult]:
-        """Write names once and return per-item results without automatic retry."""
+        """Write names once and return per-item results without automatic retry.
+
+        With ``auto_refresh_tags`` set, an unknown name, before anything is sent,
+        runs the program-change check as in :meth:`read_tags`; a write to a stale
+        address does not, so call :meth:`refresh_caches_if_program_changed` before
+        writing after a possible download.
+        """
         if not self._connected:
             raise RuntimeError("Not connected")
         if not values:
             return []
-        tags = [await self.resolve_tag(name) for name in values]
+        tags, _ = await self._resolve_tags(list(values))
         unsupported = [tag.name for tag in tags if tag.datatype is None]
         if unsupported:
             raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")

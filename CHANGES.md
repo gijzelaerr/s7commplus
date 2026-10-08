@@ -24,6 +24,12 @@ CHANGES
   the time can go unnoticed. Call it before writing after a possible download.
   The modification time was seen only on PLCSIM Advanced V8.0 (CPU 1511,
   FW V2.9).
+* Setting `auto_refresh_tags = True` (both clients, opt-in) runs that check when
+  a tag read reports a failed item or a name is unknown and, if the program
+  changed, resolves and reads the names again, once. It checks at most once per
+  call and once every 10 seconds, so a tag that keeps failing or a misspelt name
+  does not add 1 + N requests to every poll. A write that reached the PLC is
+  never resent, and a write to a stale address does not trigger the check.
 
 ### Behaviour changes
 

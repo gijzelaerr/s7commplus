@@ -123,8 +123,9 @@ browse immediately or ``invalidate_tag_catalog`` to force a browse on the next
 name lookup. Named reads and writes send SymbolCRC 0, which disables the PLC's
 layout check: the ``symbol_crc`` reported by a browse is per-entry type
 metadata, not the access-path CRC the PLC validates, and real CPUs reject it.
-Failed items are reported per tag and never retried automatically; after a
-download that changes the PLC layout, call ``refresh_tag_catalog``. Unknown
+Failed items are reported per tag and not retried automatically unless
+``auto_refresh_tags`` is set (see below); after a download that changes the PLC
+layout, call ``refresh_tag_catalog``. Unknown
 names and unsupported PLC datatypes raise before a request is sent.
 
 ``refresh_caches_if_program_changed()`` checks before rebuilding: it compares the
@@ -145,6 +146,17 @@ stale address is used; it does not close it:
 So call ``refresh_tag_catalog()`` after a known download, and
 ``refresh_caches_if_program_changed()`` before writing after a possible one: a
 write to a stale address can succeed on whatever variable is there now.
+
+Set ``client.auto_refresh_tags = True`` to run that check automatically when a
+tag read reports a failed item or a name is not in the catalog. If the program
+changed, the client rebuilds the catalog and resolves and reads the names again,
+once. The check runs at most once per call, not when the call has just browsed
+the catalog, and not within 10 seconds of the previous automatic check, so a tag
+that keeps failing or a misspelt name does not add 1 + N requests (N data
+blocks) to every poll. A failed read carries no PLC error code, so any failure
+triggers it. A write that reached the PLC is never resent, because a stale
+address may already have written another variable; only an unknown name, before
+anything is sent, is re-resolved.
 
 The async client provides the same methods as coroutines, except
 ``invalidate_tag_catalog``, which is immediate:

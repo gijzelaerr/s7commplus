@@ -10,12 +10,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import s7commplus.async_client as async_client_module
+import s7commplus.client as client_module
 from s7commplus import typeinfo
 from s7commplus.async_client import S7CommPlusAsyncClient
-from s7commplus.client import S7CommPlusClient, _block_signature, _type_info_times
+from s7commplus.catalog import SymbolicTag
+from s7commplus.client import _AUTO_REFRESH_MIN_INTERVAL, S7CommPlusClient, _block_signature, _type_info_times
 from s7commplus.error import S7ConnectionError
-from s7commplus.protocol import DataType, Ids
+from s7commplus.protocol import DataType, Ids, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
+from s7commplus.typeinfo import Softdatatype
 from s7commplus.vlq import encode_uint32_vlq, encode_uint64_vlq
 from tests.conftest import get_free_tcp_port
 
@@ -387,3 +391,242 @@ async def test_emulator_async_check_finds_a_new_data_block(emulator: tuple[S7Com
         assert await client._read_type_info_time(TI_RID) is None
     finally:
         await client.disconnect()
+
+
+# --- auto_refresh_tags: reload on a failed read or an unknown name ---------------------------
+
+# A SetMultiVariables response that rejects item 1.
+WRITE_REJECTED = encode_uint64_vlq(0) + encode_uint32_vlq(1) + encode_uint64_vlq(0xDEAD) + encode_uint32_vlq(0)
+
+
+def _tag(name: str, lid: int = 1) -> SymbolicTag:
+    return SymbolicTag(name, 0x8A0E0001, (lid,), Softdatatype.INT, DataType.INT)
+
+
+def _catalog(known: set[str]) -> MagicMock:
+    """A catalog that resolves the names in ``known`` (a set the test may grow)."""
+
+    def resolve(name: str) -> SymbolicTag:
+        if name not in known:
+            raise KeyError(name)
+        return _tag(name)
+
+    catalog = MagicMock()
+    catalog.resolve.side_effect = resolve
+    return catalog
+
+
+def _reading_client(values: list[list[bytes | None]], changed: bool, known: set[str] | None = None) -> S7CommPlusClient:
+    client = S7CommPlusClient()
+    client._connection = MagicMock(protocol_version=ProtocolVersion.V2)
+    client._symbol_catalog = _catalog(known if known is not None else {"DB1.a", "DB1.b"})
+    client.read_symbolic_multi = MagicMock(side_effect=values)  # type: ignore[method-assign]
+    client.refresh_caches_if_program_changed = MagicMock(return_value=changed)  # type: ignore[method-assign]
+    return client
+
+
+def _async_reading_client(
+    values: list[list[bytes | None]], changed: bool, known: set[str] | None = None
+) -> S7CommPlusAsyncClient:
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    client._protocol_version = ProtocolVersion.V2
+    client._symbol_catalog = _catalog(known if known is not None else {"DB1.a", "DB1.b"})
+    client.read_symbolic_multi = AsyncMock(side_effect=values)  # type: ignore[method-assign]
+    client.refresh_caches_if_program_changed = AsyncMock(return_value=changed)  # type: ignore[method-assign]
+    return client
+
+
+def _learn_on_refresh(known: set[str], name: str) -> Any:
+    """A refresh_caches_if_program_changed() stand-in whose refresh makes ``name`` known."""
+
+    def refresh() -> bool:
+        known.add(name)
+        return True
+
+    return refresh
+
+
+def test_failed_read_is_not_retried_by_default() -> None:
+    client = _reading_client([[None]], changed=True)
+
+    assert client.read_tags(["DB1.a"])[0].error is not None
+    client.refresh_caches_if_program_changed.assert_not_called()
+
+
+def test_auto_refresh_rereads_once_after_a_program_change() -> None:
+    client = _reading_client([[None, b"\x00\x01"], [b"\x00\x02", b"\x00\x01"]], changed=True)
+    client.auto_refresh_tags = True
+
+    results = client.read_tags(["DB1.a", "DB1.b"])
+
+    assert [result.value for result in results] == [b"\x00\x02", b"\x00\x01"]
+    assert client.read_symbolic_multi.call_count == 2
+    client.refresh_caches_if_program_changed.assert_called_once()
+
+
+def test_auto_refresh_reports_the_error_when_the_program_did_not_change() -> None:
+    client = _reading_client([[None]], changed=False)
+    client.auto_refresh_tags = True
+
+    assert client.read_tags(["DB1.a"])[0].error is not None
+    assert client.read_symbolic_multi.call_count == 1
+    client.refresh_caches_if_program_changed.assert_called_once()
+
+
+def test_auto_refresh_does_not_check_when_every_read_succeeds() -> None:
+    client = _reading_client([[b"\x00\x01"]], changed=True)
+    client.auto_refresh_tags = True
+
+    client.read_tags(["DB1.a"])
+    client.refresh_caches_if_program_changed.assert_not_called()
+
+
+def test_unknown_name_resolves_after_a_program_change() -> None:
+    known = {"DB1.a"}
+    client = _reading_client([[b"\x00\x01"]], changed=True, known=known)
+    with pytest.raises(KeyError):
+        client.read_tags(["DB1.new"])  # flag off: the KeyError propagates
+    client.refresh_caches_if_program_changed.assert_not_called()
+
+    client.auto_refresh_tags = True
+    client.refresh_caches_if_program_changed.side_effect = _learn_on_refresh(known, "DB1.new")
+    assert client.read_tags(["DB1.new"])[0].value == b"\x00\x01"
+
+
+@pytest.mark.asyncio
+async def test_async_unknown_name_resolves_after_a_program_change() -> None:
+    known = {"DB1.a"}
+    client = _async_reading_client([[b"\x00\x01"]], changed=True, known=known)
+    with pytest.raises(KeyError):
+        await client.read_tags(["DB1.new"])
+    client.refresh_caches_if_program_changed.assert_not_awaited()
+
+    client.auto_refresh_tags = True
+    client.refresh_caches_if_program_changed.side_effect = _learn_on_refresh(known, "DB1.new")
+    assert (await client.read_tags(["DB1.new"]))[0].value == b"\x00\x01"
+    client.refresh_caches_if_program_changed.assert_awaited_once()
+
+
+def test_no_check_when_the_call_browsed_the_catalog_itself() -> None:
+    client = _reading_client([], changed=True)
+    client.auto_refresh_tags = True
+    client._symbol_catalog = None
+    client.refresh_tag_catalog = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda: setattr(client, "_symbol_catalog", _catalog(set())) or client._symbol_catalog
+    )
+
+    with pytest.raises(KeyError):
+        client.read_tags(["DB1.typo"])  # the catalog is fresh, so a check cannot help
+    client.refresh_caches_if_program_changed.assert_not_called()
+
+
+def test_auto_refresh_checks_at_most_once_per_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An unknown name checks (and refreshes); the read of it then fails, which must not check again.
+    monkeypatch.setattr(client_module, "_AUTO_REFRESH_MIN_INTERVAL", 0.0)  # isolate the per-call limit
+    known = {"DB1.a"}
+    client = _reading_client([[None]], changed=True, known=known)
+    client.refresh_caches_if_program_changed.side_effect = _learn_on_refresh(known, "DB1.new")
+    client.auto_refresh_tags = True
+
+    assert client.read_tags(["DB1.new"])[0].error is not None
+    client.refresh_caches_if_program_changed.assert_called_once()
+    client.read_symbolic_multi.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_auto_refresh_checks_at_most_once_per_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(async_client_module, "_AUTO_REFRESH_MIN_INTERVAL", 0.0)
+    known = {"DB1.a"}
+    client = _async_reading_client([[None]], changed=True, known=known)
+    client.refresh_caches_if_program_changed.side_effect = _learn_on_refresh(known, "DB1.new")
+    client.auto_refresh_tags = True
+
+    assert (await client.read_tags(["DB1.new"]))[0].error is not None
+    client.refresh_caches_if_program_changed.assert_awaited_once()
+    client.read_symbolic_multi.assert_awaited_once()
+
+
+def test_automatic_checks_are_rate_limited() -> None:
+    # A tag that keeps failing, or a misspelt name, must not cost a check on every poll.
+    client = _reading_client([[None]] * 3, changed=False)
+    client.auto_refresh_tags = True
+
+    assert client.read_tags(["DB1.a"])[0].error is not None
+    assert client.read_tags(["DB1.a"])[0].error is not None
+    with pytest.raises(KeyError):
+        client.read_tags(["DB1.typo"])
+    client.refresh_caches_if_program_changed.assert_called_once()
+
+    assert client._last_auto_refresh_check is not None
+    client._last_auto_refresh_check -= _AUTO_REFRESH_MIN_INTERVAL  # the interval has passed
+    assert client.read_tags(["DB1.a"])[0].error is not None
+    assert client.refresh_caches_if_program_changed.call_count == 2
+    assert client.read_symbolic_multi.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_async_automatic_checks_are_rate_limited() -> None:
+    client = _async_reading_client([[None]] * 3, changed=False)
+    client.auto_refresh_tags = True
+
+    assert (await client.read_tags(["DB1.a"]))[0].error is not None
+    assert (await client.read_tags(["DB1.a"]))[0].error is not None
+    with pytest.raises(KeyError):
+        await client.read_tags(["DB1.typo"])
+    client.refresh_caches_if_program_changed.assert_awaited_once()
+
+    assert client._last_auto_refresh_check is not None
+    client._last_auto_refresh_check -= _AUTO_REFRESH_MIN_INTERVAL
+    assert (await client.read_tags(["DB1.a"]))[0].error is not None
+    assert client.refresh_caches_if_program_changed.await_count == 2
+
+
+def test_failed_write_is_never_resent() -> None:
+    client = _reading_client([], changed=True)
+    client.auto_refresh_tags = True
+    connection = client._connection
+    assert isinstance(connection, MagicMock)
+    connection.send_request.return_value = WRITE_REJECTED
+
+    results = client.write_tags({"DB1.a": b"\x00\x01"})
+
+    assert results[0].error is not None
+    connection.send_request.assert_called_once()
+    client.refresh_caches_if_program_changed.assert_not_called()
+
+
+def test_write_of_an_unknown_name_is_resolved_before_it_is_sent() -> None:
+    known = {"DB1.a"}
+    client = _reading_client([], changed=True, known=known)
+    client.refresh_caches_if_program_changed.side_effect = _learn_on_refresh(known, "DB1.new")
+    client.auto_refresh_tags = True
+    connection = client._connection
+    assert isinstance(connection, MagicMock)
+    connection.send_request.return_value = encode_uint64_vlq(0) + encode_uint32_vlq(0)
+
+    assert client.write_tags({"DB1.new": b"\x00\x01"})[0].success
+    connection.send_request.assert_called_once()
+    client.refresh_caches_if_program_changed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_failed_write_is_never_resent() -> None:
+    client = _async_reading_client([], changed=True)
+    client.auto_refresh_tags = True
+    client._send_request = AsyncMock(return_value=WRITE_REJECTED)  # type: ignore[method-assign]
+
+    results = await client.write_tags({"DB1.a": b"\x00\x01"})
+
+    assert results[0].error is not None
+    client._send_request.assert_awaited_once()
+    client.refresh_caches_if_program_changed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_auto_refresh_rereads_once_after_a_program_change() -> None:
+    client = _async_reading_client([[None], [b"\x00\x02"]], changed=True)
+    client.auto_refresh_tags = True
+
+    assert (await client.read_tags(["DB1.a"]))[0].value == b"\x00\x02"
+    client.refresh_caches_if_program_changed.assert_awaited_once()
