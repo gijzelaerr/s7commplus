@@ -14,6 +14,24 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `Client.connect()` and `AsyncClient.connect()` take the keyword-only
+  `timeout` (the TCP connect and the COTP, InitSSL, TLS and CreateObject
+  handshake together; 5 s by default, as before), `request_timeout` (the
+  wait for each reply, and for each further part of a multi-part reply;
+  default `timeout`) and `explore_timeout` (the same for the reply to an
+  EXPLORE; default 30 s, `None` for the request timeout).
+  `S7CommPlusConnection.connect()` takes `request_timeout` and
+  `explore_timeout` by keyword. A timeout that is zero, negative or not finite
+  raises `ValueError`. The async client now bounds the connect, the
+  handshake, every reply and every send, so a silent PLC raises
+  `S7TimeoutError` instead of hanging an `await`, and it tunes TCP keepalive
+  like the sync client (#96).
+* `connect()` on both clients also takes the keyword-only
+  `notification_timeout`, the default wait of the notification receivers
+  (default: the request timeout); `S7CommPlusConnection.connect()` takes it by
+  keyword. The sync `receive_subscription_notification()` and
+  `receive_alarm_notification()` gain the per-call `timeout` the async ones
+  have, and `S7CommPlusConnection.receive_notification()` takes one too (#96).
 
 ### Behaviour changes
 
@@ -21,6 +39,56 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* Every reply now has a deadline, and missing it closes the session (#96).
+  Once connected, each reply, and each further part of a multi-part reply,
+  must arrive within 5 s by default (`request_timeout`), or within 30 s by
+  default (`explore_timeout`) for the reply to an EXPLORE, which `browse()`,
+  `list_datablocks()`, `explore()`, `get_cpu_state()` and `read_alarms()`
+  send, among others. A reply that misses its deadline raises
+  `S7TimeoutError` and closes the session (see the first bug fix below).
+  Before, the async client waited for a reply without limit, and the sync
+  client gave every socket read the connect timeout (5 s by default), EXPLORE
+  replies included. EXPLORE gets the longer default because its replies can
+  be large: on a CPU 1215C (FW V4.2, non-TLS V1 SessionKey session, 54 data
+  blocks, 6802 variables) the type-info EXPLORE that `browse()` sends, about
+  111 KB in 111 parts, took 5.9 to 7.0 s in total over three runs, the other
+  EXPLOREs about 1 s, and a GetMultiVariables at most 0.52 s. Upgrade note:
+  for a slower PLC pass a larger `request_timeout` or `explore_timeout` to
+  `connect()`; `explore_timeout=None` gives EXPLOREs the request timeout.
+* An async notification wait (`receive_subscription_notification()`,
+  `receive_alarm_notification()`, `AsyncSubscriptionQueue.get()`) without a
+  `timeout` used to wait forever; it now ends after `notification_timeout`,
+  else the request timeout (5 s by default), as in the sync client. In both
+  clients a notification wait now bounds the whole call rather than each
+  frame, so notifications for other subscriptions no longer extend it.
+  PLCSIM Advanced (V8.0, CPU 1511, FW V2.9; not checked on hardware) sends a
+  notification every subscription cycle even without changes, so an active
+  subscription with a short cycle does not run into the default. Upgrade
+  note: an expired async notification wait raises `S7TimeoutError` instead of
+  `asyncio.TimeoutError`, so catch `S7TimeoutError`; pass a larger
+  `notification_timeout` to `connect()` for long cycles or alarm waits. A
+  per-call `timeout` that is zero, negative or not finite now raises
+  `ValueError`, as the connect timeouts do (#96).
+
+### Bug fixes and hardening
+
+* A timeout no longer leaves a dead session behind that still reports
+  `connected` (#96). A request whose reply does not arrive within the request
+  timeout (for an EXPLORE, the EXPLORE timeout), and any read that stops
+  part-way through a frame or a multi-part reply (in the async client also
+  one cancelled from outside), close the session without a DeleteSession
+  exchange and raise `S7TimeoutError`. The session is then handled like one
+  the PLC dropped: `connected` reports `False`, the next request raises
+  `S7ConnectionError("Not connected")`, and the connect parameters and the
+  subscription bookkeeping are kept.
+  Before, the sync client marked only its socket dead, so `connected` stayed
+  `True` while every later request failed with "Not connected", and an async
+  wait that ended between a frame's header and its body left the stream out
+  of step. A notification wait that runs out before any byte of the next
+  frame arrived leaves the session usable, in the sync client too. Upgrade
+  note: after an `S7TimeoutError` from a request, call `connect()` again
+  before the next request (a 0.2.0 sync session was unusable at that point
+  too).
 
 0.2.0 (2026-10-08)
 ------------------

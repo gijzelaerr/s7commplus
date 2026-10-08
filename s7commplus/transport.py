@@ -9,11 +9,31 @@ import select
 import socket
 import struct
 import logging
+import time
 from enum import IntEnum
 from typing import Optional, Type, Union
 from types import TracebackType
 
 from .error import S7ConnectionError, S7TimeoutError
+
+
+def _configure_tcp_socket(sock: socket.socket) -> None:
+    """Disable Nagle's algorithm and enable TCP keepalive on a PLC connection.
+
+    S7 is request/response with complete PDUs, so Nagle buffering only adds
+    latency (confirmed 100-150ms savings on S7-1500). Keepalive is tuned so a
+    dead connection is detected in ~90s of idle rather than the OS default of
+    ~2 hours (Linux: 7200s idle + 9x75s probes). TCP_KEEPIDLE/TCP_KEEPINTVL
+    are available on Linux and macOS 10.15+.
+    """
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    if hasattr(socket, "TCP_KEEPIDLE"):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+    if hasattr(socket, "TCP_KEEPINTVL"):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+    if hasattr(socket, "TCP_KEEPCNT"):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
 
 class TPDUSize(IntEnum):
@@ -93,7 +113,10 @@ class ISOTCPConnection:
         self.socket: Optional[socket.socket] = None
         self.connected = False
         self.pdu_size = 240  # Default PDU size, negotiated during connection
-        self.timeout = 5.0  # Default timeout in seconds
+        self.timeout = 5.0  # Connect timeout in seconds (TCP connect and COTP handshake)
+        # Default bound in seconds for a send and for one received frame once
+        # connected; connect() sets it to the connect timeout.
+        self.request_timeout = 5.0
 
         # Connection parameters
         self.src_ref = 0x0001  # Source reference
@@ -129,16 +152,20 @@ class ISOTCPConnection:
         Establish ISO on TCP connection.
 
         Args:
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds, bounding the TCP connect
+                and the COTP handshake together. It also becomes the
+                ``request_timeout`` until :meth:`set_request_timeout` changes it.
         """
         self.timeout = timeout
+        self.request_timeout = timeout
+        deadline = time.monotonic() + timeout
 
         try:
             # Step 1: TCP connection
             self._tcp_connect()
 
-            # Step 2: ISO connection (COTP handshake)
-            self._iso_connect()
+            # Step 2: ISO connection (COTP handshake), in what is left of the timeout
+            self._iso_connect(deadline)
 
             self.connected = True
             logger.info(f"Connected to {self.host}:{self.port}, PDU size: {self.pdu_size}")
@@ -149,6 +176,10 @@ class ISOTCPConnection:
                 raise
             else:
                 raise S7ConnectionError(f"Connection failed: {e}")
+
+    def set_request_timeout(self, timeout: float) -> None:
+        """Set the default bound in seconds for a send and for one received frame."""
+        self.request_timeout = timeout
 
     def disconnect(self) -> None:
         """Disconnect from S7 device."""
@@ -183,15 +214,26 @@ class ISOTCPConnection:
 
         # Send over TCP
         try:
+            self.socket.settimeout(self.request_timeout)
             self.socket.sendall(tpkt_frame)
             logger.debug(f"Sent {len(tpkt_frame)} bytes: {tpkt_frame.hex(' ')}")
         except socket.error as e:
             self.connected = False
             raise S7ConnectionError(f"Send failed: {e}")
 
-    def receive_data(self) -> bytes:
+    def receive_data(self, timeout: Optional[float] = None, *, idle_ok: bool = False) -> bytes:
         """
         Receive data from ISO connection.
+
+        Args:
+            timeout: Seconds the whole frame may take, or ``None`` for
+                ``request_timeout``.
+            idle_ok: Whether this is a wait for an unsolicited frame. Such a
+                wait that runs out before any byte of the frame arrived raises
+                :class:`S7TimeoutError` and leaves the connection usable. Every
+                other timeout (a reply that is overdue, or a frame cut off
+                part-way) also closes the connection, because the stream
+                position is then unknown.
 
         Returns:
             S7 PDU data
@@ -199,30 +241,39 @@ class ISOTCPConnection:
         if not self.connected:
             raise S7ConnectionError("Not connected")
 
+        wait = self.request_timeout if timeout is None else timeout
+        deadline = time.monotonic() + wait
         try:
-            # Receive TPKT header (4 bytes)
-            tpkt_header = self._recv_exact(4)
+            if idle_ok and not self.data_available(max(wait, 0.0)):
+                # Nothing of the next frame was read: the stream is still in step.
+                raise S7TimeoutError("Receive timeout")
 
-            # Parse TPKT header
-            version, reserved, length = struct.unpack(">BBH", tpkt_header)
+            try:
+                # Receive TPKT header (4 bytes)
+                tpkt_header = self._recv_exact(4, deadline)
 
-            if version != 3:
-                raise S7ConnectionError(f"Invalid TPKT version: {version}")
+                # Parse TPKT header
+                version, reserved, length = struct.unpack(">BBH", tpkt_header)
 
-            # Receive remaining data
-            remaining = length - 4
-            if length < 7:
-                raise S7ConnectionError("Invalid TPKT length")
+                if version != 3:
+                    raise S7ConnectionError(f"Invalid TPKT version: {version}")
 
-            payload = self._recv_exact(remaining)
+                # Receive remaining data
+                remaining = length - 4
+                if length < 7:
+                    raise S7ConnectionError("Invalid TPKT length")
+
+                payload = self._recv_exact(remaining, deadline)
+            except S7TimeoutError:
+                # An overdue reply or a frame cut off part-way: the stream
+                # position is unknown, so the connection cannot be reused.
+                self.disconnect()
+                raise
 
             # Parse COTP header and extract data
             logger.debug(f"Received TPKT: version={version} length={length} payload ({len(payload)} bytes): {payload.hex(' ')}")
             return self._parse_cotp_data(payload)
 
-        except socket.timeout:
-            self.connected = False
-            raise S7TimeoutError("Receive timeout")
         except socket.error as e:
             self.connected = False
             raise S7ConnectionError(f"Receive failed: {e}")
@@ -230,20 +281,7 @@ class ISOTCPConnection:
     def _tcp_connect(self) -> None:
         """Establish TCP connection."""
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # Disable Nagle's algorithm: S7 is request/response with complete PDUs,
-        # so buffering only adds latency (confirmed 100-150ms savings on S7-1500).
-        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        # Enable TCP keepalive to detect dead connections during idle periods.
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        # Configure keepalive timing so failures are detected in ~90s of idle
-        # rather than the OS default of ~2 hours (Linux: 7200s idle + 9x75s probes).
-        # TCP_KEEPIDLE/TCP_KEEPINTVL are available on Linux and macOS 10.15+.
-        if hasattr(socket, "TCP_KEEPIDLE"):
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-        if hasattr(socket, "TCP_KEEPINTVL"):
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
-        if hasattr(socket, "TCP_KEEPCNT"):
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        _configure_tcp_socket(self.socket)
         self.socket.settimeout(self.timeout)
 
         try:
@@ -252,8 +290,8 @@ class ISOTCPConnection:
         except socket.error as e:
             raise S7ConnectionError(f"TCP connection failed: {e}")
 
-    def _iso_connect(self) -> None:
-        """Establish ISO connection using COTP handshake."""
+    def _iso_connect(self, deadline: Optional[float] = None) -> None:
+        """Establish ISO connection using COTP handshake, by ``deadline`` (``time.monotonic()``) if given."""
         if self.socket is None:
             raise S7ConnectionError("Socket not initialized")
 
@@ -265,13 +303,13 @@ class ISOTCPConnection:
         logger.debug("Sent COTP Connection Request")
 
         # Receive Connection Confirm
-        tpkt_header = self._recv_exact(4)
+        tpkt_header = self._recv_exact(4, deadline)
         version, reserved, length = struct.unpack(">BBH", tpkt_header)
 
         if version != 3:
             raise S7ConnectionError(f"Invalid TPKT version in response: {version}")
 
-        payload = self._recv_exact(length - 4)
+        payload = self._recv_exact(length - 4, deadline)
         self._parse_cotp_cc(payload)
 
         logger.debug("Received COTP Connection Confirm")
@@ -449,12 +487,14 @@ class ISOTCPConnection:
         except socket.error:
             pass  # Ignore errors during disconnect
 
-    def _recv_exact(self, size: int) -> bytes:
+    def _recv_exact(self, size: int, deadline: Optional[float] = None) -> bytes:
         """
         Receive exactly the specified number of bytes.
 
         Args:
             size: Number of bytes to receive
+            deadline: ``time.monotonic()`` value by which all of them must have
+                arrived, or ``None`` to bound each read by the socket timeout.
 
         Returns:
             Received data
@@ -470,13 +510,17 @@ class ISOTCPConnection:
 
         while len(data) < size:
             try:
+                if deadline is not None:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise socket.timeout("timed out")
+                    self.socket.settimeout(left)
                 chunk = self.socket.recv(size - len(data))
                 if not chunk:
                     self.connected = False
                     raise S7ConnectionError("Connection closed by peer")
                 data.extend(chunk)
             except socket.timeout:
-                self.connected = False
                 raise S7TimeoutError("Receive timeout")
             except socket.error as e:
                 self.connected = False

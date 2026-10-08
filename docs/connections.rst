@@ -182,6 +182,68 @@ The asyncio client separates connection from authentication:
 Never log passwords, session keys, challenges, private keys, or decrypted
 authentication material.
 
+Timeouts
+--------
+
+``connect()`` takes four timeouts in seconds, by keyword:
+
+``timeout`` (default 5)
+   bounds the TCP connect and the COTP, InitSSL, TLS and CreateObject
+   handshake together.
+``request_timeout`` (default: ``timeout``)
+   bounds the wait for each reply once the handshake is done, and for each
+   further part of a multi-part reply. Raise it for a PLC that is slow on long
+   answers.
+``explore_timeout`` (default 30; ``None``: the request timeout)
+   does the same for the reply to an EXPLORE, which ``browse()``,
+   ``list_datablocks()``, ``explore()``, ``get_cpu_state()`` and
+   ``read_alarms()`` send, among others. These replies can be large: on a CPU
+   1215C (FW V4.2, 54 data blocks, 6802 variables) the type-info EXPLORE of
+   ``browse()``, about 111 KB in 111 parts, took 5.9 to 7.0 s in total, where
+   a GetMultiVariables took at most 0.52 s. The value is used as given, also
+   when ``request_timeout`` is longer.
+``notification_timeout`` (default: the request timeout)
+   bounds a wait for subscription data or alarms.
+
+.. code-block:: python
+
+   client.connect("192.168.1.10", timeout=5.0, request_timeout=15.0, explore_timeout=60.0)
+
+``receive_subscription_notification()`` and ``receive_alarm_notification()``
+also take a per-call ``timeout`` that overrides ``notification_timeout``. The
+wait bounds the whole call: notifications for other subscriptions that arrive
+meanwhile are queued for them and do not extend it. When it runs out, both
+clients raise ``S7TimeoutError``. PLCSIM Advanced (V8.0, CPU 1511, FW V2.9;
+not checked on hardware) sends a notification every subscription cycle even
+when no value changed, so an active subscription with a cycle shorter than the
+wait does not run into it. Raise ``notification_timeout`` for longer cycles,
+or for alarms, which arrive only when one changes:
+
+.. code-block:: python
+
+   await client.connect("192.168.1.10", notification_timeout=3600.0)
+
+A timeout that is zero, negative or not finite raises ``ValueError``. The
+asyncio client bounds every network wait the same way, including a send that
+the PLC does not accept within the request timeout, and both clients enable
+TCP keepalive, so a silent PLC raises ``S7TimeoutError`` instead of hanging.
+
+What a timeout leaves of the session depends on where it struck:
+
+* A request whose reply does not arrive in time leaves the session in an
+  unknown state, so the client closes it (without a DeleteSession exchange)
+  and raises ``S7TimeoutError``. It is then handled like a connection the PLC
+  dropped: ``connected`` reports ``False``, the next request raises
+  ``S7ConnectionError("Not connected")``, and the connect parameters and the
+  subscription bookkeeping are kept, so reconnect to go on.
+* A read that stops part-way through a frame, or between the parts of a
+  multi-part reply, closes the session the same way, whatever it was waiting
+  for, because the unread rest would otherwise be taken for the next message.
+  In the asyncio client this includes a read cancelled from outside, for
+  example by ``asyncio.wait_for()`` around a call.
+* A notification wait that runs out before any byte of the next frame arrived
+  is clean: the session stays usable.
+
 Troubleshooting
 ---------------
 
