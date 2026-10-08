@@ -49,7 +49,7 @@ from .client import (
     _subscription_groups,
     _subscriptions_interrupted,
 )
-from .catalog import SymbolCatalog, SymbolicTag, TagResult
+from .catalog import SymbolCatalog, SymbolicTag, TagResult, _write_type
 from .codec import (
     SERVER_SESSION_ROLE_SECURED_BIT,
     decode_header,
@@ -1549,6 +1549,12 @@ class S7CommPlusAsyncClient:
         written and whose ``not_sent`` positions were never sent. A failure of
         the first request propagates unchanged, as for a single request.
 
+        Each value is the tag's raw big-endian bytes in the layout
+        :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
+        characters...]`` and a WSTRING the same as big-endian UINTs, both padded
+        with zeros to the declared length (``SymbolicTag.string_length``); a
+        DATE_AND_TIME is its eight BCD bytes.
+
         Writes are deliberately never retried: a transport failure can leave
         the caller unable to know whether the PLC applied the request.
 
@@ -1561,13 +1567,13 @@ class S7CommPlusAsyncClient:
         if not values:
             return []
         tags = [await self.resolve_tag(name) for name in values]
-        unsupported = [tag.name for tag in tags if tag.datatype is None]
+        unsupported = [tag.name for tag in tags if _write_type(tag) is None]
         if unsupported:
             raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
         items: list[SymbolicWriteItem] = [
-            (tag.access_area, list(tag.lids), data, 0, tag.datatype)
+            (tag.access_area, list(tag.lids), data, 0, write_type)
             for tag, data in zip(tags, values.values())
-            if tag.datatype is not None
+            if (write_type := _write_type(tag)) is not None
         ]
 
         def build_write(chunk: list[SymbolicWriteItem]) -> bytes:

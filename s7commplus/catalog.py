@@ -7,6 +7,7 @@ from collections.abc import Iterator
 import struct
 from typing import Any, Optional
 
+from .codec import PValueArray
 from .protocol import DataType
 from .typeinfo import Softdatatype
 
@@ -15,7 +16,8 @@ _WIRE_TYPES: dict[Softdatatype, DataType] = {
     Softdatatype.BOOL: DataType.BOOL,
     Softdatatype.BBOOL: DataType.BOOL,
     Softdatatype.BYTE: DataType.BYTE,
-    Softdatatype.CHAR: DataType.BYTE,
+    # PLCSIM Advanced (CPU 1511, FW V2.9) rejects a CHAR written as BYTE.
+    Softdatatype.CHAR: DataType.USINT,
     Softdatatype.WORD: DataType.WORD,
     Softdatatype.INT: DataType.INT,
     Softdatatype.DWORD: DataType.DWORD,
@@ -40,6 +42,15 @@ _WIRE_TYPES: dict[Softdatatype, DataType] = {
     Softdatatype.LTIME: DataType.TIMESPAN,
     Softdatatype.LTOD: DataType.ULINT,
     Softdatatype.LDT: DataType.TIMESTAMP,
+}
+
+# Types the PLC takes only as an array PValue (verified on PLCSIM Advanced, CPU
+# 1511, FW V2.9): STRING and WSTRING as [max length, length, characters...] and
+# DATE_AND_TIME as its eight BCD bytes.
+_ARRAY_WRITE_TYPES: dict[Softdatatype, DataType] = {
+    Softdatatype.STRING: DataType.USINT,
+    Softdatatype.WSTRING: DataType.UINT,
+    Softdatatype.DATEANDTIME: DataType.USINT,
 }
 
 
@@ -134,6 +145,12 @@ class SymbolicTag:
         if fmt is None or len(raw) != struct.calcsize(fmt):
             return raw
         return struct.unpack(fmt, raw)[0]
+
+
+def _write_type(tag: SymbolicTag) -> DataType | PValueArray | None:
+    """The PValue type ``write_tags`` sends ``tag`` as (``None`` if unsupported)."""
+    element = _ARRAY_WRITE_TYPES.get(tag.softdatatype)
+    return PValueArray(element) if element is not None else tag.datatype
 
 
 @dataclass(frozen=True)

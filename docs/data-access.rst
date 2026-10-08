@@ -158,6 +158,12 @@ Failed items are reported per tag and never retried automatically; after a
 download that changes the PLC layout, call ``refresh_tag_catalog``. Unknown
 names and unsupported PLC datatypes raise before a request is sent.
 
+Raw values use the layout a read returns. A STRING is written as the bytes
+``[max length, length, characters...]`` and a WSTRING the same as big-endian
+UINTs, both padded with zeros to the declared length (``tag.string_length``),
+and a DATE_AND_TIME as its eight BCD bytes. PLCSIM Advanced (CPU 1511, FW V2.9)
+rejects other forms; this is not yet checked on real hardware.
+
 The async client provides the same methods as coroutines, except
 ``invalidate_tag_catalog``, which is immediate:
 

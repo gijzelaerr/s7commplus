@@ -85,6 +85,17 @@ CHANGES
   like the sync one, rejects a final trailer of another protocol version. A
   notification split over several PDUs is still not reassembled; none has
   been observed.
+* `write_tags()` sends CHAR as a USINT, STRING and WSTRING as USINT and UINT
+  arrays of `[max length, length, characters]` padded to the declared length,
+  and DATE_AND_TIME as an array of its eight BCD bytes. PLCSIM Advanced (V8.0,
+  CPU 1511, FW V2.9) rejected every named write of these types in the previous
+  forms; not yet checked on hardware. `SymbolicTag.datatype` of a CHAR is now
+  `USINT`. **Upgrade note:** `write_tags()` and `write_tag()` now take a STRING
+  or WSTRING value only in the layout a read returns, `[max length, length,
+  characters]` padded with zeros to the declared length (a WSTRING as
+  big-endian UINTs), and send it as that array; bytes in another form, such as
+  the characters alone, are no longer wrapped in a string PValue. DATE_AND_TIME
+  data is still its eight BCD bytes.
 
 ### Documentation
 
