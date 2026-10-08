@@ -717,7 +717,7 @@ class S7CommPlusClient:
                 sessions, whose EXPLORE format carries no attribute list.
 
         Returns:
-            Raw response payload.
+            Raw response payload. Read the compressed XML documents in it with `s7commplus.iter_preset_streams`.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")

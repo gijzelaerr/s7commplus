@@ -1,6 +1,27 @@
 CHANGES
 =======
 
+0.3.0 (unreleased)
+------------------
+
+### New features
+
+* `iter_preset_streams()` yields each preset-dictionary zlib stream in an EXPLORE
+  payload as a `PresetStream`, in the order the streams appear, and skips streams
+  that are empty or fail to decompress (#64). `iter_preset_headers()` yields the
+  offset and `PresetIdentity` of each stream without decompressing it.
+  `PresetIdentity` names a preset dictionary by `adler`, `kind` and
+  `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
+  maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
+  for compatibility (#64).
+
+### Behaviour changes
+
+* `tags_from_explore()` and `block_interface_from_explore()` select their stream
+  by dictionary kind instead of a hard-coded Adler-32, so a new version of a
+  dictionary, once added to the package, is picked up without code changes.
+  The streams picked for the bundled dictionaries are unchanged (#64).
+
 0.2.0 (2026-10-08)
 ------------------
 
