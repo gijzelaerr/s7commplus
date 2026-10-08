@@ -84,6 +84,7 @@ from .connection import (
     _strip_response_integrity_id,
     _v1_session_key_profile,
     _v1_integrity_tail,
+    _response_continues,
     _validate_response_header,
     _verify_v3_hmac,
 )
@@ -1625,8 +1626,9 @@ class S7CommPlusAsyncClient:
 
         response_data = await self._recv_response_frame(seq_num)
 
-        # Large responses (e.g. Explore) are split across several S7CommPlus PDUs.
-        if reassemble:
+        # Large responses (e.g. Explore) are split across several S7CommPlus PDUs;
+        # any response whose first PDU has no trailer is reassembled the same way.
+        if reassemble or _response_continues(response_data):
             data = await self._recv_reassembled_payload(response_data)
             if len(data) < 10:
                 raise S7ConnectionError("Response too short")
@@ -1694,6 +1696,8 @@ class S7CommPlusAsyncClient:
                 return response_data
             opcode = _incoming_frame_opcode(response_data)
             if opcode == Opcode.NOTIFICATION:
+                # See S7CommPlusConnection._recv_response_frame: a notification split
+                # over several PDUs is not reassembled.
                 if len(self._notification_frames) == self._notification_frames.maxlen:
                     self._notification_frame_overflows += 1
                 self._notification_frames.append(response_data)
@@ -1713,6 +1717,10 @@ class S7CommPlusAsyncClient:
                         raise S7ProtocolError(
                             f"Too many stale S7CommPlus responses while waiting for sequence {expected_sequence}"
                         )
+                    if _response_continues(response_data):
+                        # Drain (and verify) the rest of a split stale response so its
+                        # fragments are not read as the next response.
+                        await self._recv_reassembled_payload(response_data)
                     continue
             return response_data
 
@@ -1801,7 +1809,7 @@ class S7CommPlusAsyncClient:
             # The next 4 bytes are either the trailer (0x72 ver 0x0000) or the next
             # fragment's header (0x72 ver len>0).
             await ensure(4)
-            if buf[0] == 0x72 and buf[2] == 0 and buf[3] == 0:
+            if buf[0] == 0x72 and buf[1] == expected_version and buf[2] == 0 and buf[3] == 0:
                 del buf[:4]  # consume trailer — last fragment
                 break
         return bytes(data)

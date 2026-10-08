@@ -22,6 +22,25 @@ CHANGES
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
 
+### Bug fixes and hardening
+
+* Every data response the PLC splits over several PDUs is now reassembled,
+  not only Explore; the session-setup replies are still read as one PDU. A
+  read of many long strings returned only the items in the first PDU (PLCSIM
+  Advanced V8.0, CPU 1511, FW V2.9 sent 4 of 19 `String[254]` values) and left
+  the rest in the stream, so the next request failed. A response is complete
+  only when the `72 <ver> 00 00` trailer follows its data, a split stale
+  response is drained before the awaited one is read, and the async client,
+  like the sync one, rejects a final trailer of another protocol version. A
+  notification split over several PDUs is still not reassembled; none has
+  been observed.
+
+### Testing
+
+* The server emulator accepts `max_response_pdu`, which splits every response
+  after session setup over several PDUs as a PLC does, authenticated V3
+  responses included.
+
 0.2.0 (2026-10-08)
 ------------------
 
