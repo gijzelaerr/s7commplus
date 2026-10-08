@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate the shape of the order-number -> device-name table.
 
 The table in ``s7commplus/devices.py`` is hand-copied, so this script checks
@@ -54,5 +53,4 @@ if problems:
         print(f"  - {problem}")
     sys.exit(1)
 
-print(f"devices table: {len(DEVICE_NAMES)} entries OK "
-      f"({', '.join(sorted(str(f) for f in families))})")
+print(f"devices table: {len(DEVICE_NAMES)} entries OK ({', '.join(sorted(str(f) for f in families))})")

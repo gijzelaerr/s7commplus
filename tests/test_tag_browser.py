@@ -10,16 +10,22 @@ dict (Adler-32 ``0x66052b13``) and the RID -> SoftDataType mapping.
 import base64
 import zlib
 
+import pytest
+
 from s7commplus.tag_browser import (
     DataBlock,
     Member,
     Tag,
+    _IDENT_KIND,
+    _INTFDESC_KINDS,
+    _find_preset_stream,
     block_interface_from_explore,
     datablocks_from_explore,
     parse_block_interface,
     parse_ident_container,
     tags_from_explore,
 )
+from s7commplus.zlib_dicts import ZLIB_DICT_IDENTITIES
 
 # Live S7-1200 G2 (FW V4.1) EXPLORE response for the M area, from the zlib
 # header onward: b"\x78\x7d" + dict-adler(0xce9b821b) + raw deflate.
@@ -126,6 +132,29 @@ def test_tags_from_live_g2_m_area():
 
 def test_tags_from_explore_no_stream_returns_empty():
     assert tags_from_explore(b"no zlib stream here") == []
+
+
+def test_tags_from_explore_raises_on_corrupt_stream():
+    # iter_preset_streams skips undecodable streams; tag_browser must surface them instead.
+    # IntfDescTag header followed by an invalid deflate block.
+    payload = bytes.fromhex("787d ce9b821b") + b"\xff" * 8
+    with pytest.raises(zlib.error):
+        tags_from_explore(payload)
+
+
+def test_find_preset_stream_matches_kind_across_versions():
+    # LineComm 0x90000001 then 0x98000001: the first stream of the kind wins, whatever its version.
+    # Only headers are read, so the streams need no body.
+    payload = bytes.fromhex("787d 79b2bda3 787d 3c55436a")
+    assert _find_preset_stream(payload, ("LineComm",)) == 0
+    assert _find_preset_stream(payload, ("IntfDesc",)) is None
+
+
+@pytest.mark.parametrize("kind", [_IDENT_KIND, *_INTFDESC_KINDS])
+def test_tag_browser_kinds_have_one_dictionary(kind: str):
+    # Matching is by kind alone; a second version would reach the parser unreviewed.
+    # Check that the parser handles its layout, then update this test.
+    assert sum(p.kind == kind for p in ZLIB_DICT_IDENTITIES.values()) == 1
 
 
 def test_parse_block_interface_types():

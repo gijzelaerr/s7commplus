@@ -24,7 +24,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass, field
 
-from .blob_decompressor import decompress_blob
+from .blob_decompressor import decompress_blob, iter_preset_headers
 
 # ---------------------------------------------------------------------------
 # I/Q/M symbolic tags (<IdentContainer>)
@@ -86,7 +86,7 @@ def tags_from_explore(explore_payload: bytes) -> list[Tag]:
 
     Returns an empty list if the payload contains no preset-dict zlib stream.
     """
-    pos = _find_preset_stream(explore_payload, _IDENT_ADLER)
+    pos = _find_preset_stream(explore_payload, (_IDENT_KIND,))
     if pos is None:
         return []
     return parse_ident_container(decompress_blob(explore_payload, offset=pos))
@@ -96,11 +96,11 @@ def tags_from_explore(explore_payload: bytes) -> list[Tag]:
 # Data-block / FB interfaces (<BlockInterface>)
 # ---------------------------------------------------------------------------
 
-# Adler-32 of the ``IntfDescTag`` preset dict (I/Q/M symbols).
-_IDENT_ADLER = 0xCE9B821B
-# Adler-32 of interface-description preset dicts. ``DebugInfo_IntfDesc`` carries
-# the optimized (symbolic-access) block interface; ``IntfDesc`` the standard one.
-_INTFDESC_ADLERS = (0x66052B13, 0x4B8416F0)
+# Preset-dict kind of the I/Q/M symbols.
+_IDENT_KIND = "IntfDescTag"
+# Interface-description preset-dict kinds, most preferred first. ``DebugInfo IntfDesc``
+# carries the optimized (symbolic-access) block interface; ``IntfDesc`` the standard one.
+_INTFDESC_KINDS = ("DebugInfo IntfDesc", "IntfDesc")
 
 # Siemens SoftDataType ids, from thomas-v2/S7CommPlusDriver Core/Softdatatype.cs
 # (LGPL-3.0). A <Member> type is a RID of the form 0x0200_00XX where XX is the
@@ -272,11 +272,10 @@ def block_interface_from_explore(explore_payload: bytes) -> list[Member]:
     specifically rather than taking the first stream. Returns an empty list if
     no interface stream is present.
     """
-    for adler in _INTFDESC_ADLERS:
-        pos = _find_preset_stream(explore_payload, adler)
-        if pos is not None:
-            return parse_block_interface(decompress_blob(explore_payload, offset=pos))
-    return []
+    pos = _find_preset_stream(explore_payload, _INTFDESC_KINDS)
+    if pos is None:
+        return []
+    return parse_block_interface(decompress_blob(explore_payload, offset=pos))
 
 
 # ---------------------------------------------------------------------------
@@ -284,20 +283,24 @@ def block_interface_from_explore(explore_payload: bytes) -> list[Member]:
 # ---------------------------------------------------------------------------
 
 
-def _find_preset_stream(data: bytes, adler: int) -> int | None:
-    """Return the offset of the first preset-dict zlib stream matching ``adler``.
+def _find_preset_stream(data: bytes, kinds: tuple[str, ...]) -> int | None:
+    """Return the offset of the first preset-dict stream of the most preferred kind in `kinds`.
 
-    A block EXPLORE response contains multiple ``78 xx`` FDICT streams; callers
-    need the one for a specific dictionary, not merely the first.
+    A block EXPLORE response contains several preset-dict streams; callers need
+    the one for a specific dictionary kind, not merely the first. Only headers
+    are read, so the other streams are never decompressed.
+
+    Matching by kind alone also accepts any future version of a dictionary, so
+    adding a second version of one of these kinds feeds its streams to the same
+    parser.
     """
-    i = 0
-    # A header needs 6 bytes (CMF + FLG + 4-byte DICTID), so the last valid
-    # start position is len(data) - 6 inclusive.
-    end = len(data) - 5
-    while i < end:
-        if data[i] == 0x78 and (data[i + 1] & 0x20) and int.from_bytes(data[i + 2 : i + 6], "big") == adler:
-            return i
-        i += 1
+    offsets: dict[str, int] = {}
+    for offset, preset in iter_preset_headers(data):
+        if preset.kind in kinds:
+            offsets.setdefault(preset.kind, offset)
+    for kind in kinds:
+        if kind in offsets:
+            return offsets[kind]
     return None
 
 
