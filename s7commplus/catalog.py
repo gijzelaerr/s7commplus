@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Iterator
-import struct
 from typing import Any, Optional
 
+from . import values
 from .protocol import DataType
 from .typeinfo import Softdatatype
 
@@ -98,42 +98,24 @@ class SymbolicTag:
         )
 
     def decode_value(self, raw: bytes) -> Any:
-        """Decode a raw symbolic value when its scalar type is known.
+        """Decode this tag's raw bytes to a Python value (see :func:`s7commplus.values.decode`).
 
-        Unknown, structured, truncated, and array values remain bytes so
-        callers never lose firmware-specific data.
+        Bytes that are not a valid value of the tag's type, and types without a
+        conversion, are returned unchanged so callers never lose PLC data.
         """
-        if self.array_dimensions:
-            return raw
-        formats: dict[Softdatatype, str] = {
-            Softdatatype.BOOL: ">?",
-            Softdatatype.BBOOL: ">?",
-            Softdatatype.BYTE: ">B",
-            Softdatatype.WORD: ">H",
-            Softdatatype.INT: ">h",
-            Softdatatype.DWORD: ">I",
-            Softdatatype.DINT: ">i",
-            Softdatatype.REAL: ">f",
-            Softdatatype.LREAL: ">d",
-            Softdatatype.ULINT: ">Q",
-            Softdatatype.LINT: ">q",
-            Softdatatype.LWORD: ">Q",
-            Softdatatype.USINT: ">B",
-            Softdatatype.UINT: ">H",
-            Softdatatype.UDINT: ">I",
-            Softdatatype.SINT: ">b",
-        }
-        if self.softdatatype is Softdatatype.CHAR and len(raw) == 1:
-            return raw.decode("latin-1")
-        if self.softdatatype in (Softdatatype.STRING, Softdatatype.WSTRING):
-            try:
-                return raw.decode("utf-8")
-            except UnicodeDecodeError:
-                return raw
-        fmt = formats.get(self.softdatatype)
-        if fmt is None or len(raw) != struct.calcsize(fmt):
-            return raw
-        return struct.unpack(fmt, raw)[0]
+        return values.decode(self.softdatatype, raw)
+
+    def encode_value(self, value: Any) -> bytes:
+        """Encode a Python value to this tag's raw bytes (see :func:`s7commplus.values.encode`).
+
+        The result is in the layout :meth:`Client.read_tags` returns for this tag.
+
+        Raises:
+            TypeError: ``value`` has the wrong Python type for the tag.
+            ValueError: ``value`` is out of range for the tag, or the tag's
+                declared string length is.
+        """
+        return values.encode(self.softdatatype, value, string_length=self.string_length)
 
 
 @dataclass(frozen=True)

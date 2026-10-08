@@ -27,6 +27,9 @@ Symbolic tags
 .. autoclass:: s7commplus.TagResult
    :members:
 
+.. automodule:: s7commplus.values
+   :members: decode, encode
+
 Subscriptions and alarms
 ------------------------
 

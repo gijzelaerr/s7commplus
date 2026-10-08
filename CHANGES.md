@@ -14,6 +14,12 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* The new `s7commplus.values` module converts raw tag values to Python values
+  and back (`decode()`, `encode()`; `SymbolicTag.encode_value()` is new).
+  Date and time values are naive: no PLC date or time type stores a time zone,
+  so an aware `datetime` or `time` raises `ValueError` instead of being shifted
+  or stripped. Ranges follow the TIA Portal data type documentation (DATE to
+  2168-12-31, LDT 1970-01-01 to 2262-04-11).
 
 ### Behaviour changes
 
@@ -21,6 +27,11 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* `SymbolicTag.decode_value()`, and with it subscription `decoded_values`, now
+  decodes STRING and WSTRING by their length header (it used to decode the
+  header bytes as text), CHAR, WCHAR, the date and time types, and array
+  elements, which it used to leave as bytes. Bytes that are not a valid value
+  of the type, or lie outside its range, are still returned unchanged.
 
 0.2.0 (2026-10-08)
 ------------------
