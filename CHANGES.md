@@ -28,7 +28,9 @@ CHANGES
   dropped reconnects and runs once more on the new session. Only `db_read`,
   `db_read_multi`, `read_area`, `read_symbolic`, `read_symbolic_multi`, `read_tag`,
   `read_tags`, `browse` and `get_cpu_state` are retried; writes never are, because
-  it is unknown whether the PLC applied a lost write. A read called from another
+  it is unknown whether the PLC applied a lost write. A read that timed out is
+  not retried either (`S7TimeoutError` is not an `S7ConnectionError`); when the
+  timeout ended the session, the next call reconnects. A read called from another
   reconnects only through the outermost call. It stands down, raising
   `S7ConnectionError`, while data or alarm subscriptions are live or lost data
   subscriptions await `resubscribe()`. After an automatic attempt the next one

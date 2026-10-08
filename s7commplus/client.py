@@ -259,7 +259,9 @@ class S7CommPlusClient:
         """Whether a read that finds the connection dropped reconnects and runs once more.
 
         Set by ``connect(auto_reconnect=...)``; a change made later outlasts
-        reconnects. Writes are never retried.
+        reconnects. Writes are never retried. Neither is a read that timed out:
+        ``S7TimeoutError`` is not an ``S7ConnectionError``. When the timeout
+        ended the session, the next call finds it dropped and reconnects.
         """
         return self._auto_reconnect
 

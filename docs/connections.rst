@@ -225,6 +225,12 @@ itself. A read called from another (``read_tag`` calls ``read_tags``) leaves the
 drop to the outermost call, so one call reconnects at most once and runs again
 at most once; the error of that second run reaches the caller.
 
+A timeout is not a dropped connection: :class:`~s7commplus.error.S7TimeoutError`
+is not an ``S7ConnectionError``, so a read that timed out is not retried and the
+timeout reaches the caller. When the timeout ended the session, as a receive
+timeout of the synchronous client does, the next call finds "Not connected" and
+reconnects.
+
 Auto-reconnect stands down, raising ``S7ConnectionError``, while data or alarm
 subscriptions are live, or while data subscriptions lost with an earlier session
 await ``resubscribe()``: a silent new session would end them unnoticed. Call

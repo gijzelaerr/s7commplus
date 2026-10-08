@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import time
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.catalog import SymbolCatalog
 from s7commplus.client import _AUTO_RECONNECT_MIN_INTERVAL, S7CommPlusClient
 from s7commplus.codec import encode_pvalue_blob
-from s7commplus.error import S7ConnectionError
+from s7commplus.error import S7ConnectionError, S7TimeoutError
 from s7commplus.protocol import ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from s7commplus.vlq import encode_uint32_vlq, encode_uint64_vlq
@@ -179,6 +180,25 @@ async def test_async_read_is_retried_once_on_a_new_session() -> None:
     assert await client.db_read(1, 0, 4) == DB1
     assert client._rebuild_session.await_count == 1
     assert client.connection_generation == 1
+
+
+def test_sync_timed_out_read_is_not_retried() -> None:
+    """S7TimeoutError is not an S7ConnectionError; the next call, finding the session ended, reconnects."""
+    client = _sync_client(S7TimeoutError("Receive timeout"), S7ConnectionError("Not connected"), _read_response(DB1))
+    with pytest.raises(S7TimeoutError):
+        client.db_read(1, 0, 4)
+    assert client._rebuild_session.call_count == 0
+    assert client.db_read(1, 0, 4) == DB1
+    assert client._rebuild_session.call_count == 1
+
+
+async def test_async_timed_out_read_is_not_retried() -> None:
+    client = _async_client(S7TimeoutError("timed out"), S7ConnectionError("Not connected"), _read_response(DB1))
+    with pytest.raises(S7TimeoutError):
+        await client.db_read(1, 0, 4)
+    assert client._rebuild_session.await_count == 0
+    assert await client.db_read(1, 0, 4) == DB1
+    assert client._rebuild_session.await_count == 1
 
 
 def test_sync_nested_reads_reconnect_once_when_the_retry_fails() -> None:
@@ -405,6 +425,30 @@ async def test_async_read_recovers_after_the_session_was_closed_internally(serve
         assert client.connection_generation == 1
     finally:
         await client.disconnect()
+
+
+def test_sync_receive_timeout_is_raised_and_the_next_read_reconnects(server: tuple[S7CommPlusServer, int]) -> None:
+    """The real transport: a receive timeout ends the session without a retry; the next read reconnects."""
+    _, port = server
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=port, auto_reconnect=True)
+    client._auto_reconnect_min_interval = 0.0
+    try:
+        assert client._connection is not None
+        transport = client._connection._iso_conn
+        real_socket = transport.socket
+        transport.socket = MagicMock(wraps=real_socket)
+        transport.socket.recv.side_effect = socket.timeout("timed out")
+        try:
+            with pytest.raises(S7TimeoutError):
+                client.db_read(1, 0, 4)
+        finally:
+            transport.socket = real_socket
+        assert client.connection_generation == 0  # not retried
+        assert client.db_read(1, 0, 4) == DB1
+        assert client.connection_generation == 1
+    finally:
+        client.disconnect()
 
 
 def test_sync_read_reconnects_once_the_plc_is_back(server: tuple[S7CommPlusServer, int]) -> None:
