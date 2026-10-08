@@ -1,4 +1,4 @@
-"""Typed tag values: per-type conversion and struct/array assembly.
+"""Typed tag values: per-type conversion, struct/array assembly, and the read_value/write_value API.
 
 Known-answer vectors are the raw bytes PLCSIM Advanced (CPU 1511, FW V2.9) returned for the
 "Types DB" test block (one member per datatype) and the layouts it accepted on write.
@@ -9,12 +9,17 @@ from __future__ import annotations
 import datetime as dt
 import math
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from s7commplus import values
-from s7commplus.catalog import SymbolCatalog, SymbolicTag
+from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.catalog import SymbolCatalog, SymbolicTag, TagResult
+from s7commplus.client import S7CommPlusClient
+from s7commplus.codec import encode_pvalue_blob
 from s7commplus.typeinfo import Softdatatype as T
+from s7commplus.vlq import decode_uint32_vlq, encode_uint32_vlq, encode_uint64_vlq
 
 UTC_PLUS_2 = dt.timezone(dt.timedelta(hours=2))
 
@@ -385,3 +390,178 @@ def test_split_rejects_mismatched_values(value: Any, error: type[Exception], mat
 def test_split_rejects_a_wrong_multi_dimensional_shape() -> None:
     with pytest.raises(ValueError, match="dimension 2 has 3 elements"):
         values.split("T.m", [[1, 2], [3, 4]], ARRAY_NAMES)
+
+
+# --- read_value / write_value ------------------------------------------------------------
+
+BROWSE = [
+    {"name": "T.i", "access_sequence": "8A0E0004.1", "data_type": "INT"},
+    {"name": "T.s", "access_sequence": "8A0E0004.2", "data_type": "STRING", "string_length": 4},
+    {"name": "T.d", "access_sequence": "8A0E0004.3", "data_type": "DATE"},
+    {"name": "T.a[0]", "access_sequence": "8A0E0004.4.0", "data_type": "INT", "array_dimensions": [(0, 2)]},
+    {"name": "T.a[1]", "access_sequence": "8A0E0004.4.1", "data_type": "INT", "array_dimensions": [(0, 2)]},
+    {"name": "T.u.x", "access_sequence": "8A0E0004.5.1", "data_type": "REAL"},
+    {"name": "T.u.y", "access_sequence": "8A0E0004.5.2", "data_type": "BBOOL"},
+]
+
+RAW = {
+    "T.i": bytes.fromhex("fb2e"),
+    "T.s": bytes.fromhex("0402686900000000")[:6],
+    "T.d": bytes.fromhex("346f"),
+    "T.a[0]": b"\x00\x01",
+    "T.a[1]": b"\x00\x02",
+    "T.u.x": bytes.fromhex("40600000"),
+    "T.u.y": b"\x01",
+}
+
+
+def _results(catalog: SymbolCatalog, names: list[str]) -> list[TagResult]:
+    return [TagResult(tag=catalog.resolve(name), value=RAW[name]) for name in names]
+
+
+def _sync_client() -> tuple[S7CommPlusClient, SymbolCatalog]:
+    client = S7CommPlusClient()
+    client._connection = MagicMock()
+    catalog = SymbolCatalog.from_browse(BROWSE)
+    client._symbol_catalog = catalog
+    client.read_tags = MagicMock(side_effect=lambda names: _results(catalog, list(names)))  # type: ignore[method-assign]
+    client.write_tags = MagicMock(side_effect=lambda raw: [TagResult(tag=catalog.resolve(n)) for n in raw])  # type: ignore[method-assign]
+    return client, catalog
+
+
+def test_read_value_decodes_leaves_and_containers_in_one_request() -> None:
+    client, _ = _sync_client()
+
+    assert client.read_value("T.i") == -1234
+    assert client.read_values(["T.s", "T.d", "T.a", "T.u"]) == ["hi", dt.date(2026, 10, 2), [1, 2], {"x": 3.5, "y": True}]
+    assert client.read_tags.call_args.args[0] == ["T.s", "T.d", "T.a[0]", "T.a[1]", "T.u.x", "T.u.y"]
+
+
+def test_read_value_unknown_name_raises_key_error() -> None:
+    client, _ = _sync_client()
+    with pytest.raises(KeyError):
+        client.read_value("T.nope")
+    with pytest.raises(KeyError):
+        client.read_value("T.u.x.y")
+
+
+def test_read_value_reports_failed_items() -> None:
+    client, catalog = _sync_client()
+    client.read_tags.side_effect = lambda names: [TagResult(tag=catalog.resolve(n), error=RuntimeError("boom")) for n in names]
+    with pytest.raises(RuntimeError, match=r"2 of 2 reads failed: 'T.a\[0\]', 'T.a\[1\]'"):
+        client.read_value("T.a")
+
+
+def test_write_values_encodes_every_leaf_into_one_request() -> None:
+    client, _ = _sync_client()
+
+    client.write_values({"T.i": -1234, "T.s": "hi", "T.a": [1, 2], "T.u": {"y": False}})
+
+    (raw,) = client.write_tags.call_args.args
+    assert raw == {
+        "T.i": bytes.fromhex("fb2e"),
+        "T.s": bytes.fromhex("040268690000"),
+        "T.a[0]": b"\x00\x01",
+        "T.a[1]": b"\x00\x02",
+        "T.u.y": b"\x00",
+    }
+
+
+def test_write_value_names_the_leaf_in_a_conversion_error() -> None:
+    client, _ = _sync_client()
+    with pytest.raises(ValueError, match=r"'T.s': STRING\[4\] holds at most 4 characters"):
+        client.write_value("T.s", "hello")
+    with pytest.raises(TypeError, match="'T.u.x': REAL takes a float"):
+        client.write_value("T.u", {"x": "1"})
+    with pytest.raises(ValueError, match=r"'T.u.x': 1e\+40 does not fit a REAL"):
+        client.write_value("T.u", {"x": 1e40})
+    client.write_tags.assert_not_called()
+
+
+def test_write_value_checks_the_catalog_string_length_before_sending() -> None:
+    client, _ = _sync_client()
+    client._symbol_catalog = SymbolCatalog.from_browse(
+        [{"name": "T.s", "access_sequence": "8A0E0004.2", "data_type": "STRING", "string_length": 300}]
+    )
+    with pytest.raises(ValueError, match="'T.s': A STRING is declared with 1 to 254 characters, got 300"):
+        client.write_value("T.s", "x")
+    client.write_tags.assert_not_called()
+
+
+def test_write_values_rejects_a_leaf_given_twice_and_empty_writes() -> None:
+    client, _ = _sync_client()
+    with pytest.raises(ValueError, match="written twice"):
+        client.write_values({"T.u": {"x": 1.0}, "T.u.x": 2.0})
+    with pytest.raises(ValueError, match="Nothing to write"):
+        client.write_value("T.u", {})
+
+
+def test_write_value_reports_rejected_items() -> None:
+    client, catalog = _sync_client()
+    client.write_tags.side_effect = lambda raw: [TagResult(tag=catalog.resolve(n), error=RuntimeError("PLC error")) for n in raw]
+    with pytest.raises(RuntimeError, match="1 of 1 writes failed: 'T.i'"):
+        client.write_value("T.i", 5)
+
+
+@pytest.mark.asyncio
+async def test_async_read_and_write_values() -> None:
+    client = S7CommPlusAsyncClient()
+    catalog = SymbolCatalog.from_browse(BROWSE)
+    client._symbol_catalog = catalog
+    client.read_tags = AsyncMock(side_effect=lambda names: _results(catalog, list(names)))  # type: ignore[method-assign]
+    client.write_tags = AsyncMock(side_effect=lambda raw: [TagResult(tag=catalog.resolve(n)) for n in raw])  # type: ignore[method-assign]
+
+    assert await client.read_value("T.u") == {"x": 3.5, "y": True}
+    assert await client.read_values(["T.i", "T.a"]) == [-1234, [1, 2]]
+    await client.write_value("T.d", dt.date(2026, 10, 3))
+    assert client.write_tags.await_args.args[0] == {"T.d": bytes.fromhex("3470")}
+    with pytest.raises(KeyError):
+        await client.read_value("T.nope")
+
+
+def _read_answer(raw_values: list[bytes]) -> bytes:
+    """A GetMultiVariables answer with every item read."""
+    answer = encode_uint64_vlq(0)
+    for number, raw in enumerate(raw_values, 1):
+        answer += encode_uint32_vlq(number) + encode_pvalue_blob(raw)
+    return answer + b"\x00\x00"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_values_of_a_large_array_are_split_like_any_batch(asynchronous: bool) -> None:
+    # The leaves of one array are one batch, which read_tags/write_tags split per request.
+    browse = [
+        {"name": f"T.a[{index}]", "access_sequence": f"8A0E0004.4.{index}", "data_type": "INT", "array_dimensions": [(0, 5)]}
+        for index in range(5)
+    ]
+    write_answer = encode_uint64_vlq(0) + b"\x00"
+    answers = [
+        _read_answer([b"\x00\x01", b"\x00\x02"]),
+        _read_answer([b"\x00\x03", b"\x00\x04"]),
+        _read_answer([b"\x00\x05"]),
+        *[write_answer] * 3,
+    ]
+    send: MagicMock
+    if asynchronous:
+        async_client = S7CommPlusAsyncClient()
+        async_client._connected = True
+        async_client._send_request = send = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
+        async_client._symbol_catalog = SymbolCatalog.from_browse(browse)
+        async_client.max_items_per_request = 2
+        assert await async_client.read_value("T.a") == [1, 2, 3, 4, 5]
+        await async_client.write_value("T.a", [5, 4, 3, 2, 1])
+    else:
+        client = S7CommPlusClient()
+        client._connection = MagicMock(
+            object_qualifier_version=0, requires_substreamed=False, _with_integrity_id=True, _session_key=None
+        )
+        send = client._connection.send_request
+        send.side_effect = answers
+        client._symbol_catalog = SymbolCatalog.from_browse(browse)
+        client.max_items_per_request = 2
+        assert client.read_value("T.a") == [1, 2, 3, 4, 5]
+        client.write_value("T.a", [5, 4, 3, 2, 1])
+
+    payloads = [call.args[1] for call in send.call_args_list]
+    assert [decode_uint32_vlq(payload, 4)[0] for payload in payloads] == [2, 2, 1, 2, 2, 1]
+    assert bytes.fromhex("01000700050200070004") in payloads[3]  # item 1 = 5, item 2 = 4, as INTs

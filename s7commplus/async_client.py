@@ -22,6 +22,10 @@ from .client import (
     _AUTO_REFRESH_MIN_INTERVAL,
     _block_signature,
     _type_info_times,
+    _assemble_values,
+    _encode_values,
+    _raise_failures,
+    _value_plans,
     _LEGACY_KEY_CACHE,
     DBWriteItem,
     SymbolicReadItem,
@@ -1724,6 +1728,54 @@ class S7CommPlusAsyncClient:
             _record_tag_writes(results, answered, len(chunk), response)
             answered += len(chunk)
         return results
+
+    async def read_value(self, name: str) -> Any:
+        """Read a tag, struct or array by name as a Python value.
+
+        A leaf tag gives its decoded value (see :func:`s7commplus.values.decode`).
+        The name of a struct, UDT instance or array gives a ``dict`` or ``list``
+        built from all its leaves, read as one batch (split over several requests
+        like :meth:`read_tags` when it is large); a DTL gives a
+        :class:`datetime.datetime`.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            RuntimeError: The PLC reported an error for one of the items.
+        """
+        return (await self.read_values([name]))[0]
+
+    async def read_values(self, names: Sequence[str]) -> list[Any]:
+        """Read several tags, structs or arrays as one batch of leaves; see :meth:`read_value`."""
+        catalog = self._symbol_catalog or await self.refresh_tag_catalog()
+        plans = _value_plans(catalog, names)
+        results = await self.read_tags([tag.name for _, _, tags in plans for tag in tags])
+        return _assemble_values(plans, results)
+
+    async def write_value(self, name: str, value: Any) -> None:
+        """Write a Python value to a tag, struct or array by name.
+
+        Accepts what :meth:`read_value` returns. A ``dict`` for a struct may give
+        only some members; a ``list`` for an array must give every element. Every
+        leaf is encoded before anything is sent, then the leaves are written as
+        one batch through :meth:`write_tags`, which splits a large batch over
+        several requests; such a batch is not atomic. Like every write, it is
+        never retried.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            TypeError, ValueError: ``value`` does not fit the PLC type, or a leaf
+                is too large for one request; nothing is sent.
+            RuntimeError: The PLC rejected one of the items, or a failure
+                interrupted a split batch; it is raised from the first failed
+                item's error, and the other items may have been written.
+        """
+        await self.write_values({name: value})
+
+    async def write_values(self, values: Mapping[str, Any]) -> None:
+        """Write several tags, structs or arrays as one batch of leaves; see :meth:`write_value`."""
+        catalog = self._symbol_catalog or await self.refresh_tag_catalog()
+        encoded = _encode_values(_value_plans(catalog, values), values)
+        _raise_failures(await self.write_tags(encoded), "writes")
 
     async def list_datablocks(self) -> list[dict[str, Any]]:
         """List all datablocks on the PLC via EXPLORE.
