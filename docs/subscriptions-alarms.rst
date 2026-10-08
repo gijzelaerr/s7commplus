@@ -29,8 +29,12 @@ datatype and reference metadata for decoded notifications:
 
 Raw bytes remain in ``values``. Known scalar catalog tags are decoded in
 ``decoded_values``; unknown, structured, array, and truncated values remain
-bytes. Explicit ``SubscriptionItem`` values can set symbol CRCs, sub-areas,
-and stable reference IDs.
+bytes. Catalog tags and access sequences subscribe with SymbolCRC 0, as named
+reads and writes do (see :doc:`data-access`): the ``symbol_crc`` reported by a
+browse is per-entry type metadata, and PLCSIM Advanced answered a subscription
+item that carried it with item error 0x13 and no values. Explicit
+``SubscriptionItem`` values can set symbol CRCs, sub-areas, and stable
+reference IDs.
 
 The synchronous client also provides ``iter_subscription_notifications`` and
 callbacks. The async client provides an async iterator and a queue-like view:

@@ -22,6 +22,16 @@ CHANGES
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
 
+### Bug fixes and hardening
+
+* A subscription built from a catalog tag (a `SymbolicTag`, or
+  `SubscriptionItem.from_tag`) now sends SymbolCRC 0, as named reads and
+  writes do. It sent the browsed per-entry CRC, which PLCSIM Advanced V8.0
+  (CPU 1511, FW V2.9) answered with item error 0x13 and no values. Upgrade
+  note: `from_tag()` items now carry `symbol_crc == 0`; to send the browsed
+  CRC anyway, build `SubscriptionItem(tag.access_area, tag.lids,
+  symbol_crc=tag.symbol_crc, tag=tag)`.
+
 0.2.0 (2026-10-08)
 ------------------
 
