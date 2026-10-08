@@ -154,8 +154,9 @@ browse immediately or ``invalidate_tag_catalog`` to force a browse on the next
 name lookup. Named reads and writes send SymbolCRC 0, which disables the PLC's
 layout check: the ``symbol_crc`` reported by a browse is per-entry type
 metadata, not the access-path CRC the PLC validates, and real CPUs reject it.
-Failed items are reported per tag and never retried automatically; after a
-download that changes the PLC layout, call ``refresh_tag_catalog``. Unknown
+Failed items are reported per tag and not retried automatically unless
+``auto_refresh_tags`` is set (see below); after a download that changes the PLC
+layout, call ``refresh_tag_catalog``. Unknown
 names and unsupported PLC datatypes raise before a request is sent.
 
 Raw values use the layout a read returns. A STRING is written as the bytes
@@ -174,6 +175,37 @@ an S7STRING or WSTRING PValue of the value's bytes exactly as given, and a
 DATE_AND_TIME as a TIMESTAMP of its eight bytes. That is the behaviour of
 0.2.0, which PLCSIM refused and which has not been checked on a hardware PLC
 either. On a real PLC, try either form on a disposable tag first.
+
+``refresh_caches_if_program_changed()`` checks before rebuilding: it compares the
+PLC's data-block list with the one the catalog was built from and, if that is
+unchanged, each cached data block's type-info modification time (one small
+EXPLORE per block), and rebuilds the catalog only when something changed. A
+recorded time that no longer answers counts as a change, since a download may
+have replaced the type-info object. The check narrows the window in which a
+stale address is used; it does not close it:
+
+- a change confined to a nested UDT or the PLC tag table may not show in the
+  block's own modification time;
+- an instance DB moved to another FB keeps its name, number and RID, and only
+  its old type-info object is checked;
+- a block whose time the PLC does not report is checked by block list only (the
+  time was seen on PLCSIM Advanced V8.0, CPU 1511, FW V2.9, and on a CPU 1215C,
+  FW V4.2, where 12 of 54 data blocks did not report it).
+
+So call ``refresh_tag_catalog()`` after a known download, and
+``refresh_caches_if_program_changed()`` before writing after a possible one: a
+write to a stale address can succeed on whatever variable is there now.
+
+Set ``client.auto_refresh_tags = True`` to run that check automatically when a
+tag read reports a failed item or a name is not in the catalog. If the program
+changed, the client rebuilds the catalog and resolves and reads the names again,
+once. The check runs at most once per call, not when the call has just browsed
+the catalog, and not within 10 seconds of the previous automatic check, so a tag
+that keeps failing or a misspelt name does not add 1 + N requests (N data
+blocks) to every poll. A failed read carries no PLC error code, so any failure
+triggers it. A write that reached the PLC is never resent, because a stale
+address may already have written another variable; only an unknown name, before
+anything is sent, is re-resolved.
 
 The async client provides the same methods as coroutines, except
 ``invalidate_tag_catalog``, which is immediate:

@@ -34,6 +34,25 @@ CHANGES
   IDs; reference IDs stay unique across them. If a subscription after the first
   fails, it raises the new `s7commplus.error.S7SubscriptionError`, whose
   `created` lists the subscriptions already created; they stay active.
+* `refresh_caches_if_program_changed()` (both clients, opt-in) rebuilds the tag
+  catalog when it finds that the PLC program changed: the data-block list
+  differs from the one the catalog was built from, or a cached data block's
+  type-info modification time (attribute 529) differs or no longer answers. This
+  narrows the window in which a cached address names a different variable after
+  a download, but does not close it: a change confined to a nested UDT or the PLC
+  tag table, an instance DB moved to another FB, or a PLC that does not report
+  the time can go unnoticed. Call it before writing after a possible download.
+  The modification time was seen on PLCSIM Advanced V8.0 (CPU 1511, FW V2.9)
+  and, read-only, on a real CPU 1215C FW V4.2, where 42 of its 54 data blocks
+  report it; that it changes on a download is not verified on hardware. The
+  attribute's name has a single source, the attribute-id table of Wireshark's
+  S7CommPlus dissector, at an unverified line.
+* Setting `auto_refresh_tags = True` (both clients, opt-in) runs that check when
+  a tag read reports a failed item or a name is unknown and, if the program
+  changed, resolves and reads the names again, once. It checks at most once per
+  call and once every 10 seconds, so a tag that keeps failing or a misspelt name
+  does not add 1 + N requests to every poll. A write that reached the PLC is
+  never resent, and a write to a stale address does not trigger the check.
 
 ### Behaviour changes
 
