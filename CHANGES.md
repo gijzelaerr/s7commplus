@@ -14,6 +14,25 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `Client` and `AsyncClient` can pin a PLC's TLS certificate instead of relying
+  on a CA file: pass `tls_cert_fingerprint` (the SHA-256 as hex, separators
+  ignored) to `connect()` and the connection is refused unless the PLC presents
+  that exact certificate. `peer_certificate_fingerprint()` reads back the
+  presented digest, and a mismatch raises `S7CertificateError`. The pin is
+  checked right after the TLS handshake, before the session is created or a
+  password is sent. A pin without `use_tls=True` is refused with `ValueError`
+  before anything is sent, so a pinned certificate is never used in the clear.
+* A `s7commplus` command-line tool: `browse`, `read`, `write`, `db-read`,
+  `db-write` and `state`, carrying the same connection and TLS options as the
+  clients, including certificate pinning (`--pin`, with the PLC certificate's
+  fingerprint printed on connect). The TLS options imply `--tls`. The password
+  comes from the `S7COMMPLUS_PASSWORD` environment variable, a no-echo
+  `--ask-password` prompt or `--password`, and is never logged. `read` decodes
+  scalar tags and `--json` emits strict JSON. `-v` sends the library's INFO log
+  to stderr and `-vv` its DEBUG log, which holds the raw protocol frames. The
+  exit status is 0 on success, 1 when the operation fails, including any
+  `ValueError` the library raises once connected, and 2 for a usage error found
+  before connecting or an unknown tag.
 
 ### Behaviour changes
 
