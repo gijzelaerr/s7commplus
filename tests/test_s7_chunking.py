@@ -104,6 +104,12 @@ class _Client:
 kinds = pytest.mark.parametrize("kind", ["sync", "async"])
 
 
+def test_default_item_cap_is_the_measured_s7_1200_limit() -> None:
+    # A CPU 1215C FW V4.2 refuses a read of more than 50 items; both clients split there.
+    assert S7CommPlusClient().max_items_per_request == 50
+    assert S7CommPlusAsyncClient().max_items_per_request == 50
+
+
 def test_chunks_splits_and_preserves_order() -> None:
     assert list(_chunks(list(range(5)), 2)) == [[0, 1], [2, 3], [4]]
     assert list(_chunks([1, 2, 3], 0)) == [[1, 2, 3]]

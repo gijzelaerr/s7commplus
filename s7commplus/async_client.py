@@ -212,7 +212,7 @@ class S7CommPlusAsyncClient:
         self._symbol_catalog: Optional[SymbolCatalog] = None
         # Most items per request and largest request frame of a multi-item read
         # or write; see S7CommPlusClient for the defaults' evidence.
-        self.max_items_per_request = 100
+        self.max_items_per_request = 50
         self.max_request_bytes = 900
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
@@ -959,11 +959,20 @@ class S7CommPlusAsyncClient:
         """Write (db_number, start_offset, data, datatype) tuples matching the PLC target types.
 
         A batch over :attr:`max_items_per_request` items or
-        :attr:`max_request_bytes` is split over several requests and is not
-        atomic; refused items and interrupted batches raise
-        :class:`~s7commplus.error.S7WriteError` as described for
-        :meth:`S7CommPlusClient.db_write_multi`. An item too large for one
-        request raises ``ValueError`` before anything is sent.
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic. The PLC writes every item it does not refuse, and a
+        refused item does not stop the batch.
+
+        Raises:
+            S7WriteError: After the last request, if the PLC refused any item;
+                ``item_errors`` is keyed by position in ``items``. Also when a
+                connection, timeout or protocol failure interrupts a split batch
+                after its first request (the failure is the ``__cause__``):
+                ``unknown`` and ``not_sent`` then name the items that may or may
+                not have been written and the ones never sent. A failure of the
+                first request propagates unchanged, as for a single request.
+            ValueError: An item is too large for one request on its own;
+                nothing is sent.
         """
 
         def build_write(chunk: list[DBWriteItem]) -> bytes:
@@ -1531,10 +1540,21 @@ class S7CommPlusAsyncClient:
         """Write names once and return per-item results without automatic retry.
 
         A batch over :attr:`max_items_per_request` names or
-        :attr:`max_request_bytes` is split over several requests and is not
-        atomic; an interrupted batch is reported as described for
-        :meth:`S7CommPlusClient.write_tags`. A value too large for one request
-        raises ``ValueError`` before anything is sent.
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic; a tag the PLC refuses does not stop the batch. If a
+        connection, timeout or protocol failure interrupts the batch after its
+        first request, the tags written so far keep their results and every
+        later tag gets one :class:`~s7commplus.error.S7WriteError`, raised from
+        that failure, whose ``unknown`` positions may or may not have been
+        written and whose ``not_sent`` positions were never sent. A failure of
+        the first request propagates unchanged, as for a single request.
+
+        Writes are deliberately never retried: a transport failure can leave
+        the caller unable to know whether the PLC applied the request.
+
+        Raises:
+            ValueError: A value is too large for one request on its own;
+                nothing is sent.
         """
         if not self._connected:
             raise RuntimeError("Not connected")

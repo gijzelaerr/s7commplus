@@ -16,10 +16,12 @@ CHANGES
   for compatibility (#64).
 * `read_tags`, `read_symbolic_multi`, `db_read_multi`, `db_write_multi` and
   `write_tags` (both clients) split a large batch over several requests of at
-  most `max_items_per_request` items (default 100; `0` sends a batch in one
-  request) and return the results in item order. The default is not a measured
-  PLC limit: PLCSIM Advanced V8 (CPU 1511, FW V2.9) answered reads of up to 80
-  items, and no hardware limit has been checked.
+  most `max_items_per_request` items (default 50; `0` sends a batch in one
+  request) and return the results in item order. A CPU 1215C FW V4.2 (non-TLS
+  V1 SessionKey session) answers a read of 50 items and refuses one of 51 or
+  more with return value `0xA027A6000054FFFC`, whatever the request size;
+  PLCSIM Advanced V8 (CPU 1511) is limited by the request size instead, and
+  S7-1500 hardware has not been measured.
 * The same methods keep each request frame within `max_request_bytes` (default
   900; `0` disables the check), counted from the S7CommPlus frame header to its
   trailer with the IntegrityId at its 5-byte maximum and any SessionKey HMAC,
@@ -39,6 +41,11 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* Multi-item reads and writes (`read_tags`, `read_symbolic_multi`,
+  `db_read_multi`, `db_write_multi`, `write_tags`, both clients) are split into
+  requests of at most 50 items and 900 bytes. A batch that used to go out in
+  one request may now take several; set `max_items_per_request` or
+  `max_request_bytes` to `0` to turn either bound off.
 * A `db_write_multi` or `write_tags` batch split over several requests is not
   atomic. The requests go out in order and a refused item does not stop the
   batch; `db_write_multi` then raises the new `s7commplus.error.S7WriteError`

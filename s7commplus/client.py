@@ -314,13 +314,12 @@ class S7CommPlusClient:
         self._alarm_notification_frames: deque[bytes] = deque(maxlen=100)
         self._symbol_catalog: Optional[SymbolCatalog] = None
         # Most items one multi-item read or write request carries; a larger batch
-        # is split over several requests, in order, and 0 sends it in one. 100 is
-        # not a measured limit: PLCSIM Advanced V8 (CPU 1511, FW V2.9) answered
-        # reads of up to 80 items, and no hardware limit has been checked. Under
-        # the default max_request_bytes it binds only for small items: a DB read
-        # item takes 12 bytes, so about 70 fit, but a one-LID item of a small
-        # controller area takes 6.
-        self.max_items_per_request = 100
+        # is split over several requests, in order, and 0 sends it in one. A CPU
+        # 1215C FW V4.2 (non-TLS V1 SessionKey session) answers a read of 50 items
+        # and refuses one of 51 or more with return value 0xA027A6000054FFFC,
+        # whatever the request size; PLCSIM Advanced V8 (CPU 1511) is limited by
+        # the request size instead. S7-1500 hardware has not been measured.
+        self.max_items_per_request = 50
         # Largest request frame (see the class docstring). On PLCSIM Advanced V8
         # (CPU 1511, FW V2.9, TLS) a read with an 834-byte payload, a frame of
         # about 860 bytes, was answered; one with a 1034-byte payload, about 1060

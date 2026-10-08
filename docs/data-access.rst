@@ -53,8 +53,9 @@ Batching reduces request overhead and preserves item order:
 
 ``db_read_multi``, ``db_write_multi``, ``read_symbolic_multi``, ``read_tags``
 and ``write_tags`` split a large batch over several requests of at most
-``client.max_items_per_request`` items (default 100; ``0`` sends a batch in one
-request). The requests go out in order and the results come back in item
+``client.max_items_per_request`` items (default 50; ``0`` sends a batch in one
+request). A CPU 1215C FW V4.2 refuses a read of more than 50 items, whatever its
+size. The requests go out in order and the results come back in item
 order. ``db_read_multi`` returns ``b""`` for an item the PLC could not read,
 including each item of a request the PLC refused as a whole.
 
