@@ -10,6 +10,7 @@ import hmac
 import logging
 import struct
 import threading
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,7 +30,10 @@ from s7commplus.connection import (
 from s7commplus.legitimation import (
     LegitimationState,
     _build_legitimation_payload,
+    _parse_paom_string,
     build_legacy_response,
+    build_new_response,
+    decide_legitimation_mode,
     derive_legitimation_key,
     extract_session_version_string,
 )
@@ -41,6 +45,7 @@ from s7commplus.protocol import (
     FunctionCode,
     Ids,
     LegitimationId,
+    LegitimationType,
     ObjectId,
     Opcode,
     ProtocolVersion,
@@ -321,6 +326,286 @@ class TestExtractSessionVersionString:
         assert extract_session_version_string(value[:2]) is None
 
 
+# ServerSessionVersion from PLCSIM Advanced V8.0 (instance with a CPU 1511 project,
+# 6ES7 511-1AK02-0AB0 FW V2.9), captured on a TLS session on 2026-10-08. Element
+# 319, the device string, is "1;6ES7 SIM-01500-APLC;S4.1": PLCSIM reports its own
+# order number and version, not the project's CPU.
+PLCSIM_ADVANCED_V8_SESSION_VERSION = bytes.fromhex(
+    "00170000013a823b00048800823c00048540823d000484818640823e000484818440"
+    "823f00151a313b364553372053494d2d30313530302d41504c433b53342e31"
+    "8240001508323b38313138323482410003000300"
+)
+
+
+class TestParsePaomString:
+    """Device series and firmware number, as the reference's pattern reads them."""
+
+    @pytest.mark.parametrize(
+        ("paom_string", "expected"),
+        [
+            ("1;6ES7 512-1CK01-0AB0;V2.9", ("5", 209)),
+            ("1;6ES7 214-1AG40-0XB0 ;V4.5", ("2", 405)),  # S7-1214C, trailing space
+            ("1;6ES7 510-1DJ01-0AB0;V2.9", ("5", 209)),  # S7-1510SP
+            ("1;6ES7 672-7FC01-0YA0;V21.9", ("6", 2109)),  # S7-1507SF
+            ("1;6ES7 212-1HG50-0XB0;V1.0", ("2", 100)),  # S7-1200 G2
+            ("1;6ES7 SIM-01500-APLC;S4.1", ("5", 401)),  # PLCSIM Advanced V8.0
+            ("1;6es7 511-1ak02-0ab0;v3.1", ("5", 301)),  # the reference ignores case
+            ("1;6ES7  512-1CK01-0AB0;V2.9", ("5", 209)),  # two spaces: tolerated here only
+            ("1;6ES7 512-1CK01-0AB0;x;V2.9", ("5", 209)),  # the firmware is the last field
+            ("1;6ES7 512-1CK01-0AB0;V2.10", ("5", 210)),
+            ("1;6ES7 512-1CK01-0AB0;V2.0010", ("5", 210)),  # four minor digits: the most read
+            # The last model number in the field wins, overlapping ones included.
+            ("1;6ES7 215 7 512;V2.9", ("5", 209)),
+            ("1;671234;V2.9", ("2", 209)),  # "7123" and "1234" overlap; "234" is the last
+        ],
+    )
+    def test_reads_series_and_firmware(self, paom_string: str, expected: tuple[str, int]) -> None:
+        assert _parse_paom_string(paom_string) == expected
+
+    @pytest.mark.parametrize(
+        "paom_string",
+        [
+            "",
+            ";;",
+            "1;6ES7 512-1CK01-0AB0",  # no firmware field
+            "6ES7 512-1CK01-0AB0;V2.9",  # no PAOM id field
+            "1;;V2.9",
+            "1;6ES7 5",  # truncated in the order number
+            "1;6ES7 512-1CK01-0AB0;",  # truncated before the firmware
+            "1;6ES7 512-1CK01-0AB0;V",
+            "1;6ES7 512-1CK01-0AB0;V2",
+            "1;6ES7 512-1CK01-0AB0;V2.",
+            "1;6ES7 512-1CK01-0AB0;V.9",
+            "1;6ES7 512-1CK01-0AB0;X2.9",
+            "1;6ES7 512-1CK01-0AB0;V123.1",
+            "1;6ES7 512-1CK01-0AB0;V2.9a",
+            "1;6ES7 512-1CK01-0AB0;V2.9.1",
+            "1;6ES7 512-1CK01-0AB0;V2.12345",  # five minor digits
+            "1;6ES7 512-1CK01-0AB0;V2.9\n",
+            "1;6ES7 512\n-1CK01-0AB0;V2.9",  # the reference's `.` stops at the newline too
+            "1\n;6ES7 512-1CK01-0AB0;V2.9",  # rejected here only: a newline anywhere
+            "1;6ES7 512-1CK01-0AB0;V2.9 ",
+            "1;6ES2 512-1CK01-0AB0;V2.9",  # no 1 or 7 in front of the model number
+            "1;6ES7 SIM-0AB0;V2.9",  # no model number at all
+            "1;X;7 511;V3.1",  # a model number outside the order number field
+        ],
+    )
+    def test_rejects_malformed_strings(self, paom_string: str) -> None:
+        assert _parse_paom_string(paom_string) is None
+
+    def test_long_adversarial_string_is_rejected(self) -> None:
+        """Many candidate model numbers and separators: still parsed in linear time."""
+        assert _parse_paom_string("1;" + "1000" * 50_000 + ";" * 1000 + "V2") is None
+        assert _parse_paom_string("1;" + ("1" + " " * 1000) * 200 + ";V2.9") is None
+
+    def test_huge_minor_version_is_rejected(self) -> None:
+        """Thousands of minor digits never reach int(), which raises ValueError past 4300."""
+        assert _parse_paom_string("1;6ES7 512-1CK01-0AB0;V2." + "9" * 5000) is None
+        assert decide_legitimation_mode("1;6ES7 512-1CK01-0AB0;V2." + "9" * 5000) is None
+
+
+def _master_parse_paom_string(version_string: str) -> Optional[tuple[str, int]]:
+    """``_parse_paom_string`` as it was on master at 07d28d0, before the model-number regex.
+
+    The code is a verbatim copy of ``s7commplus/legitimation.py`` at that commit;
+    only the name and this docstring differ.
+    """
+    fields = version_string.split(";")
+    if len(fields) < 3:
+        return None
+
+    # The model number ends the order number, behind a vendor prefix whose last
+    # digit is 1 or 7: "6ES7 512-1CK01-0AB0" -> prefix "6ES7", model "512".
+    order_number = fields[1].split("-")[0].rstrip()
+    model, prefix = order_number[-3:], order_number[:-3].rstrip()
+    if len(model) != 3 or not model.isdecimal() or prefix[-1:] not in ("1", "7"):
+        return None
+
+    firmware = fields[-1]
+    if firmware[:1].upper() not in ("V", "S"):
+        return None
+    major, dot, minor = firmware[1:].partition(".")
+    if not dot or not (1 <= len(major) <= 2) or not major.isdecimal() or not minor.isdecimal():
+        return None
+
+    return model[0], int(major) * 100 + int(minor)
+
+
+class TestParsePaomStringMatchesMaster:
+    """The model-number regex reads real S7-1200/1500 device strings as master's parser did.
+
+    The order numbers are entries of ``s7commplus.devices.DEVICE_NAMES``. S7-1200
+    strings carry the space before the firmware field that a real CPU 1215C sends.
+    """
+
+    @pytest.mark.parametrize(
+        "paom_string",
+        [
+            # Read from a real CPU 1215C DC/DC/DC, FW V4.2 (non-TLS V1 SessionKey session).
+            "1;6ES7 215-1AG40-0XB0 ;V4.2",
+            "1;6ES7 211-1AE40-0XB0 ;V4.2",  # CPU 1211C DC/DC/DC
+            "1;6ES7 211-1BE40-0XB0 ;V4.5",  # CPU 1211C AC/DC/Rly
+            "1;6ES7 211-1HE40-0XB0 ;V4.6",  # CPU 1211C DC/DC/Rly
+            "1;6ES7 214-1AG40-0XB0 ;V4.4",  # CPU 1214C DC/DC/DC
+            "1;6ES7 214-1HG40-0XB0 ;V4.6",  # CPU 1214C DC/DC/Rly
+            "1;6ES7 215-1BG40-0XB0 ;V4.7",  # CPU 1215C AC/DC/Rly
+            "1;6ES7 215-1HG40-0XB0 ;V4.3",  # CPU 1215C DC/DC/Rly
+            "1;6ES7 511-1AK01-0AB0;V2.9",  # CPU 1511-1 PN
+            "1;6ES7 511-1FK01-0AB0;V2.8",  # CPU 1511F-1 PN
+            "1;6ES7 512-1CK00-0AB0;V2.6",  # CPU 1512C-1 PN
+            "1;6ES7 512-1DK01-0AB0;V2.9",  # CPU 1512SP-1 PN
+            "1;6ES7 515-2AM01-0AB0;V2.9",  # CPU 1515-2 PN
+            "1;6ES7 515-2FM01-0AB0;V2.5",  # CPU 1515F-2 PN
+            "1;6ES7 517-3AP00-0AB0;V2.8",  # CPU 1517-3 PN/DP
+            "1;6ES7 517-3FP00-0AB0;V2.9",  # CPU 1517F-3 PN/DP
+        ],
+    )
+    def test_series_and_firmware_match_master(self, paom_string: str) -> None:
+        from s7commplus.devices import device_name
+
+        assert device_name(paom_string) is not None  # a real order number from the table
+        expected = _master_parse_paom_string(paom_string)
+        assert expected is not None
+        assert _parse_paom_string(paom_string) == expected
+
+
+class TestDecideLegitimationMode:
+    """Every firmware boundary of the device table in ``decide_legitimation_mode``."""
+
+    @pytest.mark.parametrize(
+        ("paom_string", "expected"),
+        [
+            # S7-1500: none below V2.9, legacy up to V3.0, new from V3.1.
+            ("1;6ES7 513-1AL02-0AB0;V2.8", None),
+            ("1;6ES7 513-1AL02-0AB0;V2.9", LegitimationType.LEGACY),
+            ("1;6ES7 513-1AL02-0AB0;V3.0", LegitimationType.LEGACY),
+            ("1;6ES7 516-3AN02-0AB0;V3.1", LegitimationType.NEW),
+            ("1;6ES7 SIM-01500-APLC;S4.1", LegitimationType.NEW),  # PLCSIM Advanced V8.0 (captured)
+            # S7-1200: none below V4.3, legacy up to V4.6, new from V4.7.
+            ("1;6ES7 217-1AG40-0XB0 ;V4.2", None),
+            ("1;6ES7 217-1AG40-0XB0 ;V4.3", LegitimationType.LEGACY),
+            ("1;6ES7 211-1AE40-0XB0 ;V4.6", LegitimationType.LEGACY),
+            ("1;6ES7 211-1AE40-0XB0 ;V4.7", LegitimationType.NEW),
+            ("1;6ES7 214-1AF50-0XB0;V1.1", LegitimationType.NEW),  # S7-1200 G2 ("50-0XB0")
+            # S7-1507S software controller: none below V21.9, then legacy.
+            ("1;6ES7 672-5DC01-0YA0;V21.8", None),
+            ("1;6ES7 672-5DC01-0YA0;V21.9", LegitimationType.LEGACY),
+            ("1;6ES7 317-2EK14-0AB0;V3.3", None),  # S7-300: not an S7CommPlus device
+        ],
+    )
+    def test_mode_follows_device_and_firmware(self, paom_string: str, expected: LegitimationType | None) -> None:
+        assert decide_legitimation_mode(paom_string) is expected
+
+    def test_unreadable_string_logs_and_returns_none(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="s7commplus.legitimation"):
+            assert decide_legitimation_mode("1;6ES7 SIM-0AB0;S4.1") is None
+        assert "Could not extract the firmware version" in caplog.text
+
+    def test_plcsim_capture_selects_new_mode(self) -> None:
+        paom_string = extract_session_version_string(PLCSIM_ADVANCED_V8_SESSION_VERSION)
+        assert paom_string == "1;6ES7 SIM-01500-APLC;S4.1"
+        assert decide_legitimation_mode(paom_string) is LegitimationType.NEW
+
+
+class TestAuthenticateOnPlcsim:
+    """`authenticate()` on the PLCSIM device string takes the new exchange in both clients.
+
+    It used to raise "PLC firmware version does not support legitimation", because
+    the device string's order number was not read the way the reference reads it.
+    """
+
+    CHALLENGE = bytes(range(20))
+    OMS_SECRET = bytes(range(32, 64))
+
+    def _expected_response(self) -> bytes:
+        return build_new_response("secret", self.CHALLENGE, self.OMS_SECRET)
+
+    def test_sync(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._connected = True
+        conn._tls_active = True
+        conn._protection_level = AccessLevel.NO_ACCESS
+        conn._oms_secret = self.OMS_SECRET
+        conn._server_session_version = PLCSIM_ADVANCED_V8_SESSION_VERSION
+        conn._get_legitimation_challenge = MagicMock(return_value=self.CHALLENGE)
+        conn._send_legitimation_new = MagicMock()
+        conn._send_legitimation_legacy = MagicMock()
+        conn._get_effective_protection_level = MagicMock(return_value=AccessLevel.FULL_ACCESS)
+
+        conn.authenticate("secret")
+
+        conn._send_legitimation_new.assert_called_once_with(self._expected_response())
+        conn._send_legitimation_legacy.assert_not_called()
+        assert conn._protection_level == AccessLevel.FULL_ACCESS
+
+    @pytest.mark.asyncio
+    async def test_async(self) -> None:
+        client = S7CommPlusAsyncClient()
+        client._connected = True
+        client._tls_active = True
+        client._protection_level = AccessLevel.NO_ACCESS
+        client._oms_secret = self.OMS_SECRET
+        client._server_session_version = PLCSIM_ADVANCED_V8_SESSION_VERSION
+        client._get_legitimation_challenge = AsyncMock(return_value=self.CHALLENGE)
+        client._send_legitimation_new = AsyncMock()
+        client._send_legitimation_legacy = AsyncMock()
+        client._get_effective_protection_level = AsyncMock(return_value=AccessLevel.FULL_ACCESS)
+
+        await client.authenticate("secret")
+
+        client._send_legitimation_new.assert_awaited_once_with(self._expected_response())
+        client._send_legitimation_legacy.assert_not_awaited()
+        assert client._protection_level == AccessLevel.FULL_ACCESS
+
+
+def _session_version_with_device_string(device_string: str) -> bytes:
+    """A ServerSessionVersion struct whose only element is the device string (319)."""
+    encoded = device_string.encode("utf-8")
+    return (
+        bytes.fromhex("00170000013a")
+        + encode_uint32_vlq(Ids.SESSION_VERSION_SYSTEM_PAOM_STRING)
+        + bytes([0x00, DataType.WSTRING])
+        + encode_uint32_vlq(len(encoded))
+        + encoded
+        + bytes([0x00])
+    )
+
+
+class TestAuthenticateOnOverlongFirmwareVersion:
+    """A device string with thousands of minor-version digits is refused as unsupported.
+
+    The PLC's string is untrusted. Its minor version used to go to int() unbounded,
+    so authenticate() raised Python's bare ValueError for more than 4300 digits.
+    """
+
+    SESSION_VERSION = _session_version_with_device_string("1;6ES7 512-1CK01-0AB0;V3." + "1" * 5000)
+
+    def test_sync(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._connected = True
+        conn._tls_active = True
+        conn._protection_level = AccessLevel.NO_ACCESS
+        conn._server_session_version = self.SESSION_VERSION
+        conn._get_legitimation_challenge = MagicMock()
+
+        with pytest.raises(S7ConnectionError, match="does not support legitimation"):
+            conn.authenticate("secret")
+        conn._get_legitimation_challenge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async(self) -> None:
+        client = S7CommPlusAsyncClient()
+        client._connected = True
+        client._tls_active = True
+        client._protection_level = AccessLevel.NO_ACCESS
+        client._server_session_version = self.SESSION_VERSION
+        client._get_legitimation_challenge = AsyncMock()
+
+        with pytest.raises(S7ConnectionError, match="does not support legitimation"):
+            await client.authenticate("secret")
+        client._get_legitimation_challenge.assert_not_awaited()
+
+
 class TestLegitimationPayload:
     """Test legitimation payload building."""
 
@@ -347,6 +632,28 @@ class TestLegitimationPayload:
         payload = _build_legitimation_payload("password", "admin")
         assert payload[10] == 0x04  # UDInt type for legit_type
         assert payload[11] == 0x02  # legit_type = 2
+
+    def test_password_only_payload_bytes(self) -> None:
+        """The layout PLCSIM Advanced V8.0 accepted, live, on 2026-10-08."""
+        assert _build_legitimation_payload("x") == bytes.fromhex(
+            "0017"
+            "00009dd0"  # struct 40400, LegitimationPayloadStruct
+            "82bb51 0004 01"  # 40401 type: UDInt 1, legacy-style credentials
+            "82bb52 0014 00 00"  # 40402 username: Blob, root id 0, empty
+            "82bb53 0014 00 14"  # 40403 password: Blob, root id 0, 20 bytes ...
+            "11f6ad8ec52a2984abaafd7c3b516503785c2072"  # ... SHA-1("x")
+            "00"  # terminator
+        )
+
+    def test_username_payload_bytes(self) -> None:
+        assert _build_legitimation_payload("pw", "admin") == bytes.fromhex(
+            "0017"
+            "00009dd0"
+            "82bb51 0004 02"  # type: UDInt 2, username and password
+            "82bb52 0014 00 05 61646d696e"  # username: root id 0, "admin"
+            "82bb53 0014 00 02 7077"  # password in plain text: root id 0, "pw"
+            "00"
+        )
 
 
 class TestLegitimationState:

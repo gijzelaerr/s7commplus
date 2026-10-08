@@ -5,8 +5,10 @@ Supports two authentication modes:
 - New: AES-256-CBC encrypted credentials with TLS-derived key (newer firmware)
 
 Firmware version determines which mode is used:
-- S7-1500: FW >= 3.01 = new, FW 2.09-2.99 = legacy
-- S7-1200: FW >= 4.07 = new, FW 4.03-4.06 = legacy
+- S7-1500: FW >= 3.1 = new, FW 2.9-3.0 = legacy
+- S7-1200: FW >= 4.7 = new, FW 4.3-4.6 = legacy
+- S7-PLCSIM Advanced reports its own version, not the project CPU's
+  ("1;6ES7 SIM-01500-APLC;S4.1" on V8.0), so it uses new
 
 Note: The "new" mode requires the ``cryptography`` package for AES-256-CBC.
 Install with ``pip install cryptography``. The legacy mode uses only stdlib.
@@ -14,13 +16,24 @@ Install with ``pip install cryptography``. The legacy mode uses only stdlib.
 
 import hashlib
 import logging
+import re
 import struct
 from typing import Optional
 
+from .codec import encode_pvalue_blob
 from .protocol import DataType, Ids, LegitimationType
 from .vlq import decode_uint32_vlq, encode_uint32_vlq
 
 logger = logging.getLogger(__name__)
+
+
+# Every position where a model number starts: a 1 or 7, optional whitespace, then
+# three digits. The lookahead keeps overlapping candidates ("1712" holds "171"
+# and "712"), so the last one found is the one the reference's greedy `[^;]*` picks.
+_MODEL_NUMBER = re.compile(r"(?=[17]\s*(\d{3}))")
+# The minor version is bounded so that int() never sees an arbitrarily long digit
+# string from the PLC (Python refuses more than 4300 digits with a ValueError).
+_FIRMWARE = re.compile(r"[VS](\d{1,2})\.(\d{1,4})", re.IGNORECASE)
 
 
 def _parse_paom_string(version_string: str) -> Optional[tuple[str, int]]:
@@ -32,36 +45,35 @@ def _parse_paom_string(version_string: str) -> Optional[tuple[str, int]]:
 
     ```python
     _parse_paom_string("1;6ES7 512-1CK01-0AB0;V2.9")  # ("5", 209)
+    _parse_paom_string("1;6ES7 SIM-01500-APLC;S4.1")  # ("5", 401), PLCSIM Advanced
     ```
 
-    The reference does this with one pattern over the whole string,
-    `^[^;]*;[^;]*[17]\\s?(\\d{3}).*;[VS](\\d{1,2}\\.\\d+)$`, which this matches except
-    that it also tolerates more than one space in front of the model number.
+    The reference does this with one case-insensitive pattern over the whole string,
+    `^[^;]*;[^;]*[17]\\s?(\\d{3}).*;[VS](\\d{1,2}\\.\\d+)$`. Its greedy `[^;]*` takes the
+    last model number in the second field, which is how PLCSIM's "SIM-01500" reads as
+    model 500. This parses the same way, in linear time on untrusted input, except
+    that it tolerates more than one space in front of the model number, and rejects
+    a minor version of more than four digits and a newline anywhere (the reference's
+    `.` stops at a newline after the model number, but its `[^;]*` and `$` let one
+    through elsewhere).
 
     :param version_string: PAOM string from `extract_session_version_string`.
     :return: The series digit and firmware number, or None when either is unreadable.
 
-    Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
+    Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs, lines 48-51
+    at commit dbd61e4
     """
     fields = version_string.split(";")
-    if len(fields) < 3:
+    if len(fields) < 3 or "\n" in version_string:
         return None
 
-    # The model number ends the order number, behind a vendor prefix whose last
-    # digit is 1 or 7: "6ES7 512-1CK01-0AB0" -> prefix "6ES7", model "512".
-    order_number = fields[1].split("-")[0].rstrip()
-    model, prefix = order_number[-3:], order_number[:-3].rstrip()
-    if len(model) != 3 or not model.isdecimal() or prefix[-1:] not in ("1", "7"):
+    models = _MODEL_NUMBER.findall(fields[1])
+    firmware = _FIRMWARE.fullmatch(fields[-1])
+    if not models or firmware is None:
         return None
 
-    firmware = fields[-1]
-    if firmware[:1].upper() not in ("V", "S"):
-        return None
-    major, dot, minor = firmware[1:].partition(".")
-    if not dot or not (1 <= len(major) <= 2) or not major.isdecimal() or not minor.isdecimal():
-        return None
-
-    return model[0], int(major) * 100 + int(minor)
+    major, minor = firmware.groups()
+    return models[-1][0], int(major) * 100 + int(minor)
 
 
 def extract_session_version_string(raw: bytes) -> Optional[str]:
@@ -216,6 +228,7 @@ def decide_legitimation_mode(version_string: str) -> Optional[LegitimationType]:
 
     ```python
     decide_legitimation_mode("1;6ES7 512-1CK01-0AB0;V2.9")  # LegitimationType.LEGACY
+    decide_legitimation_mode("1;6ES7 SIM-01500-APLC;S4.1")  # LegitimationType.NEW (PLCSIM Advanced)
     ```
 
     :param version_string: PAOM string from `extract_session_version_string`.
@@ -321,8 +334,12 @@ def _build_legitimation_payload(password: str, username: str = "") -> bytes:
     """Build the plaintext payload that new-mode legitimation encrypts.
 
     An empty username selects legacy-style credentials, where the password travels as its SHA-1 hash.
+    Both credentials are Blob values, so each carries a blob root id (0) before its length, as
+    every other Blob does. Without it, PLCSIM Advanced V8.0 refused every attempt, whatever the
+    password.
 
-    Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
+    Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs (buildLegitimationPayload)
+    and Core/PValue.cs (ValueBlob.Serialize), commit dbd61e4
     """
     if username:
         legitimation_type = LegitimationType.NEW
@@ -342,16 +359,11 @@ def _build_legitimation_payload(password: str, username: str = "") -> bytes:
 
     # Element 2: Username blob
     result += encode_uint32_vlq(Ids.LEGITIMATION_PAYLOAD_USERNAME)
-    username_data = username.encode("utf-8")
-    result += bytes([0x00, DataType.BLOB])
-    result += encode_uint32_vlq(len(username_data))
-    result += username_data
+    result += encode_pvalue_blob(username.encode("utf-8"))
 
     # Element 3: Password blob
     result += encode_uint32_vlq(Ids.LEGITIMATION_PAYLOAD_PASSWORD)
-    result += bytes([0x00, DataType.BLOB])
-    result += encode_uint32_vlq(len(password_data))
-    result += password_data
+    result += encode_pvalue_blob(password_data)
 
     result += bytes([0x00])  # list terminator
     return bytes(result)
