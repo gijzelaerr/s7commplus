@@ -10,6 +10,7 @@ import hmac
 import logging
 import struct
 import threading
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -401,6 +402,71 @@ class TestParsePaomString:
         """Thousands of minor digits never reach int(), which raises ValueError past 4300."""
         assert _parse_paom_string("1;6ES7 512-1CK01-0AB0;V2." + "9" * 5000) is None
         assert decide_legitimation_mode("1;6ES7 512-1CK01-0AB0;V2." + "9" * 5000) is None
+
+
+def _master_parse_paom_string(version_string: str) -> Optional[tuple[str, int]]:
+    """``_parse_paom_string`` as it was on master at 07d28d0, before the model-number regex.
+
+    The code is a verbatim copy of ``s7commplus/legitimation.py`` at that commit;
+    only the name and this docstring differ.
+    """
+    fields = version_string.split(";")
+    if len(fields) < 3:
+        return None
+
+    # The model number ends the order number, behind a vendor prefix whose last
+    # digit is 1 or 7: "6ES7 512-1CK01-0AB0" -> prefix "6ES7", model "512".
+    order_number = fields[1].split("-")[0].rstrip()
+    model, prefix = order_number[-3:], order_number[:-3].rstrip()
+    if len(model) != 3 or not model.isdecimal() or prefix[-1:] not in ("1", "7"):
+        return None
+
+    firmware = fields[-1]
+    if firmware[:1].upper() not in ("V", "S"):
+        return None
+    major, dot, minor = firmware[1:].partition(".")
+    if not dot or not (1 <= len(major) <= 2) or not major.isdecimal() or not minor.isdecimal():
+        return None
+
+    return model[0], int(major) * 100 + int(minor)
+
+
+class TestParsePaomStringMatchesMaster:
+    """The model-number regex reads real S7-1200/1500 device strings as master's parser did.
+
+    The order numbers are entries of ``s7commplus.devices.DEVICE_NAMES``. S7-1200
+    strings carry the space before the firmware field that a real CPU 1215C sends.
+    """
+
+    @pytest.mark.parametrize(
+        "paom_string",
+        [
+            # Read from a real CPU 1215C DC/DC/DC, FW V4.2 (non-TLS V1 SessionKey session).
+            "1;6ES7 215-1AG40-0XB0 ;V4.2",
+            "1;6ES7 211-1AE40-0XB0 ;V4.2",  # CPU 1211C DC/DC/DC
+            "1;6ES7 211-1BE40-0XB0 ;V4.5",  # CPU 1211C AC/DC/Rly
+            "1;6ES7 211-1HE40-0XB0 ;V4.6",  # CPU 1211C DC/DC/Rly
+            "1;6ES7 214-1AG40-0XB0 ;V4.4",  # CPU 1214C DC/DC/DC
+            "1;6ES7 214-1HG40-0XB0 ;V4.6",  # CPU 1214C DC/DC/Rly
+            "1;6ES7 215-1BG40-0XB0 ;V4.7",  # CPU 1215C AC/DC/Rly
+            "1;6ES7 215-1HG40-0XB0 ;V4.3",  # CPU 1215C DC/DC/Rly
+            "1;6ES7 511-1AK01-0AB0;V2.9",  # CPU 1511-1 PN
+            "1;6ES7 511-1FK01-0AB0;V2.8",  # CPU 1511F-1 PN
+            "1;6ES7 512-1CK00-0AB0;V2.6",  # CPU 1512C-1 PN
+            "1;6ES7 512-1DK01-0AB0;V2.9",  # CPU 1512SP-1 PN
+            "1;6ES7 515-2AM01-0AB0;V2.9",  # CPU 1515-2 PN
+            "1;6ES7 515-2FM01-0AB0;V2.5",  # CPU 1515F-2 PN
+            "1;6ES7 517-3AP00-0AB0;V2.8",  # CPU 1517-3 PN/DP
+            "1;6ES7 517-3FP00-0AB0;V2.9",  # CPU 1517F-3 PN/DP
+        ],
+    )
+    def test_series_and_firmware_match_master(self, paom_string: str) -> None:
+        from s7commplus.devices import device_name
+
+        assert device_name(paom_string) is not None  # a real order number from the table
+        expected = _master_parse_paom_string(paom_string)
+        assert expected is not None
+        assert _parse_paom_string(paom_string) == expected
 
 
 class TestDecideLegitimationMode:
