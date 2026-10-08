@@ -387,13 +387,14 @@ Four PLCSIM-specific behaviours were found and fixed (#66):
 - The SetupSession SecurityKey write echoes the PLC's own ServerSessionVersion
   **with elements 315–318 rewritten to the S7-1500 (real-PLC) values**. Echoing
   PLCSIM's own values back is accepted for the setup and serves reads, but it
-  makes PLCSIM reject the post-auth legitimation; the real-PLC values are what
-  S7CommRust and the HarpoS7 PoC (patched) use, and they work for both.
+  makes PLCSIM reject the post-auth legitimation; the real-PLC values, taken
+  from the S7-1500 session-setup capture in HarpoS7 (MIT,
+  `HarpoS7.PoC/Packets/SetMultiVarsRequest.cs`, `S71500Data`), work for both.
 - PLCSIM Advanced does **not** want the address-323 session activation
   (`SET_VARIABLE` = USINT(5)) that real firmware needs: reads still work after
   it, but the next `CreateObject` / `SetMultiVariables` (write, subscription,
   delete) answers with a fatal SystemEvent and a TCP reset. The activation is now
-  skipped for family 03, as S7CommRust's validated legacy handshake does.
+  skipped for family 03 (seen live on PLCSIM Advanced V8).
 - On the family-03 legacy session the response IntegrityId follows the body for
   the set-side operations too (`SET`/`CREATE`/`DELETE_OBJECT`), not only for
   `GET_MULTI_VARIABLES`/`EXPLORE`; those payloads are kept whole so the

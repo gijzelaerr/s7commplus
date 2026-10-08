@@ -532,8 +532,9 @@ def _strip_paom_string_in_session_version(struct_bytes: bytes) -> bytes:
 # PLCSIM Advanced FW 2.8 accept the session and serve reads, but it then rejects
 # the post-auth legitimation blob (the challenge/key derivation ends up wrong).
 # The real-PLC (S7-1500) values are accepted for the setup *and* for the
-# legitimation, as S7CommRust and the HarpoS7 PoC (with its template patched)
-# both use. Source: S7CommRust `legacy/session.rs` patch_after calls, verified
+# legitimation. Source: the S7-1500 session-setup capture in HarpoS7 (MIT),
+# `HarpoS7.PoC/Packets/SetMultiVarsRequest.cs` (`S71500Data`, lines 40-42 at
+# bonk-dev/HarpoS7@19411a7: 315/316 = 84 00, 317/318 = 84 81 82 40); verified
 # live against PLCSIM Advanced V8 (#66).
 _PLCSIM_SERVER_SESSION_VERSION_REWRITES: dict[int, bytes] = {
     315: bytes([0x84, 0x00]),
@@ -1303,8 +1304,7 @@ class S7CommPlusConnection:
                 if self._v1_session_key_family == KeyFamily.PLCSIM:
                     # PLCSIM Advanced resets the connection on the next CreateObject /
                     # SetMultiVariables if the address-323 session activation was sent
-                    # first (reads still work). S7CommRust's validated legacy handshake
-                    # does not send it either.
+                    # first (reads still work); seen live on PLCSIM Advanced V8 (#66).
                     logger.info("PLCSIM session: skipping the address-323 session activation")
                 else:
                     self._session_activate()
