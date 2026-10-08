@@ -4,11 +4,13 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 """
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import logging
 import ssl
 import struct
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Awaitable, Callable, Optional, TypeVar
@@ -18,6 +20,10 @@ from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
 from . import typeinfo
 from .blob_decompressor import find_and_decompress
 from .client import (
+    _AUTO_RECONNECT_ACTIVE,
+    _AUTO_RECONNECT_METHODS,
+    _AUTO_RECONNECT_MIN_INTERVAL,
+    _AUTO_RECONNECT_STAND_DOWN,
     _LEGACY_KEY_CACHE,
     DBWriteItem,
     SymbolicReadItem,
@@ -166,6 +172,36 @@ class AsyncSubscriptionQueue:
         return self._client.subscription_diagnostics(self._subscription_id).queued_notifications
 
 
+def _retry_on_dropped_connection(method: Callable[..., Awaitable[_T]]) -> Callable[..., Awaitable[_T]]:
+    """Retry a read coroutine once on a fresh session when auto-reconnect is on.
+
+    The retry rebuilds the request, so it wraps the operation rather than the
+    raw send. Only the outermost wrapped call of a task handles a drop (see
+    ``_AUTO_RECONNECT_ACTIVE`` in the sync client); ``_recover_dropped_connection``
+    decides whether to reconnect.
+    """
+
+    @functools.wraps(method)
+    async def wrapper(self: "S7CommPlusAsyncClient", *args: Any, **kwargs: Any) -> _T:
+        active = _AUTO_RECONNECT_ACTIVE.get()
+        if not self._auto_reconnect or id(self) in active:
+            return await method(self, *args, **kwargs)
+        token = _AUTO_RECONNECT_ACTIVE.set(active | {id(self)})
+        try:
+            generation = self._generation
+            try:
+                return await method(self, *args, **kwargs)
+            except S7ConnectionError as exc:
+                if not await self._recover_dropped_connection(generation, exc):
+                    raise
+            logger.info("Retrying %s() on the new session", method.__name__)
+            return await method(self, *args, **kwargs)
+        finally:
+            _AUTO_RECONNECT_ACTIVE.reset(token)
+
+    return wrapper
+
+
 class S7CommPlusAsyncClient:
     """Async S7CommPlus client for S7-1200/1500 PLCs.
 
@@ -193,6 +229,10 @@ class S7CommPlusAsyncClient:
         self._generation = 0
         self._reconnect_lock = asyncio.Lock()
         self._rebuild_task: Optional[asyncio.Task[Any]] = None
+        # Opt-in: a read that finds the connection dropped reconnects and retries once.
+        self._auto_reconnect = False
+        self._auto_reconnect_min_interval = _AUTO_RECONNECT_MIN_INTERVAL
+        self._last_auto_reconnect = float("-inf")
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
@@ -344,6 +384,7 @@ class S7CommPlusAsyncClient:
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
+        auto_reconnect: bool = False,
     ) -> None:
         """Connect to an S7-1200/1500 PLC using S7CommPlus.
 
@@ -376,6 +417,9 @@ class S7CommPlusAsyncClient:
                 engineering-style operations differently per role is not
                 verified against a PLC, so try ``"es"`` if the default is
                 refused.
+            auto_reconnect: When a read finds the connection dropped, reconnect
+                and run it once more (see :attr:`auto_reconnect`). Writes are
+                never retried. Off by default.
         """
         if legacy_s7_1500 and use_tls:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
@@ -401,6 +445,7 @@ class S7CommPlusAsyncClient:
             "connection_type": connection_type,
         }
         self._host = host
+        self._auto_reconnect = auto_reconnect
         try:
             await self._open_connection()
         except Exception:
@@ -785,6 +830,19 @@ class S7CommPlusAsyncClient:
         """Count of reconnects the client has performed; a change means the session was rebuilt."""
         return self._generation
 
+    @property
+    def auto_reconnect(self) -> bool:
+        """Whether a read that finds the connection dropped reconnects and runs once more.
+
+        Set by ``connect(auto_reconnect=...)``; a change made later outlasts
+        reconnects. Writes are never retried.
+        """
+        return self._auto_reconnect
+
+    @auto_reconnect.setter
+    def auto_reconnect(self, enabled: bool) -> None:
+        self._auto_reconnect = enabled
+
     async def reconnect(self) -> None:
         """Re-establish the connection with the parameters from the last connect().
 
@@ -960,8 +1018,38 @@ class S7CommPlusAsyncClient:
             return await op()
         except S7ConnectionError as exc:
             logger.info("Connection dropped by PLC (%s); reconnecting and retrying", exc)
-            await self._reconnect()
+            try:
+                await self._reconnect()
+            finally:
+                # Counts as an automatic attempt, so an auto-reconnecting browse()
+                # does not try again at once when this one failed.
+                self._last_auto_reconnect = time.monotonic()
             return await op()
+
+    async def _recover_dropped_connection(self, generation: int, exc: S7ConnectionError) -> bool:
+        """Prepare the retry of an auto-reconnecting read that found the connection dropped.
+
+        ``generation`` is the session the read started on. Returns ``False``
+        to hand the original error to the caller instead of retrying. Tasks
+        that see the same drop queue on the reconnect lock; the first rebuilds
+        the session and the others retry on it.
+        """
+        async with self._reconnect_lock:
+            if self._generation != generation:
+                return True  # another task already rebuilt the session; retry on it
+            if self._connect_params is None:
+                return False
+            if self._subscriptions.subscription_ids or self._subscriptions.pending_restore or self._alarm_subscription_ids:
+                raise S7ConnectionError(_AUTO_RECONNECT_STAND_DOWN) from exc
+            if time.monotonic() - self._last_auto_reconnect < self._auto_reconnect_min_interval:
+                logger.debug("Connection lost (%s); the last automatic reconnect ended too recently to try again", exc)
+                return False
+            logger.info("Connection lost (%s); reconnecting", exc)
+            try:
+                await self._rebuild_session()
+            finally:
+                self._last_auto_reconnect = time.monotonic()
+            return True
 
     async def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block."""
@@ -2251,3 +2339,8 @@ class S7CommPlusAsyncClient:
 
     async def __aexit__(self, *args: Any) -> None:
         await self.disconnect()
+
+
+for _method_name in _AUTO_RECONNECT_METHODS:
+    setattr(S7CommPlusAsyncClient, _method_name, _retry_on_dropped_connection(getattr(S7CommPlusAsyncClient, _method_name)))
+del _method_name

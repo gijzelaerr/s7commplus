@@ -23,6 +23,17 @@ CHANGES
   restorable with `resubscribe()`; alarm subscriptions must be created again.
   Reconnects are serialized, and while one runs, other `AsyncClient` tasks' requests
   fail with "Not connected" instead of interleaving with its handshake.
+* Opt-in automatic reconnect for reads: with `connect(..., auto_reconnect=True)`
+  (keyword-only) or the `auto_reconnect` property, a read that finds the connection
+  dropped reconnects and runs once more on the new session. Only `db_read`,
+  `db_read_multi`, `read_area`, `read_symbolic`, `read_symbolic_multi`, `read_tag`,
+  `read_tags`, `browse` and `get_cpu_state` are retried; writes never are, because
+  it is unknown whether the PLC applied a lost write. A read called from another
+  reconnects only through the outermost call. It stands down, raising
+  `S7ConnectionError`, while data or alarm subscriptions are live or lost data
+  subscriptions await `resubscribe()`. After an automatic attempt the next one
+  waits at least one second, and `AsyncClient` tasks that find the same
+  connection dropped share one reconnect. Off by default.
 
 ### Behaviour changes
 

@@ -60,7 +60,9 @@ old ID to its new one (fetch queues and iterators again for the new IDs), and
 ``result.failed`` holds the error for every subscription the PLC rejected, for
 example because a tag was renamed. Those stay pending, so another call retries
 them, and ``forget_lost_subscriptions()`` drops them. Notifications from the
-gap are not replayed, and alarm subscriptions are not restored. The
+gap are not replayed, and alarm subscriptions are not restored. Automatic
+reconnect stands down while subscriptions are live or await ``resubscribe()``
+(see :doc:`connections`). The
 synchronous receiver blocks; arrange cancellation by closing the connection.
 
 .. code-block:: python
