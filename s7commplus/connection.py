@@ -226,6 +226,11 @@ _MAX_STALE_RESPONSES_PER_REQUEST = 16
 _MAX_QUEUED_NOTIFICATION_FRAMES = 1000
 _SYSTEM_EVENT_RETURN_VALUE_ID = 40305
 _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL = 25 * 60.0
+# Default seconds to wait for the reply to an EXPLORE, and for each further
+# part of it. A CPU 1215C (FW V4.2, 6802 variables) took 5.9 to 7.0 s in total
+# for the type-info EXPLORE of browse(), against at most 0.52 s for a
+# GetMultiVariables.
+_DEFAULT_EXPLORE_TIMEOUT = 30.0
 
 
 def _check_timeout(name: str, value: Optional[float], *, optional: bool = True) -> None:
@@ -1030,6 +1035,8 @@ class S7CommPlusConnection:
         # time.monotonic() deadline of the handshake while connect() runs it.
         self._request_timeout = 5.0
         self._handshake_deadline: Optional[float] = None
+        # The same bound for the reply to an EXPLORE, which can be large.
+        self._explore_timeout = _DEFAULT_EXPLORE_TIMEOUT
         # Default wait in seconds for an unsolicited notification; None uses
         # the request timeout.
         self._notification_timeout: Optional[float] = None
@@ -1170,6 +1177,7 @@ class S7CommPlusConnection:
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         *,
         request_timeout: Optional[float] = None,
+        explore_timeout: Optional[float] = _DEFAULT_EXPLORE_TIMEOUT,
         notification_timeout: Optional[float] = None,
         _session_key_fingerprint: Optional[str] = None,
     ) -> None:
@@ -1197,6 +1205,9 @@ class S7CommPlusConnection:
                 after step 4 (and for each further part of a multi-part
                 reply), or ``None`` to use ``timeout``. A reply that does not
                 arrive in time raises ``S7TimeoutError`` and closes the session.
+            explore_timeout: The same bound for the reply to an EXPLORE, whose
+                answer can be large; 30 s by default, or ``None`` to use the
+                request timeout.
             notification_timeout: Default wait in seconds of
                 :meth:`receive_notification`, or ``None`` to use the request
                 timeout.
@@ -1207,12 +1218,14 @@ class S7CommPlusConnection:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
         _check_timeout("timeout", timeout, optional=False)
         _check_timeout("request_timeout", request_timeout)
+        _check_timeout("explore_timeout", explore_timeout)
         _check_timeout("notification_timeout", notification_timeout)
         self._session_key_refresh_interval = legacy_session_key_refresh_interval
         self._session_key_refresh_error = None
         self._connect_password = password
         self._session_key_fingerprint_override = _session_key_fingerprint
         self._request_timeout = timeout if request_timeout is None else request_timeout
+        self._explore_timeout = self._request_timeout if explore_timeout is None else explore_timeout
         self._notification_timeout = notification_timeout
         try:
             # Steps 1-4 share one deadline: the connect timeout bounds the
@@ -1506,7 +1519,7 @@ class S7CommPlusConnection:
                     f"collect_explore_frames: response too large ({len(all_data)} bytes, {fragment_count} fragments)"
                 )
             try:
-                raw = self._recv_s7_data()
+                raw = self._recv_s7_data(self._explore_timeout)
                 if not raw:
                     break
                 # Strip the 4-byte S7CommPlus fragment header (0x72 ver len:2)
@@ -1742,11 +1755,12 @@ class S7CommPlusConnection:
             else:
                 self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
 
-        response_frame = self._recv_response_frame(seq_num)
+        reply_timeout = self._reply_timeout(function_code)
+        response_frame = self._recv_response_frame(seq_num, reply_timeout)
 
         # Large responses (e.g. Explore) are split across several S7CommPlus PDUs.
         if reassemble:
-            data = self._recv_reassembled_payload(response_frame)
+            data = self._recv_reassembled_payload(response_frame, reply_timeout)
             if len(data) < 10:
                 from .error import S7ConnectionError
 
@@ -1832,16 +1846,17 @@ class S7CommPlusConnection:
             self._invalidate_integrity_failure()
             raise
 
-    def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
+    def _recv_response_frame(self, expected_sequence: Optional[int] = None, timeout: Optional[float] = None) -> bytes:
         """Receive the next response, queueing notifications and consuming non-fatal SystemEvents.
 
-        The frames skipped on the way count against the same reply timeout.
+        ``timeout`` bounds the wait in seconds (``None``: :meth:`_receive_timeout`);
+        the frames skipped on the way count against it.
         """
         from .error import S7ConnectionError, S7ProtocolError
 
         system_events = 0
         stale_responses = 0
-        deadline = time.monotonic() + self._receive_timeout()
+        deadline = time.monotonic() + (self._receive_timeout() if timeout is None else timeout)
         while True:
             response_frame = self._recv_s7_data(deadline - time.monotonic())
             if not response_frame:
@@ -1929,14 +1944,15 @@ class S7CommPlusConnection:
     _MAX_REASSEMBLED_BYTES = 16 * 1024 * 1024
     _MAX_REASSEMBLED_FRAGMENTS = 4096
 
-    def _recv_reassembled_payload(self, initial_data: bytes = b"") -> bytes:
+    def _recv_reassembled_payload(self, initial_data: bytes = b"", timeout: Optional[float] = None) -> bytes:
         """Receive a possibly-fragmented S7CommPlus response, returning its data section.
 
         A large response is split into several S7CommPlus PDUs. Each fragment is
         ``0x72 <ver> <len:2> <data:len>`` with no trailer; only the final fragment is
         followed by the ``0x72 <ver> 0x0000`` trailer. We concatenate the data parts
         of every fragment until the trailer is seen. Works for single-PDU responses
-        too (one fragment immediately followed by the trailer).
+        too (one fragment immediately followed by the trailer). ``timeout`` bounds
+        the wait for each further part in seconds (``None``: :meth:`_receive_timeout`).
         """
         from .error import S7ConnectionError, S7IntegrityError
 
@@ -1944,7 +1960,7 @@ class S7CommPlusConnection:
 
         def ensure(n: int) -> None:
             while len(buf) < n:
-                chunk = self._recv_s7_data()
+                chunk = self._recv_s7_data(timeout)
                 if not chunk:
                     raise S7ConnectionError("Connection closed during response reassembly")
                 buf.extend(chunk)
@@ -2460,6 +2476,10 @@ class S7CommPlusConnection:
         if self._notification_timeout is not None:
             return self._notification_timeout
         return self._request_timeout
+
+    def _reply_timeout(self, function_code: int) -> float:
+        """Seconds each wait for the reply to ``function_code`` may take: the EXPLORE timeout, else the request timeout."""
+        return self._explore_timeout if function_code == FunctionCode.EXPLORE else self._request_timeout
 
     def _receive_timeout(self) -> float:
         """Seconds the next frame may take: what is left of the handshake, else the request timeout."""

@@ -190,6 +190,7 @@ class S7CommPlusClient:
         *,
         timeout: float = 5.0,
         request_timeout: Optional[float] = None,
+        explore_timeout: Optional[float] = 30.0,
         notification_timeout: Optional[float] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
@@ -217,6 +218,11 @@ class S7CommPlusClient:
                 ``None`` to use ``timeout``. A reply that does not arrive in
                 time raises ``S7TimeoutError`` and closes the session, as its
                 state is then unknown; ``connected`` turns ``False``.
+            explore_timeout: The same bound for the reply to an EXPLORE (sent
+                by :meth:`browse`, :meth:`list_datablocks`, :meth:`explore`,
+                :meth:`get_cpu_state` and :meth:`read_alarms`, among others),
+                whose answer can be large; 30 s by default, or ``None`` to use
+                the request timeout.
             notification_timeout: Seconds a notification receiver waits by
                 default (subscriptions and alarms), or ``None`` to use the
                 request timeout.
@@ -239,6 +245,7 @@ class S7CommPlusClient:
         remote_tsap_for_connection_type(connection_type)  # validate early
         _check_timeout("timeout", timeout, optional=False)
         _check_timeout("request_timeout", request_timeout)
+        _check_timeout("explore_timeout", explore_timeout)
         _check_timeout("notification_timeout", notification_timeout)
         self._symbol_catalog = None
         self._connect_params = {
@@ -253,6 +260,7 @@ class S7CommPlusClient:
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
             "timeout": timeout,
             "request_timeout": request_timeout,
+            "explore_timeout": explore_timeout,
             "notification_timeout": notification_timeout,
             "legacy_s7_1500": legacy_s7_1500,
             "connection_type": connection_type,
@@ -301,6 +309,7 @@ class S7CommPlusClient:
         self._connection.connect(
             timeout=p["timeout"],
             request_timeout=p["request_timeout"],
+            explore_timeout=p["explore_timeout"],
             notification_timeout=p["notification_timeout"],
             use_tls=p["use_tls"],
             tls_cert=p["tls_cert"],

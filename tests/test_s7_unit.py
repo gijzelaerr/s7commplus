@@ -1004,7 +1004,7 @@ class TestReassembledPayload:
         conn = S7CommPlusConnection("127.0.0.1", 102)
         it = iter(chunks)
 
-        def fake_recv() -> bytes:
+        def fake_recv(timeout: float | None = None) -> bytes:
             return next(it, b"")
 
         conn._recv_s7_data = fake_recv  # type: ignore[method-assign]

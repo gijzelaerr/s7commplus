@@ -52,6 +52,7 @@ from .codec import (
     parse_create_object_session_id,
 )
 from .connection import (
+    _DEFAULT_EXPLORE_TIMEOUT,
     _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
     _MAX_QUEUED_NOTIFICATION_FRAMES,
     _MAX_STALE_RESPONSES_PER_REQUEST,
@@ -184,6 +185,8 @@ class S7CommPlusAsyncClient:
         self._protocol_version: int = 0
         self._transport_connected = False
         self._request_timeout = 5.0
+        # The same bound for the reply to an EXPLORE, which can be large.
+        self._explore_timeout = _DEFAULT_EXPLORE_TIMEOUT
         self._notification_timeout: Optional[float] = None
         # True while part of a message (a frame, or a reply still missing
         # fragments) has been read: a wait cut short then closes the session.
@@ -346,6 +349,7 @@ class S7CommPlusAsyncClient:
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         timeout: float = 5.0,
         request_timeout: Optional[float] = None,
+        explore_timeout: Optional[float] = 30.0,
         notification_timeout: Optional[float] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
@@ -376,6 +380,11 @@ class S7CommPlusAsyncClient:
                 ``timeout``. Running out raises ``S7TimeoutError`` and closes
                 the session, as its state is then unknown; ``connected`` turns
                 ``False``.
+            explore_timeout: The same bound for the reply to an EXPLORE (sent
+                by :meth:`browse`, :meth:`list_datablocks`, :meth:`explore`,
+                :meth:`get_cpu_state` and :meth:`read_alarms`, among others),
+                whose answer can be large; 30 s by default, or ``None`` to use
+                the request timeout.
             notification_timeout: Seconds a notification receiver waits by
                 default (subscriptions and alarms), or ``None`` to use the
                 request timeout.
@@ -400,6 +409,7 @@ class S7CommPlusAsyncClient:
         remote_tsap_for_connection_type(connection_type)  # validate early
         _check_timeout("timeout", timeout, optional=False)
         _check_timeout("request_timeout", request_timeout)
+        _check_timeout("explore_timeout", explore_timeout)
         _check_timeout("notification_timeout", notification_timeout)
         self._symbol_catalog = None
         self._connect_params = {
@@ -416,6 +426,7 @@ class S7CommPlusAsyncClient:
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
             "timeout": timeout,
             "request_timeout": request_timeout,
+            "explore_timeout": explore_timeout,
             "notification_timeout": notification_timeout,
             "legacy_s7_1500": legacy_s7_1500,
             "connection_type": connection_type,
@@ -488,6 +499,7 @@ class S7CommPlusAsyncClient:
         self._session_key_refresh_error = None
         self._session_key_fingerprint_override = fingerprint
         self._request_timeout = p["timeout"] if p["request_timeout"] is None else p["request_timeout"]
+        self._explore_timeout = self._request_timeout if p["explore_timeout"] is None else p["explore_timeout"]
         self._notification_timeout = p["notification_timeout"]
 
         # TCP connect and steps 1-4 share one deadline: the connect timeout
@@ -1735,15 +1747,16 @@ class S7CommPlusAsyncClient:
             else:
                 self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
 
+        reply_timeout = self._reply_timeout(function_code)
         response_data = await self._receive_bounded(
             self._recv_response_frame(seq_num),
-            self._request_timeout,
-            f"No reply from the PLC within {self._request_timeout}s",
+            reply_timeout,
+            f"No reply from the PLC within {reply_timeout}s",
         )
 
         # Large responses (e.g. Explore) are split across several S7CommPlus PDUs.
         if reassemble:
-            data = await self._recv_reassembled_payload(response_data)
+            data = await self._recv_reassembled_payload(response_data, reply_timeout)
             if len(data) < 10:
                 raise S7ConnectionError("Response too short")
             _validate_response_header(data, function_code, seq_num)
@@ -1788,6 +1801,10 @@ class S7CommPlusAsyncClient:
         except S7IntegrityError:
             await self._invalidate_integrity_failure()
             raise
+
+    def _reply_timeout(self, function_code: int) -> float:
+        """Seconds each wait for the reply to ``function_code`` may take: the EXPLORE timeout, else the request timeout."""
+        return self._explore_timeout if function_code == FunctionCode.EXPLORE else self._request_timeout
 
     async def _receive_bounded(self, receive: Awaitable[_T], timeout: float, message: str, *, idle_ok: bool = False) -> _T:
         """Await one receive for at most ``timeout`` seconds.
@@ -1855,7 +1872,7 @@ class S7CommPlusAsyncClient:
                     continue
             return response_data
 
-    async def _recv_reassembled_payload(self, initial_data: bytes = b"") -> bytes:
+    async def _recv_reassembled_payload(self, initial_data: bytes = b"", timeout: Optional[float] = None) -> bytes:
         """Receive a possibly-fragmented S7CommPlus response, returning its data section.
 
         A large response is split into several S7CommPlus PDUs. Each fragment is
@@ -1864,7 +1881,10 @@ class S7CommPlusAsyncClient:
         of every fragment until the trailer is seen. Works for single-PDU responses
         too (one fragment immediately followed by the trailer). After SessionKey
         auth every fragment must be V3, and its HMAC covers the fragments so far.
+        ``timeout`` bounds the wait for each further part in seconds (``None``:
+        the request timeout).
         """
+        wait = self._request_timeout if timeout is None else timeout
         buf = bytearray(initial_data)
         # Until the trailer is read the stream sits inside this reply.
         self._rx_partial = True
@@ -1873,8 +1893,8 @@ class S7CommPlusAsyncClient:
             while len(buf) < n:
                 chunk = await self._receive_bounded(
                     self._recv_cotp_dt(),
-                    self._request_timeout,
-                    f"The PLC's multi-part reply stopped for {self._request_timeout}s",
+                    wait,
+                    f"The PLC's multi-part reply stopped for {wait}s",
                 )
                 self._rx_partial = True
                 if not chunk:

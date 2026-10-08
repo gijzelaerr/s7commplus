@@ -1,4 +1,4 @@
-"""Connect, request and notification timeouts, and what a timeout leaves of the session.
+"""Connect, request, EXPLORE and notification timeouts, and what a timeout leaves of the session.
 
 A request timeout or a frame cut off part-way closes the session (the stream
 position is unknown); a notification wait that runs out before any byte of the
@@ -24,7 +24,7 @@ from s7commplus.client import S7CommPlusClient
 from s7commplus.codec import encode_header, encode_pvalue_blob
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.error import S7ConnectionError, S7TimeoutError
-from s7commplus.protocol import Opcode, ProtocolVersion
+from s7commplus.protocol import FunctionCode, Opcode, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from s7commplus.subscription import SubscriptionItem, SubscriptionRegistry
 from s7commplus.transport import ISOTCPConnection, _configure_tcp_socket
@@ -55,6 +55,7 @@ class _Pipe:
         self.client = client
         self.upstream = upstream
         self._passed: Optional[int] = None
+        self._delay = 0.0
         self._lock = threading.Lock()
         for src, dst, from_server in ((client, upstream, False), (upstream, client, True)):
             threading.Thread(target=self._forward, args=(src, dst, from_server), daemon=True).start()
@@ -63,6 +64,11 @@ class _Pipe:
         """Pass only the first ``after`` bytes the emulator sends from now on."""
         with self._lock:
             self._passed = after
+
+    def delay_replies(self, seconds: float) -> None:
+        """Hold back each chunk the emulator sends from now on for ``seconds``, like a slow PLC."""
+        with self._lock:
+            self._delay = seconds
 
     def inject(self, data: bytes) -> None:
         self.client.sendall(data)
@@ -77,10 +83,13 @@ class _Pipe:
                 break
             if from_server:
                 with self._lock:
+                    delay = self._delay
                     if self._passed is not None:
                         data, self._passed = data[: self._passed], max(0, self._passed - len(data))
                 if not data:
                     continue
+                if delay:
+                    time.sleep(delay)
             try:
                 dst.sendall(data)
             except OSError:
@@ -198,7 +207,7 @@ def socket_pair() -> Iterator[tuple[ISOTCPConnection, socket.socket]]:
 
 
 @pytest.mark.parametrize("value", BAD_TIMEOUTS)
-@pytest.mark.parametrize("name", ["timeout", "request_timeout", "notification_timeout"])
+@pytest.mark.parametrize("name", ["timeout", "request_timeout", "explore_timeout", "notification_timeout"])
 def test_sync_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
     client = S7CommPlusClient()
     with pytest.raises(ValueError, match=f"^{name} must"):
@@ -207,7 +216,7 @@ def test_sync_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: st
 
 
 @pytest.mark.parametrize("value", BAD_TIMEOUTS)
-@pytest.mark.parametrize("name", ["timeout", "request_timeout", "notification_timeout"])
+@pytest.mark.parametrize("name", ["timeout", "request_timeout", "explore_timeout", "notification_timeout"])
 def test_connection_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
     conn = S7CommPlusConnection("127.0.0.1", port=1)
     with patch.object(conn._iso_conn, "connect") as iso_connect, pytest.raises(ValueError, match=f"^{name} must"):
@@ -216,7 +225,7 @@ def test_connection_connect_rejects_a_timeout_that_is_not_positive_and_finite(na
 
 
 @pytest.mark.parametrize("value", BAD_TIMEOUTS)
-@pytest.mark.parametrize("name", ["timeout", "request_timeout", "notification_timeout"])
+@pytest.mark.parametrize("name", ["timeout", "request_timeout", "explore_timeout", "notification_timeout"])
 async def test_async_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
     client = S7CommPlusAsyncClient()
     with pytest.raises(ValueError, match=f"^{name} must"):
@@ -245,11 +254,12 @@ def test_isotcp_connect_timeout_is_the_request_timeout_until_set() -> None:
 def test_client_forwards_the_timeouts_to_the_connection() -> None:
     client = S7CommPlusClient()
     with patch("s7commplus.client.S7CommPlusConnection") as factory:
-        client.connect("plc", timeout=1.5, request_timeout=2.5, notification_timeout=3.5)
+        client.connect("plc", timeout=1.5, request_timeout=2.5, explore_timeout=4.5, notification_timeout=3.5)
 
     kwargs = factory.return_value.connect.call_args.kwargs
     assert kwargs["timeout"] == 1.5
     assert kwargs["request_timeout"] == 2.5
+    assert kwargs["explore_timeout"] == 4.5
     assert kwargs["notification_timeout"] == 3.5
 
 
@@ -458,6 +468,206 @@ async def test_async_send_the_plc_does_not_accept_times_out_and_closes_the_sessi
     writer.transport.abort.assert_called_once_with()
     assert not client.connected
     assert client._writer is None
+
+
+# --- EXPLORE timeout: a longer bound for each wait of an EXPLORE reply ---------------------------
+#
+# An EXPLORE reply can be large: on a CPU 1215C (FW V4.2, 6802 variables) the
+# type-info EXPLORE of browse() took 5.9 to 7.0 s in total.
+
+EXPLORE_DEFAULTS = [
+    ({}, 5.0, 30.0),
+    ({"request_timeout": 2.5}, 2.5, 30.0),
+    ({"explore_timeout": 45.0}, 5.0, 45.0),
+    ({"request_timeout": 2.5, "explore_timeout": None}, 2.5, 2.5),
+    ({"timeout": 1.5, "explore_timeout": None}, 1.5, 1.5),
+]
+
+
+def _two_part_reply(function_code: int, sequence: int) -> list[bytes]:
+    """A reply whose data comes in two parts, the second followed by the trailer, as a large EXPLORE reply does."""
+    header = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, function_code, 0, sequence, 0)
+    first, second = header + bytes(6), bytes(6)
+    trailer = bytes([0x72, ProtocolVersion.V2, 0, 0])
+    return [
+        encode_header(ProtocolVersion.V2, len(first)) + first,
+        encode_header(ProtocolVersion.V2, len(second)) + second + trailer,
+    ]
+
+
+@pytest.mark.parametrize(("kwargs", "request_wait", "explore_wait"), EXPLORE_DEFAULTS)
+def test_sync_explore_timeout_defaults_to_30_s_and_none_uses_the_request_timeout(
+    emulator: int, kwargs: dict[str, Optional[float]], request_wait: float, explore_wait: float
+) -> None:
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, **kwargs)  # type: ignore[arg-type]
+    try:
+        assert client._connection is not None
+        assert client._connection._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == request_wait
+        assert client._connection._reply_timeout(FunctionCode.EXPLORE) == explore_wait
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize(("kwargs", "request_wait", "explore_wait"), EXPLORE_DEFAULTS)
+async def test_async_explore_timeout_defaults_to_30_s_and_none_uses_the_request_timeout(
+    emulator: int, kwargs: dict[str, Optional[float]], request_wait: float, explore_wait: float
+) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=emulator, **kwargs)  # type: ignore[arg-type]
+    try:
+        assert client._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == request_wait
+        assert client._reply_timeout(FunctionCode.EXPLORE) == explore_wait
+    finally:
+        await client.disconnect()
+
+
+def test_sync_explore_timeout_survives_a_reconnect(emulator: int) -> None:
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, request_timeout=2.5, explore_timeout=45.0)
+    try:
+        client._reconnect()
+        assert client._connection is not None
+        assert client._connection._reply_timeout(FunctionCode.EXPLORE) == 45.0
+        assert client._connection._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == 2.5
+    finally:
+        client.disconnect()
+
+
+async def test_async_explore_timeout_survives_a_reconnect(emulator: int) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=emulator, request_timeout=2.5, explore_timeout=45.0)
+    try:
+        await client._reconnect()
+        assert client._reply_timeout(FunctionCode.EXPLORE) == 45.0
+        assert client._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == 2.5
+    finally:
+        await client.disconnect()
+
+
+def test_sync_explore_waits_for_the_explore_timeout_while_other_requests_do_not(proxy: _Proxy) -> None:
+    # Regression: an EXPLORE reply had the 5 s of any other reply, too short
+    # for a large browse() on a busy CPU.
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=proxy.port, request_timeout=0.3, explore_timeout=5.0)
+    try:
+        proxy.pipe.delay_replies(0.8)
+        start = time.monotonic()
+        assert [block["number"] for block in client.list_datablocks()] == [1]
+        assert time.monotonic() - start > 0.7  # well past the request timeout
+        assert client.connected
+
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            client.db_read(1, 0, 2)
+        assert time.monotonic() - start < 3
+        assert not client.connected
+    finally:
+        client.disconnect()
+
+
+async def test_async_explore_waits_for_the_explore_timeout_while_other_requests_do_not(proxy: _Proxy) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=proxy.port, request_timeout=0.3, explore_timeout=5.0)
+    try:
+        proxy.pipe.delay_replies(0.8)
+        start = time.monotonic()
+        assert [block["number"] for block in await asyncio.wait_for(client.list_datablocks(), timeout=10)] == [1]
+        assert time.monotonic() - start > 0.7  # well past the request timeout
+        assert client.connected
+
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            await asyncio.wait_for(client.db_read(1, 0, 2), timeout=5)
+        assert time.monotonic() - start < 3
+        assert not client.connected
+    finally:
+        await client.disconnect()
+
+
+def test_sync_explore_timeout_none_gives_explore_the_request_timeout(proxy: _Proxy) -> None:
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=proxy.port, request_timeout=0.3, explore_timeout=None)
+    try:
+        proxy.pipe.delay_replies(0.8)
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            client.list_datablocks()
+        assert time.monotonic() - start < 3
+        assert not client.connected
+    finally:
+        client.disconnect()
+
+
+async def test_async_explore_timeout_none_gives_explore_the_request_timeout(proxy: _Proxy) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=proxy.port, request_timeout=0.3, explore_timeout=None)
+    try:
+        proxy.pipe.delay_replies(0.8)
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            await asyncio.wait_for(client.list_datablocks(), timeout=5)
+        assert time.monotonic() - start < 3
+        assert not client.connected
+    finally:
+        await client.disconnect()
+
+
+def test_sync_every_part_of_an_explore_reply_gets_the_explore_timeout() -> None:
+    conn = S7CommPlusConnection("127.0.0.1")
+    conn._connected = True
+    conn._request_timeout = 0.5
+    conn._explore_timeout = 9.0
+    conn._send_s7_data = MagicMock()  # type: ignore[method-assign]
+    parts = _two_part_reply(FunctionCode.EXPLORE, 0) + _two_part_reply(FunctionCode.GET_MULTI_VARIABLES, 1)
+    waits: list[Optional[float]] = []
+
+    def receive(timeout: Optional[float] = None, *, idle_ok: bool = False) -> bytes:
+        waits.append(timeout)
+        return parts.pop(0)
+
+    conn._recv_s7_data = receive  # type: ignore[method-assign]
+    conn.send_request(FunctionCode.EXPLORE, bytes(8), integrity_tail=5, reassemble=True)
+    conn.send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(8), reassemble=True)
+
+    assert not parts and None not in waits
+    first, second, other_first, other_second = waits
+    assert 4.5 < first <= 9.0 and second == 9.0
+    assert 0.25 < other_first <= 0.5 and other_second == 0.5
+
+
+async def test_async_every_part_of_an_explore_reply_gets_the_explore_timeout() -> None:
+    client = S7CommPlusAsyncClient()
+    client._connected = client._transport_connected = True
+    client._writer = MagicMock()
+    client._reader = MagicMock()
+    client._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
+    client._request_timeout = 0.2
+    client._explore_timeout = 5.0
+    parts = _two_part_reply(FunctionCode.EXPLORE, 0) + _two_part_reply(FunctionCode.GET_MULTI_VARIABLES, 1)
+
+    async def slow_part() -> bytes:
+        await asyncio.sleep(0.4)  # longer than the request timeout, well within the EXPLORE timeout
+        return parts.pop(0)
+
+    client._recv_cotp_dt = slow_part  # type: ignore[method-assign]
+    await asyncio.wait_for(client._send_request(FunctionCode.EXPLORE, bytes(8), integrity_tail=5, reassemble=True), timeout=5)
+    assert len(parts) == 2
+    assert client.connected
+
+    with pytest.raises(S7TimeoutError):
+        await asyncio.wait_for(client._send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(8), reassemble=True), timeout=5)
+    assert not client.connected
+
+
+def test_collect_explore_frames_waits_for_the_explore_timeout() -> None:
+    conn = S7CommPlusConnection("127.0.0.1")
+    conn._connected = True
+    conn._explore_timeout = 9.0
+    receive = MagicMock(return_value=bytes([0x72, ProtocolVersion.V2, 0, 0]))
+    conn._recv_s7_data = receive  # type: ignore[method-assign]
+    assert conn.collect_explore_frames(b"first") == b"first"
+    receive.assert_called_once_with(9.0)
 
 
 # --- Notification waits: clean unless a frame was cut off ---------------------------------------

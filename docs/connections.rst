@@ -185,7 +185,7 @@ authentication material.
 Timeouts
 --------
 
-``connect()`` takes three timeouts in seconds, by keyword:
+``connect()`` takes four timeouts in seconds, by keyword:
 
 ``timeout`` (default 5)
    bounds the TCP connect and the COTP, InitSSL, TLS and CreateObject
@@ -194,12 +194,20 @@ Timeouts
    bounds the wait for each reply once the handshake is done, and for each
    further part of a multi-part reply. Raise it for a PLC that is slow on long
    answers.
+``explore_timeout`` (default 30; ``None``: the request timeout)
+   does the same for the reply to an EXPLORE, which ``browse()``,
+   ``list_datablocks()``, ``explore()``, ``get_cpu_state()`` and
+   ``read_alarms()`` send, among others. These replies can be large: on a CPU
+   1215C (FW V4.2, 54 data blocks, 6802 variables) the type-info EXPLORE of
+   ``browse()``, about 111 KB in 111 parts, took 5.9 to 7.0 s in total, where
+   a GetMultiVariables took at most 0.52 s. The value is used as given, also
+   when ``request_timeout`` is longer.
 ``notification_timeout`` (default: the request timeout)
    bounds a wait for subscription data or alarms.
 
 .. code-block:: python
 
-   client.connect("192.168.1.10", timeout=5.0, request_timeout=15.0)
+   client.connect("192.168.1.10", timeout=5.0, request_timeout=15.0, explore_timeout=60.0)
 
 ``receive_subscription_notification()`` and ``receive_alarm_notification()``
 also take a per-call ``timeout`` that overrides ``notification_timeout``. The
