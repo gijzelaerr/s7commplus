@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
+import ssl
 from typing import Any, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
 from s7commplus.connection import _parse_certificate_fingerprint, _verify_pinned_certificate
-from s7commplus.error import S7CertificateError
+from s7commplus.error import S7CertificateError, S7ConnectionError
 
 _FINGERPRINT = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
 _FINGERPRINT_BYTES = bytes.fromhex(_FINGERPRINT.replace(":", ""))
@@ -104,3 +108,45 @@ async def test_async_client_refuses_a_pin_without_tls_before_connecting(monkeypa
     with pytest.raises(ValueError, match="64 hex characters"):
         await client.connect("127.0.0.1", use_tls=True, tls_cert_fingerprint="")
     assert not client.connected
+
+
+def test_sync_pin_check_refuses_a_session_closed_during_the_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit check, not an assert, so it also holds under ``python -O``."""
+    from s7commplus.connection import S7CommPlusConnection
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    conn = S7CommPlusConnection("127.0.0.1")
+    monkeypatch.setattr(conn, "_setup_ssl_context", lambda **kwargs: ctx)
+
+    def closed_during_handshake() -> None:
+        conn._ssl_object = None  # what a disconnect() during the handshake leaves
+
+    monkeypatch.setattr(conn, "_do_tls_handshake", closed_during_handshake)
+    try:
+        with pytest.raises(S7ConnectionError, match="closed during the handshake"):
+            conn._activate_tls()
+    finally:
+        # The context keeps its key log open, and Windows cannot delete an open file.
+        keylog = ctx.keylog_filename
+        ctx.keylog_filename = None  # type: ignore[assignment]
+        if keylog:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(keylog)
+
+
+@pytest.mark.asyncio
+async def test_async_pin_check_refuses_a_session_closed_during_the_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit check, not an assert, so it also holds under ``python -O``."""
+    from s7commplus import AsyncClient
+
+    client = AsyncClient()
+    client._writer = MagicMock()
+
+    async def closed_during_handshake() -> None:
+        client._ssl_object = None  # what a disconnect() during the handshake leaves
+
+    monkeypatch.setattr(client, "_do_tls_handshake", closed_during_handshake)
+    with pytest.raises(S7ConnectionError, match="closed during the handshake"):
+        await client._activate_tls()

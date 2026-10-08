@@ -2544,7 +2544,9 @@ class S7CommPlusConnection:
             self._tls_active = True
 
             # Pin the PLC certificate before any application data is trusted.
-            assert self._ssl_object is not None
+            # Not an assert: the check must also hold under ``python -O``.
+            if self._ssl_object is None:
+                raise S7ConnectionError("TLS session was closed during the handshake")
             self._peer_certificate_fingerprint = _verify_pinned_certificate(self._ssl_object, self._tls_cert_fingerprint)
 
             # Derive OMS exporter secret for legitimation key derivation

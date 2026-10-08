@@ -663,8 +663,6 @@ class S7CommPlusAsyncClient:
     ) -> None:
         """Activate TLS over the COTP connection."""
         if self._writer is None:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("Cannot activate TLS: not connected")
 
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -701,7 +699,9 @@ class S7CommPlusAsyncClient:
         self._tls_active = True
 
         # Pin the PLC certificate before any application data is trusted.
-        assert self._ssl_object is not None
+        # Not an assert: the check must also hold under ``python -O``.
+        if self._ssl_object is None:
+            raise S7ConnectionError("TLS session was closed during the handshake")
         self._peer_certificate_fingerprint = _verify_pinned_certificate(self._ssl_object, self._tls_cert_fingerprint)
 
         try:
