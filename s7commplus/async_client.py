@@ -12,8 +12,8 @@ import ssl
 import struct
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Awaitable, Callable, Optional, TypeVar
+from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Concatenate, Optional, ParamSpec, TypeVar
 
 from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
 
@@ -21,7 +21,7 @@ from . import typeinfo
 from .blob_decompressor import find_and_decompress
 from .client import (
     _AUTO_RECONNECT_ACTIVE,
-    _AUTO_RECONNECT_METHODS,
+    _AUTO_RECONNECT_MARKER,
     _AUTO_RECONNECT_MIN_INTERVAL,
     _AUTO_RECONNECT_STAND_DOWN,
     _LEGACY_KEY_CACHE,
@@ -145,6 +145,7 @@ from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 # COTP constants
 _COTP_CR = 0xE0
@@ -172,17 +173,20 @@ class AsyncSubscriptionQueue:
         return self._client.subscription_diagnostics(self._subscription_id).queued_notifications
 
 
-def _retry_on_dropped_connection(method: Callable[..., Awaitable[_T]]) -> Callable[..., Awaitable[_T]]:
+def _retry_on_dropped_connection(
+    method: Callable[Concatenate["S7CommPlusAsyncClient", _P], Coroutine[Any, Any, _T]],
+) -> Callable[Concatenate["S7CommPlusAsyncClient", _P], Coroutine[Any, Any, _T]]:
     """Retry a read coroutine once on a fresh session when auto-reconnect is on.
 
-    The retry rebuilds the request, so it wraps the operation rather than the
-    raw send. Only the outermost wrapped call of a task handles a drop (see
-    ``_AUTO_RECONNECT_ACTIVE`` in the sync client); ``_recover_dropped_connection``
-    decides whether to reconnect.
+    The asyncio counterpart of the sync client's decorator, with the same
+    policy (see ``s7commplus.client._retry_on_dropped_connection``): reads
+    only, never writes; only an ``S7ConnectionError``; once, by the outermost
+    decorated call of a task. The wrapper keeps the method's name, docstring
+    and signature, and sets ``_AUTO_RECONNECT_MARKER``.
     """
 
     @functools.wraps(method)
-    async def wrapper(self: "S7CommPlusAsyncClient", *args: Any, **kwargs: Any) -> _T:
+    async def wrapper(self: "S7CommPlusAsyncClient", /, *args: _P.args, **kwargs: _P.kwargs) -> _T:
         active = _AUTO_RECONNECT_ACTIVE.get()
         if not self._auto_reconnect or id(self) in active:
             return await method(self, *args, **kwargs)
@@ -199,6 +203,7 @@ def _retry_on_dropped_connection(method: Callable[..., Awaitable[_T]]) -> Callab
         finally:
             _AUTO_RECONNECT_ACTIVE.reset(token)
 
+    setattr(wrapper, _AUTO_RECONNECT_MARKER, True)
     return wrapper
 
 
@@ -1053,6 +1058,7 @@ class S7CommPlusAsyncClient:
                 self._last_auto_reconnect = time.monotonic()
             return True
 
+    @_retry_on_dropped_connection
     async def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block."""
         payload = _build_read_payload([(db_number, start, size)], self.object_qualifier_version)
@@ -1079,6 +1085,7 @@ class S7CommPlusAsyncClient:
         """Alias for :meth:`db_write_multi`."""
         await self.db_write_multi(items)
 
+    @_retry_on_dropped_connection
     async def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
         """Read multiple data block regions in a single request."""
         payload = _build_read_payload(items, self.object_qualifier_version)
@@ -1086,6 +1093,7 @@ class S7CommPlusAsyncClient:
         parsed = _parse_read_response(response)
         return [r if r is not None else b"" for r in parsed]
 
+    @_retry_on_dropped_connection
     async def read_area(self, area_rid: int, start: int, size: int) -> bytes:
         """Read raw bytes from a controller memory area (M, I, Q, counters, timers)."""
         payload = _build_area_read_payload(area_rid, start, size, self.object_qualifier_version)
@@ -1144,6 +1152,7 @@ class S7CommPlusAsyncClient:
         payload = _build_invoke_payload(state)
         await self._send_request(FunctionCode.INVOKE, payload)
 
+    @_retry_on_dropped_connection
     async def get_cpu_state(self) -> str:
         """Get PLC CPU operating state via S7CommPlus.
 
@@ -1447,6 +1456,7 @@ class S7CommPlusAsyncClient:
         )
         return parse_alarm_explore_response(response, language_ids)
 
+    @_retry_on_dropped_connection
     async def read_symbolic(self, access_area: int, lids: list[int], symbol_crc: int = 0) -> bytes:
         """Read a variable using S7CommPlus symbolic (LID-based) access.
 
@@ -1459,6 +1469,7 @@ class S7CommPlusAsyncClient:
             raise RuntimeError("Symbolic read failed")
         return results[0]
 
+    @_retry_on_dropped_connection
     async def read_symbolic_multi(self, items: Sequence[SymbolicReadItem]) -> list[Optional[bytes]]:
         """Read multiple variables using S7CommPlus symbolic (LID-based) access.
 
@@ -1511,6 +1522,7 @@ class S7CommPlusAsyncClient:
         catalog = self._symbol_catalog or await self.refresh_tag_catalog()
         return catalog.resolve(name)
 
+    @_retry_on_dropped_connection
     async def read_tag(self, name: str) -> bytes:
         """Read one symbolic tag by name."""
         result = (await self.read_tags([name]))[0]
@@ -1519,6 +1531,7 @@ class S7CommPlusAsyncClient:
         assert result.value is not None
         return result.value
 
+    @_retry_on_dropped_connection
     async def read_tags(self, names: Sequence[str]) -> list[TagResult]:
         """Read names in one request and return a success/error for every item."""
         if not names:
@@ -1583,6 +1596,7 @@ class S7CommPlusAsyncClient:
         response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return _parse_explore_datablocks(response)
 
+    @_retry_on_dropped_connection
     async def browse(self) -> list[dict[str, Any]]:
         """Browse the full per-tag symbol tree via EXPLORE + the type-info container.
 
@@ -2341,8 +2355,3 @@ class S7CommPlusAsyncClient:
 
     async def __aexit__(self, *args: Any) -> None:
         await self.disconnect()
-
-
-for _method_name in _AUTO_RECONNECT_METHODS:
-    setattr(S7CommPlusAsyncClient, _method_name, _retry_on_dropped_connection(getattr(S7CommPlusAsyncClient, _method_name)))
-del _method_name

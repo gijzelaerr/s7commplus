@@ -11,7 +11,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
-from typing import Any, Optional, TypeAlias, TypeVar
+from typing import Any, Concatenate, Optional, ParamSpec, TypeAlias, TypeVar
 
 from .error import S7ConnectionError, S7ProtocolError
 
@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 _LEGACY_KEY_CACHE: dict[tuple[str, int], str] = {}
 
 _T = TypeVar("_T")
+_P = ParamSpec("_P")
 DBWriteItem: TypeAlias = tuple[int, int, bytes, DataType]
 SymbolicReadItem: TypeAlias = tuple[int, list[int]] | tuple[int, list[int], int]
 SymbolicWriteItem: TypeAlias = tuple[int, list[int], bytes, int, DataType]
@@ -85,21 +86,6 @@ def _normalize_symbolic_read_item(item: SymbolicReadItem) -> tuple[int, list[int
     return access_area, lids, symbol_crc
 
 
-# Reads that auto-reconnect retries once on a fresh session; each rebuilds its
-# request, which embeds the session id and sequence number. Writes are absent
-# on purpose: a lost write may have been applied, so it is never replayed.
-_AUTO_RECONNECT_METHODS = (
-    "db_read",
-    "db_read_multi",
-    "read_area",
-    "read_symbolic",
-    "read_symbolic_multi",
-    "read_tag",
-    "read_tags",
-    "browse",
-    "get_cpu_state",
-)
-
 # Seconds an automatic reconnect waits after the previous automatic attempt
 # ended, so that a PLC that is down, or a request that fails on every fresh
 # session, is not flooded with connection attempts.
@@ -118,18 +104,39 @@ _AUTO_RECONNECT_STAND_DOWN = (
     "create alarm subscriptions again."
 )
 
+# Attribute set to True on every method that _retry_on_dropped_connection (or
+# its async counterpart) wraps, so the retried set can be read off the classes.
+_AUTO_RECONNECT_MARKER = "_retries_on_dropped_connection"
 
-def _retry_on_dropped_connection(method: Callable[..., _T]) -> Callable[..., _T]:
+
+def _retry_on_dropped_connection(
+    method: Callable[Concatenate["S7CommPlusClient", _P], _T],
+) -> Callable[Concatenate["S7CommPlusClient", _P], _T]:
     """Retry a read once on a fresh session when auto-reconnect is on.
 
-    The retry rebuilds the request, so it wraps the operation rather than the
-    raw send. Only the outermost wrapped call handles a drop (see
-    ``_AUTO_RECONNECT_ACTIVE``); ``_recover_dropped_connection`` decides
-    whether to reconnect.
+    Auto-reconnect retries exactly the methods that carry this decorator, or
+    its counterpart in ``async_client``, which follows the same policy:
+
+    - Reads only. Each rebuilds its request, which embeds the session id and
+      sequence number, so the retry wraps the operation rather than the raw
+      send. Writes are never decorated: a lost write may have been applied,
+      so it is never replayed.
+    - Only while ``auto_reconnect`` is on, and only after an
+      ``S7ConnectionError``; a timeout reaches the caller.
+    - Only the outermost decorated call handles a drop (see
+      ``_AUTO_RECONNECT_ACTIVE``), so one operation reconnects and runs again
+      at most once.
+    - ``_recover_dropped_connection`` decides whether to reconnect: it
+      serializes reconnects, stands down while subscriptions depend on the
+      session, and declines within ``_auto_reconnect_min_interval`` of the
+      last automatic attempt.
+
+    The wrapper keeps the method's name, docstring and signature, and sets
+    ``_AUTO_RECONNECT_MARKER``.
     """
 
     @functools.wraps(method)
-    def wrapper(self: "S7CommPlusClient", *args: Any, **kwargs: Any) -> _T:
+    def wrapper(self: "S7CommPlusClient", /, *args: _P.args, **kwargs: _P.kwargs) -> _T:
         active = _AUTO_RECONNECT_ACTIVE.get()
         if not self._auto_reconnect or id(self) in active:
             return method(self, *args, **kwargs)
@@ -146,6 +153,7 @@ def _retry_on_dropped_connection(method: Callable[..., _T]) -> Callable[..., _T]
         finally:
             _AUTO_RECONNECT_ACTIVE.reset(token)
 
+    setattr(wrapper, _AUTO_RECONNECT_MARKER, True)
     return wrapper
 
 
@@ -512,6 +520,7 @@ class S7CommPlusClient:
         self._connect_params = None
         self._symbol_catalog = None
 
+    @_retry_on_dropped_connection
     def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block.
 
@@ -601,6 +610,7 @@ class S7CommPlusClient:
         )
         self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload)
 
+    @_retry_on_dropped_connection
     def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
         """Read multiple data block regions in a single request.
 
@@ -621,6 +631,7 @@ class S7CommPlusClient:
         parsed = _parse_read_response(response)
         return [r if r is not None else b"" for r in parsed]
 
+    @_retry_on_dropped_connection
     def read_area(self, area_rid: int, start: int, size: int) -> bytes:
         """Read raw bytes from a controller memory area (M, I, Q, counters, timers).
 
@@ -682,6 +693,7 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
 
+    @_retry_on_dropped_connection
     def read_symbolic(self, access_area: int, lids: list[int], symbol_crc: int = 0) -> bytes:
         """Read a variable using S7CommPlus symbolic (LID-based) access.
 
@@ -726,6 +738,7 @@ class S7CommPlusClient:
             raise RuntimeError("Symbolic read failed")
         return results[0]
 
+    @_retry_on_dropped_connection
     def read_symbolic_multi(self, items: Sequence[SymbolicReadItem]) -> list[Optional[bytes]]:
         """Read multiple variables using S7CommPlus symbolic (LID-based) access.
 
@@ -799,6 +812,7 @@ class S7CommPlusClient:
         catalog = self._symbol_catalog or self.refresh_tag_catalog()
         return catalog.resolve(name)
 
+    @_retry_on_dropped_connection
     def read_tag(self, name: str) -> bytes:
         """Read one symbolic tag by name."""
         result = self.read_tags([name])[0]
@@ -807,6 +821,7 @@ class S7CommPlusClient:
         assert result.value is not None
         return result.value
 
+    @_retry_on_dropped_connection
     def read_tags(self, names: Sequence[str]) -> list[TagResult]:
         """Read names in one request and return a success/error for every item.
 
@@ -922,6 +937,7 @@ class S7CommPlusClient:
         payload = _build_invoke_payload(state)
         self._connection.send_request(FunctionCode.INVOKE, payload)
 
+    @_retry_on_dropped_connection
     def get_cpu_state(self) -> str:
         """Get PLC CPU operating state via S7CommPlus.
 
@@ -1027,6 +1043,7 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return _parse_explore_datablocks(response)
 
+    @_retry_on_dropped_connection
     def browse(self) -> list[dict[str, Any]]:
         """Browse the full per-tag symbol tree via EXPLORE + the type-info container.
 
@@ -2106,8 +2123,3 @@ def _build_subscription_request(items: list[tuple[int, int, int]], cycle_ms: int
     payload += struct.pack(">I", 0)
 
     return bytes(payload)
-
-
-for _method_name in _AUTO_RECONNECT_METHODS:
-    setattr(S7CommPlusClient, _method_name, _retry_on_dropped_connection(getattr(S7CommPlusClient, _method_name)))
-del _method_name

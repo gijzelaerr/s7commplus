@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import socket
+import sys
 import time
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -14,7 +17,7 @@ import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.catalog import SymbolCatalog
-from s7commplus.client import _AUTO_RECONNECT_MIN_INTERVAL, S7CommPlusClient
+from s7commplus.client import _AUTO_RECONNECT_MARKER, _AUTO_RECONNECT_MIN_INTERVAL, S7CommPlusClient
 from s7commplus.codec import encode_pvalue_blob
 from s7commplus.error import S7ConnectionError, S7TimeoutError
 from s7commplus.protocol import ProtocolVersion
@@ -140,6 +143,40 @@ def test_only_the_reads_are_wrapped(cls: type) -> None:
 @pytest.mark.parametrize("name", WRITES)
 def test_writes_are_never_wrapped(cls: type, name: str) -> None:
     assert not hasattr(getattr(cls, name), "__wrapped__")
+
+
+@pytest.mark.parametrize("cls", CLIENTS)
+def test_exactly_the_reads_carry_the_retry_marker(cls: type) -> None:
+    assert {name for name, value in vars(cls).items() if getattr(value, _AUTO_RECONNECT_MARKER, False)} == READS
+
+
+@pytest.mark.parametrize("cls", CLIENTS)
+def test_the_retry_decorator_is_written_on_each_read(cls: type) -> None:
+    """The reads are decorated where they are defined, not patched after the class is built."""
+    tree = ast.parse(inspect.getsource(sys.modules[cls.__module__]))
+    (class_def,) = (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls.__name__)
+    decorated = {
+        node.name
+        for node in class_def.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(isinstance(d, ast.Name) and d.id == "_retry_on_dropped_connection" for d in node.decorator_list)
+    }
+    assert decorated == READS
+
+
+@pytest.mark.parametrize("cls", CLIENTS)
+@pytest.mark.parametrize("name", sorted(READS))
+def test_the_retry_decorator_keeps_name_docstring_and_signature(cls: type, name: str) -> None:
+    method = vars(cls)[name]
+    original = method.__wrapped__
+    assert not hasattr(original, "__wrapped__") and not hasattr(original, _AUTO_RECONNECT_MARKER)
+    assert method.__name__ == original.__name__ == name
+    assert method.__qualname__ == original.__qualname__ == f"{cls.__name__}.{name}"
+    assert method.__module__ == original.__module__ == cls.__module__
+    assert method.__doc__ == original.__doc__
+    assert method.__doc__
+    assert inspect.signature(method) == inspect.signature(original)
+    assert inspect.iscoroutinefunction(method) is inspect.iscoroutinefunction(original) is (cls is S7CommPlusAsyncClient)
 
 
 @pytest.mark.parametrize("cls", CLIENTS)
