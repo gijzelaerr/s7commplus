@@ -152,6 +152,12 @@ TLS records are carried inside COTP data frames by the library. Wrapping the
 TCP socket in a conventional TLS socket is not equivalent and will encrypt the
 wrong protocol layer.
 
+During every TLS handshake both clients, ``AsyncClient`` as well since 0.3.0,
+write the session's TLS secrets briefly to a private temporary file
+(``s7-tls-keylog-*``) to derive the OMS exporter secret that the new password
+legitimation needs, and delete the file when the handshake ends, also when it
+fails.
+
 Password authentication
 -----------------------
 

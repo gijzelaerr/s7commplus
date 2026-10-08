@@ -22,6 +22,27 @@ CHANGES
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
 
+### Bug fixes and hardening
+
+* `AsyncClient` now derives the TLS OMS exporter secret the way `Client` does,
+  so after a TLS 1.3 handshake `oms_secret` holds the secret that the new (AES)
+  legitimation of S7-1500 firmware V3.1+ and S7-1200 V4.7+ encrypts with. It
+  used to call an `export_keying_material` method that CPython's `ssl` does
+  not have, so every TLS connect logged "Could not extract OMS exporter
+  secret", `oms_secret` stayed `None` and `authenticate()` with the new
+  exchange always raised `S7ConnectionError`. The new exchange also needs the
+  blob root id fix in its payload, which was refused whatever the password,
+  and on PLCSIM the device string fix. Tested live on S7-PLCSIM Advanced V8.0
+  only: both clients derive the secret, and with those fixes both legitimate.
+* On Windows, every TLS connection of the synchronous `Client` left a
+  `s7-tls-keylog-*` file holding the session's TLS secrets in the temp
+  directory. The handshake secrets are logged to that file to derive the OMS
+  secret, and the SSL context kept it open, so it could not be deleted. Both
+  clients now stop the key log before deleting the file, also when the
+  handshake fails, and log a warning naming any key log they cannot delete.
+  Files left behind by earlier versions hold old session secrets and can be
+  deleted.
+
 0.2.0 (2026-10-08)
 ------------------
 

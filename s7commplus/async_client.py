@@ -68,6 +68,7 @@ from .connection import (
     _check_set_variable_response,
     _check_system_event,
     _check_v1_legitimation_response,
+    _derive_oms_secret,
     _encode_security_key_struct,
     _frame_request,
     _generate_session_key_blob,
@@ -82,6 +83,7 @@ from .connection import (
     _skip_plcsim_legitimation,
     _set_s7_groups,
     _strip_response_integrity_id,
+    _tls_key_log,
     _v1_session_key_profile,
     _v1_integrity_tail,
     _validate_response_header,
@@ -674,23 +676,21 @@ class S7CommPlusAsyncClient:
         # wrap the whole TCP stream, encrypting TPKT/COTP too, which the PLC rejects.
         self._incoming_bio = ssl.MemoryBIO()
         self._outgoing_bio = ssl.MemoryBIO()
-        self._ssl_object = ctx.wrap_bio(
-            self._incoming_bio,
-            self._outgoing_bio,
-            server_side=False,
-            server_hostname=self._host if ctx.check_hostname else None,
-        )
 
-        await self._do_tls_handshake()
-        self._tls_active = True
+        # The OMS exporter secret, which new legitimation needs, is derived
+        # from the handshake's key log (see _tls_key_log).
+        with _tls_key_log(ctx) as keylog_path:
+            self._ssl_object = ctx.wrap_bio(
+                self._incoming_bio,
+                self._outgoing_bio,
+                server_side=False,
+                server_hostname=self._host if ctx.check_hostname else None,
+            )
 
-        try:
-            exporter = getattr(self._ssl_object, "export_keying_material")
-            self._oms_secret = bytes(exporter("EXPERIMENTAL_OMS", 32, None))
-            logger.debug("OMS exporter secret extracted from TLS session")
-        except (AttributeError, ssl.SSLError) as e:
-            logger.warning(f"Could not extract OMS exporter secret: {e}")
-            self._oms_secret = None
+            await self._do_tls_handshake()
+            self._tls_active = True
+
+            self._oms_secret = _derive_oms_secret(self._ssl_object, keylog_path)
 
         logger.info("TLS activated (tunneled inside COTP frames)")
 
