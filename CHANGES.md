@@ -14,6 +14,15 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `Client.connect()` and `AsyncClient.connect()` take the keyword-only
+  `timeout` (the TCP connect and the COTP, InitSSL, TLS and CreateObject
+  handshake together; 5 s by default, as before) and `request_timeout` (the
+  wait for each reply, and for each further part of a multi-part reply;
+  default `timeout`). `S7CommPlusConnection.connect()` takes `request_timeout`
+  by keyword. A timeout that is zero, negative or not finite raises
+  `ValueError`. The async client now bounds the connect, the handshake, every
+  reply and every send, so a silent PLC raises `S7TimeoutError` instead of
+  hanging an `await`, and it tunes TCP keepalive like the sync client.
 
 ### Behaviour changes
 
@@ -21,6 +30,25 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+
+### Bug fixes and hardening
+
+* A timeout no longer leaves a dead session behind that still reports
+  `connected`. A request whose reply does not arrive within the request
+  timeout, and any read that stops part-way through a frame or a multi-part
+  reply (in the async client also one cancelled from outside), close the
+  session without a DeleteSession exchange and raise `S7TimeoutError`. The
+  session is then handled like one the PLC dropped: `connected` reports
+  `False`, the next request raises `S7ConnectionError("Not connected")`, and
+  the connect parameters and the subscription bookkeeping are kept.
+  Before, the sync client marked only its socket dead, so `connected` stayed
+  `True` while every later request failed with "Not connected", and an async
+  wait that ended between a frame's header and its body left the stream out
+  of step. A notification wait that runs out before any byte of the next
+  frame arrived leaves the session usable, in the sync client too. Upgrade
+  note: after an `S7TimeoutError` from a request, call `connect()` again
+  before the next request (a 0.2.0 sync session was unusable at that point
+  too).
 
 0.2.0 (2026-10-08)
 ------------------

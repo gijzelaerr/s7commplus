@@ -303,7 +303,7 @@ class TestSyncTLSBioPlumbing:
             def send_data(self, data: bytes) -> None:
                 server_in.write(data)
 
-            def receive_data(self) -> bytes:
+            def receive_data(self, timeout: float | None = None, *, idle_ok: bool = False) -> bytes:
                 return self.inbox.pop(0)
 
         conn._iso_conn = _Loop()  # type: ignore[assignment]

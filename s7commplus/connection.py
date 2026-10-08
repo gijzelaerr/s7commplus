@@ -41,11 +41,13 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 import hashlib
 import hmac
 import logging
+import math
 import os
 import ssl
 import struct
 import tempfile
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from types import TracebackType
@@ -61,7 +63,7 @@ from .codec import (
     encode_object_qualifier,
     parse_create_object_attributes,
 )
-from .error import S7AuthenticationError, S7ConnectionError
+from .error import S7AuthenticationError, S7ConnectionError, S7TimeoutError
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -224,6 +226,14 @@ _MAX_STALE_RESPONSES_PER_REQUEST = 16
 _MAX_QUEUED_NOTIFICATION_FRAMES = 1000
 _SYSTEM_EVENT_RETURN_VALUE_ID = 40305
 _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL = 25 * 60.0
+
+
+def _check_timeout(name: str, value: Optional[float], *, optional: bool = True) -> None:
+    """Reject a timeout that is not a positive, finite number of seconds (``None`` passes if ``optional``)."""
+    if value is None and optional:
+        return
+    if value is None or not (math.isfinite(value) and value > 0):
+        raise ValueError(f"{name} must be a positive, finite number of seconds{' or None' if optional else ''}")
 
 
 def _system_event_return_value(payload: bytes) -> Optional[int]:
@@ -1016,6 +1026,10 @@ class S7CommPlusConnection:
 
         # Password for post-auth legitimation (V1-initial PLCs)
         self._connect_password: str = ""
+        # Bound in seconds for one reply once the handshake is done, and the
+        # time.monotonic() deadline of the handshake while connect() runs it.
+        self._request_timeout = 5.0
+        self._handshake_deadline: Optional[float] = None
         self._notification_frames: deque[bytes] = deque(maxlen=_MAX_QUEUED_NOTIFICATION_FRAMES)
         self._notification_frame_overflows = 0
         # Reentrant because integrity failures disconnect from inside a
@@ -1152,6 +1166,7 @@ class S7CommPlusConnection:
         password: str = "",
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         *,
+        request_timeout: Optional[float] = None,
         _session_key_fingerprint: Optional[str] = None,
     ) -> None:
         """Establish S7CommPlus connection.
@@ -1165,7 +1180,8 @@ class S7CommPlusConnection:
         6. Enable IntegrityId tracking (V2+)
 
         Args:
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds, bounding the TCP connect and
+                steps 1-4 together.
             use_tls: Whether to activate TLS after InitSSL.
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
@@ -1173,16 +1189,27 @@ class S7CommPlusConnection:
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals. Defaults to 25 minutes; pass ``None`` to
                 disable automatic renewal.
+            request_timeout: Seconds to wait for the reply to each request
+                after step 4 (and for each further part of a multi-part
+                reply), or ``None`` to use ``timeout``. A reply that does not
+                arrive in time raises ``S7TimeoutError`` and closes the session.
         """
         if self._legacy_s7_1500 and use_tls:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
         if legacy_session_key_refresh_interval is not None and legacy_session_key_refresh_interval <= 0:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
+        _check_timeout("timeout", timeout, optional=False)
+        _check_timeout("request_timeout", request_timeout)
         self._session_key_refresh_interval = legacy_session_key_refresh_interval
         self._session_key_refresh_error = None
         self._connect_password = password
         self._session_key_fingerprint_override = _session_key_fingerprint
+        self._request_timeout = timeout if request_timeout is None else request_timeout
         try:
+            # Steps 1-4 share one deadline: the connect timeout bounds the
+            # TCP connect and the whole handshake, as in the async client.
+            self._handshake_deadline = time.monotonic() + timeout
+
             # Step 1: COTP connection (same TSAP for all S7CommPlus versions)
             self._iso_conn.connect(timeout)
 
@@ -1196,6 +1223,10 @@ class S7CommPlusConnection:
             # Step 4: CreateObject (S7CommPlus session setup)
             # CreateObject always uses V1 framing
             self._create_session()
+
+            # From here on every exchange is a request bounded by the request timeout.
+            self._handshake_deadline = None
+            self._iso_conn.set_request_timeout(self._request_timeout)
 
             self._session_key_fingerprint_override = _resolve_session_key_fingerprint(
                 self._public_key_fingerprint, self._session_key_fingerprint_override
@@ -1282,6 +1313,7 @@ class S7CommPlusConnection:
             )
 
         except Exception:
+            self._handshake_deadline = None
             self.disconnect()
             raise
 
@@ -1792,13 +1824,17 @@ class S7CommPlusConnection:
             raise
 
     def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
-        """Receive the next response, queueing notifications and consuming non-fatal SystemEvents."""
+        """Receive the next response, queueing notifications and consuming non-fatal SystemEvents.
+
+        The frames skipped on the way count against the same reply timeout.
+        """
         from .error import S7ConnectionError, S7ProtocolError
 
         system_events = 0
         stale_responses = 0
+        deadline = time.monotonic() + self._receive_timeout()
         while True:
-            response_frame = self._recv_s7_data()
+            response_frame = self._recv_s7_data(deadline - time.monotonic())
             if not response_frame:
                 raise S7ConnectionError("Connection closed while waiting for an S7CommPlus response")
             version, data_length, consumed = decode_header(response_frame)
@@ -1852,12 +1888,16 @@ class S7CommPlusConnection:
         so callers do not lose updates when protocol traffic interleaves. This
         method must not run concurrently with :meth:`send_request` because both
         consume the same connection stream.
+
+        The wait is bounded by the request timeout. When it runs out before any
+        byte of a frame arrived, ``S7TimeoutError`` is raised and the session
+        stays usable; a frame cut off part-way closes the session.
         """
         if not self._connected:
             from .error import S7ConnectionError
 
             raise S7ConnectionError("Not connected")
-        frame = self._notification_frames.popleft() if self._notification_frames else self._recv_s7_data()
+        frame = self._notification_frames.popleft() if self._notification_frames else self._recv_s7_data(idle_ok=True)
         data = self._verified_incoming_data(frame)
         if not data or data[0] != Opcode.NOTIFICATION:
             from .error import S7ConnectionError
@@ -2394,16 +2434,48 @@ class S7CommPlusConnection:
         else:
             self._iso_conn.send_data(data)
 
-    def _recv_s7_data(self) -> bytes:
-        """Receive an S7CommPlus frame, routing through TLS when active."""
-        if self._tls_active:
-            while True:
-                try:
-                    return self._ssl_object.read(65536)  # type: ignore[union-attr]
-                except ssl.SSLWantReadError:
-                    self._tls_read_incoming()
-        else:
-            return self._iso_conn.receive_data()
+    def _receive_timeout(self) -> float:
+        """Seconds the next frame may take: what is left of the handshake, else the request timeout."""
+        if self._handshake_deadline is not None:
+            return self._handshake_deadline - time.monotonic()
+        return self._request_timeout
+
+    def _recv_s7_data(self, timeout: Optional[float] = None, *, idle_ok: bool = False) -> bytes:
+        """Receive an S7CommPlus frame, routing through TLS when active.
+
+        Args:
+            timeout: Seconds the whole frame may take, or ``None`` for
+                :meth:`_receive_timeout`.
+            idle_ok: Whether this is a wait for an unsolicited frame. Running
+                out of time before any byte of it arrived then leaves the
+                session usable. Any other timeout closes the session, whose
+                stream position is then unknown.
+        """
+        wait = self._receive_timeout() if timeout is None else timeout
+        try:
+            if self._tls_active:
+                # A TLS record can span several COTP frames; only the first
+                # read of the frame may run out cleanly.
+                deadline = time.monotonic() + wait
+                first_read = True
+                while True:
+                    try:
+                        return self._ssl_object.read(65536)  # type: ignore[union-attr]
+                    except ssl.SSLWantReadError:
+                        self._tls_read_incoming(deadline - time.monotonic(), idle_ok=idle_ok and first_read)
+                        first_read = False
+            return self._iso_conn.receive_data(wait, idle_ok=idle_ok)
+        except S7TimeoutError:
+            if not self._iso_conn.connected:
+                self._close_after_timeout()
+            raise
+
+    def _close_after_timeout(self) -> None:
+        """Close a session whose stream position is unknown, without a DeleteSession exchange."""
+        self._session_ready = False
+        self._stop_session_key_refresh()
+        with self._request_lock:
+            self._disconnect()
 
     def _tls_flush_outgoing(self) -> None:
         """Send all pending TLS records through COTP framing."""
@@ -2411,9 +2483,9 @@ class S7CommPlusConnection:
         if data:
             self._iso_conn.send_data(data)
 
-    def _tls_read_incoming(self) -> None:
-        """Read a COTP frame and feed its payload to the TLS BIO."""
-        data = self._iso_conn.receive_data()
+    def _tls_read_incoming(self, timeout: Optional[float] = None, *, idle_ok: bool = False) -> None:
+        """Read a COTP frame and feed its payload to the TLS BIO (``timeout`` as in :meth:`_recv_s7_data`)."""
+        data = self._iso_conn.receive_data(self._receive_timeout() if timeout is None else timeout, idle_ok=idle_ok)
         self._incoming_bio.write(data)  # type: ignore[union-attr]
 
     def _activate_tls(

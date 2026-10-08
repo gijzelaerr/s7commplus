@@ -1,0 +1,539 @@
+"""Connect and request timeouts, and what a timeout leaves of the session.
+
+A request timeout or a frame cut off part-way closes the session (the stream
+position is unknown); a notification wait that runs out before any byte of the
+next frame arrived keeps it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import socket
+import struct
+import threading
+import time
+from collections.abc import Iterator
+from typing import Optional
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.client import S7CommPlusClient
+from s7commplus.connection import S7CommPlusConnection
+from s7commplus.error import S7ConnectionError, S7TimeoutError
+from s7commplus.server import S7CommPlusServer
+from s7commplus.subscription import SubscriptionItem
+from s7commplus.transport import ISOTCPConnection, _configure_tcp_socket
+from tests.conftest import get_free_tcp_port
+
+# The header of a TPKT frame announcing 32 bytes; sent alone, the frame stops part-way.
+PARTIAL_FRAME = b"\x03\x00\x00\x20"
+COTP_CC = bytes([3, 0, 0, 11, 6, 0xD0, 0, 1, 0, 1, 0])
+
+BAD_TIMEOUTS = [0, -1.0, math.nan, math.inf]
+
+
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise OSError("closed")
+        data += chunk
+    return data
+
+
+class _Pipe:
+    """One relayed connection; can withhold what the emulator sends, or inject bytes."""
+
+    def __init__(self, client: socket.socket, upstream: socket.socket) -> None:
+        self.client = client
+        self.upstream = upstream
+        self._passed: Optional[int] = None
+        self._lock = threading.Lock()
+        for src, dst, from_server in ((client, upstream, False), (upstream, client, True)):
+            threading.Thread(target=self._forward, args=(src, dst, from_server), daemon=True).start()
+
+    def withhold_replies(self, after: int = 0) -> None:
+        """Pass only the first ``after`` bytes the emulator sends from now on."""
+        with self._lock:
+            self._passed = after
+
+    def inject(self, data: bytes) -> None:
+        self.client.sendall(data)
+
+    def _forward(self, src: socket.socket, dst: socket.socket, from_server: bool) -> None:
+        while True:
+            try:
+                data = src.recv(65536)
+            except OSError:
+                break
+            if not data:
+                break
+            if from_server:
+                with self._lock:
+                    if self._passed is not None:
+                        data, self._passed = data[: self._passed], max(0, self._passed - len(data))
+                if not data:
+                    continue
+            try:
+                dst.sendall(data)
+            except OSError:
+                break
+        self.close()
+
+    def close(self) -> None:
+        for sock in (self.client, self.upstream):
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+class _Proxy:
+    """A TCP relay in front of the emulator, to make it stall like a hung PLC."""
+
+    def __init__(self, target_port: int) -> None:
+        self._target_port = target_port
+        self._listener = socket.create_server(("127.0.0.1", 0))
+        self.port: int = self._listener.getsockname()[1]
+        self._pipes: list[_Pipe] = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    @property
+    def pipe(self) -> _Pipe:
+        """The most recent connection."""
+        return self._pipes[-1]
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                client, _ = self._listener.accept()
+            except OSError:
+                return
+            self._pipes.append(_Pipe(client, socket.create_connection(("127.0.0.1", self._target_port))))
+
+    def close(self) -> None:
+        self._listener.close()
+        for pipe in self._pipes:
+            pipe.close()
+
+
+@pytest.fixture()
+def emulator() -> Iterator[int]:
+    port = get_free_tcp_port()
+    server = S7CommPlusServer()
+    server.register_raw_db(1, bytearray(16))
+    server.start(port=port)
+    time.sleep(0.1)
+    yield port
+    server.stop()
+
+
+@pytest.fixture()
+def proxy(emulator: int) -> Iterator[_Proxy]:
+    relay = _Proxy(emulator)
+    yield relay
+    relay.close()
+
+
+@pytest.fixture()
+def silent_peer() -> Iterator[int]:
+    """A TCP peer that accepts connections and never sends a byte."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    yield listener.getsockname()[1]
+    listener.close()
+
+
+@pytest.fixture()
+def cotp_only_peer() -> Iterator[int]:
+    """A peer that confirms the COTP connection and then never answers."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    accepted: list[socket.socket] = []
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            accepted.append(conn)
+            try:
+                (length,) = struct.unpack(">H", _recv_exact(conn, 4)[2:])
+                _recv_exact(conn, length - 4)
+                conn.sendall(COTP_CC)
+            except OSError:
+                pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    yield listener.getsockname()[1]
+    listener.close()
+    for conn in accepted:
+        conn.close()
+
+
+@pytest.fixture()
+def socket_pair() -> Iterator[tuple[ISOTCPConnection, socket.socket]]:
+    """A connected ISOTCPConnection and the peer socket feeding it."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    client_sock = socket.create_connection(listener.getsockname())
+    peer, _ = listener.accept()
+    listener.close()
+    conn = ISOTCPConnection("127.0.0.1")
+    conn.socket = client_sock
+    conn.connected = True
+    yield conn, peer
+    conn.disconnect()
+    peer.close()
+
+
+# --- Validation ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", BAD_TIMEOUTS)
+@pytest.mark.parametrize("name", ["timeout", "request_timeout"])
+def test_sync_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
+    client = S7CommPlusClient()
+    with pytest.raises(ValueError, match=f"^{name} must"):
+        client.connect("127.0.0.1", port=1, **{name: value})
+    assert client._connect_params is None
+
+
+@pytest.mark.parametrize("value", BAD_TIMEOUTS)
+@pytest.mark.parametrize("name", ["timeout", "request_timeout"])
+def test_connection_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
+    conn = S7CommPlusConnection("127.0.0.1", port=1)
+    with patch.object(conn._iso_conn, "connect") as iso_connect, pytest.raises(ValueError, match=f"^{name} must"):
+        conn.connect(**{name: value})
+    iso_connect.assert_not_called()
+
+
+@pytest.mark.parametrize("value", BAD_TIMEOUTS)
+@pytest.mark.parametrize("name", ["timeout", "request_timeout"])
+async def test_async_connect_rejects_a_timeout_that_is_not_positive_and_finite(name: str, value: float) -> None:
+    client = S7CommPlusAsyncClient()
+    with pytest.raises(ValueError, match=f"^{name} must"):
+        await client.connect("127.0.0.1", port=1, **{name: value})
+    assert client._connect_params is None
+
+
+def test_connect_timeout_cannot_be_none() -> None:
+    with pytest.raises(ValueError, match="^timeout must"):
+        S7CommPlusClient().connect("127.0.0.1", port=1, timeout=None)  # type: ignore[arg-type]
+
+
+# --- Plumbing -----------------------------------------------------------------------------------
+
+
+def test_isotcp_connect_timeout_is_the_request_timeout_until_set() -> None:
+    conn = ISOTCPConnection("127.0.0.1")
+    with patch.object(conn, "_tcp_connect"), patch.object(conn, "_iso_connect"):
+        conn.connect(3.0)
+    assert conn.timeout == 3.0
+    assert conn.request_timeout == 3.0
+    conn.set_request_timeout(7.5)
+    assert conn.request_timeout == 7.5
+
+
+def test_client_forwards_the_timeouts_to_the_connection() -> None:
+    client = S7CommPlusClient()
+    with patch("s7commplus.client.S7CommPlusConnection") as factory:
+        client.connect("plc", timeout=1.5, request_timeout=2.5)
+
+    kwargs = factory.return_value.connect.call_args.kwargs
+    assert kwargs["timeout"] == 1.5
+    assert kwargs["request_timeout"] == 2.5
+
+
+def test_the_request_timeout_applies_once_connected(emulator: int) -> None:
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, timeout=1.5, request_timeout=2.5)
+    try:
+        assert client._connection is not None
+        assert client._connection._request_timeout == 2.5
+        assert client._connection._iso_conn.request_timeout == 2.5
+    finally:
+        client.disconnect()
+
+
+def test_configure_tcp_socket_enables_nodelay_and_tuned_keepalive() -> None:
+    sock = MagicMock()
+    _configure_tcp_socket(sock)
+    options = {call.args[:2]: call.args[2] for call in sock.setsockopt.call_args_list}
+    assert options[(socket.IPPROTO_TCP, socket.TCP_NODELAY)] == 1
+    assert options[(socket.SOL_SOCKET, socket.SO_KEEPALIVE)] == 1
+    if hasattr(socket, "TCP_KEEPIDLE"):
+        assert options[(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE)] == 60
+
+
+async def test_async_connect_tunes_the_socket_like_the_sync_transport(emulator: int) -> None:
+    # Regression: the async client set SO_KEEPALIVE only, so a dead peer went
+    # unnoticed for the OS default of about two hours.
+    client = S7CommPlusAsyncClient()
+    with patch("s7commplus.async_client._configure_tcp_socket") as configure:
+        await client.connect("127.0.0.1", port=emulator)
+    try:
+        configure.assert_called_once()
+    finally:
+        await client.disconnect()
+
+
+# --- Transport: which timeouts close the connection ---------------------------------------------
+
+
+def test_receive_data_that_times_out_closes_the_connection(socket_pair: tuple[ISOTCPConnection, socket.socket]) -> None:
+    conn, _ = socket_pair
+    with pytest.raises(S7TimeoutError):
+        conn.receive_data(0.2)
+    assert not conn.connected
+    assert conn.socket is None
+
+
+def test_an_idle_wait_that_runs_out_keeps_the_connection(socket_pair: tuple[ISOTCPConnection, socket.socket]) -> None:
+    conn, peer = socket_pair
+    with pytest.raises(S7TimeoutError):
+        conn.receive_data(0.2, idle_ok=True)
+    assert conn.connected
+
+    peer.sendall(bytes([3, 0, 0, 8, 2, 0xF0, 0x80, 0x72]))
+    assert conn.receive_data(1.0) == b"\x72"
+
+
+def test_a_frame_cut_off_part_way_closes_the_connection(socket_pair: tuple[ISOTCPConnection, socket.socket]) -> None:
+    conn, peer = socket_pair
+    peer.sendall(PARTIAL_FRAME)
+    with pytest.raises(S7TimeoutError):
+        conn.receive_data(0.3, idle_ok=True)
+    assert not conn.connected
+
+
+# --- Handshake ----------------------------------------------------------------------------------
+
+
+def test_sync_connect_times_out_on_a_silent_peer(silent_peer: int) -> None:
+    start = time.monotonic()
+    with pytest.raises(S7TimeoutError):
+        S7CommPlusClient().connect("127.0.0.1", port=silent_peer, timeout=0.3)
+    assert time.monotonic() - start < 3
+
+
+async def test_async_connect_times_out_on_a_silent_peer(silent_peer: int) -> None:
+    # Regression: the async client had no timeout at all, so the COTP handshake
+    # with a peer that never answered waited forever.
+    start = time.monotonic()
+    with pytest.raises(S7TimeoutError):
+        await asyncio.wait_for(S7CommPlusAsyncClient().connect("127.0.0.1", port=silent_peer, timeout=0.3), timeout=5)
+    assert time.monotonic() - start < 3
+
+
+def test_sync_handshake_runs_under_the_connect_timeout(cotp_only_peer: int) -> None:
+    # Regression: the socket switched to the request timeout right after COTP,
+    # so InitSSL, TLS and CreateObject waited request_timeout instead.
+    start = time.monotonic()
+    with pytest.raises(S7TimeoutError):
+        S7CommPlusClient().connect("127.0.0.1", port=cotp_only_peer, timeout=0.5, request_timeout=30.0)
+    assert time.monotonic() - start < 3
+
+
+async def test_async_handshake_runs_under_the_connect_timeout(cotp_only_peer: int) -> None:
+    start = time.monotonic()
+    with pytest.raises(S7TimeoutError):
+        await asyncio.wait_for(
+            S7CommPlusAsyncClient().connect("127.0.0.1", port=cotp_only_peer, timeout=0.5, request_timeout=30.0),
+            timeout=10,
+        )
+    assert time.monotonic() - start < 3
+
+
+# --- Requests: a timeout closes the session -----------------------------------------------------
+
+
+@pytest.mark.parametrize("passed", [0, 4], ids=["no-reply", "reply-cut-off"])
+def test_sync_request_timeout_closes_the_session(proxy: _Proxy, passed: int) -> None:
+    # Regression: the transport went dead on a timeout while connected stayed
+    # True, so every later request failed with "Not connected".
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=proxy.port, request_timeout=0.3)
+    try:
+        assert client.db_read(1, 0, 2) == b"\x00\x00"
+        proxy.pipe.withhold_replies(after=passed)
+
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            client.db_read(1, 0, 2)
+        assert time.monotonic() - start < 3
+        assert not client.connected
+        assert client._connect_params is not None
+        # Closed like a dropped connection, so a reconnect wrapper can take over.
+        assert client._connection is not None
+        with pytest.raises(S7ConnectionError, match="Not connected"):
+            client.db_read(1, 0, 2)
+
+        client._reconnect()
+        assert client.db_read(1, 0, 2) == b"\x00\x00"
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("passed", [0, 4], ids=["no-reply", "reply-cut-off"])
+async def test_async_request_timeout_closes_the_session(proxy: _Proxy, passed: int) -> None:
+    # Regression: an async request to a PLC that stopped answering waited forever;
+    # with a timeout around it, a reply cut off after its header desynchronised
+    # the stream while the session stayed open.
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=proxy.port, request_timeout=0.3)
+    try:
+        assert await client.db_read(1, 0, 2) == b"\x00\x00"
+        client._subscriptions.register(
+            0x70400025,
+            [SubscriptionItem.from_access_sequence("8A0E0007.A")],
+            change_counter=1,
+            credit_limit=-1,
+            credit_step=0,
+            queue_size=2,
+        )
+        client._alarm_subscription_ids.add(0x70400026)
+        proxy.pipe.withhold_replies(after=passed)
+
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            await asyncio.wait_for(client.db_read(1, 0, 2), timeout=5)
+        assert time.monotonic() - start < 3
+        assert not client.connected
+        assert client._connect_params is not None
+        # Closed like a dropped connection: the bookkeeping a reconnect needs stays.
+        assert client._subscriptions.subscription_ids == (0x70400025,)
+        assert client._subscriptions.pending_restore == ()
+        assert client._alarm_subscription_ids == {0x70400026}
+        with pytest.raises(S7ConnectionError, match="Not connected"):
+            await client.db_read(1, 0, 2)
+
+        await client._reconnect()
+        assert await client.db_read(1, 0, 2) == b"\x00\x00"
+    finally:
+        await client.disconnect()
+
+
+async def test_async_reassembly_times_out_when_the_plc_stops_mid_response() -> None:
+    # Regression: only the first PDU of a response was bounded; a PLC that stopped
+    # after it left the await hanging on the next fragment.
+    client = S7CommPlusAsyncClient()
+    client._request_timeout = 0.2
+    client._connected = True
+
+    async def silent() -> bytes:
+        await asyncio.sleep(10)
+        return b""
+
+    client._recv_cotp_dt = silent  # type: ignore[method-assign]
+    with pytest.raises(S7TimeoutError):
+        await asyncio.wait_for(client._recv_reassembled_payload(b"\x72\x02\x00\x10"), timeout=5)
+    assert not client.connected
+
+
+async def test_async_send_the_plc_does_not_accept_times_out_and_closes_the_session() -> None:
+    # Regression: drain() waited forever on a peer that stopped reading.
+    client = S7CommPlusAsyncClient()
+    client._request_timeout = 0.2
+    client._connected = True
+    client._transport_connected = True
+
+    async def never() -> None:
+        await asyncio.sleep(10)
+
+    writer = MagicMock()
+    writer.drain = never
+    client._writer = writer
+    client._reader = MagicMock()
+    with pytest.raises(S7TimeoutError):
+        await asyncio.wait_for(client._send_cotp_raw(b"\x72"), timeout=5)
+    writer.transport.abort.assert_called_once_with()
+    assert not client.connected
+    assert client._writer is None
+
+
+# --- Notification waits: clean unless a frame was cut off ---------------------------------------
+#
+# The emulator never sends an unsolicited frame, so every wait below runs out.
+
+
+def test_sync_notification_wait_that_runs_out_keeps_the_session(emulator: int) -> None:
+    # Regression: an expired notification wait left connected True while the
+    # transport was dead, so the next request failed with "Not connected".
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, request_timeout=0.3)
+    try:
+        start = time.monotonic()
+        with pytest.raises(S7TimeoutError):
+            client.receive_subscription_notification()
+        assert time.monotonic() - start < 3
+        assert client.connected
+        assert client.db_read(1, 0, 2) == b"\x00\x00"
+    finally:
+        client.disconnect()
+
+
+def test_sync_notification_cut_off_part_way_closes_the_session(proxy: _Proxy) -> None:
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=proxy.port, request_timeout=0.3)
+    try:
+        proxy.pipe.inject(PARTIAL_FRAME)
+        with pytest.raises(S7TimeoutError):
+            client.receive_subscription_notification()
+        assert not client.connected
+    finally:
+        client.disconnect()
+
+
+async def test_async_notification_wait_that_runs_out_keeps_the_session(emulator: int) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=emulator)
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await client.receive_subscription_notification(timeout=0.3)
+        assert client.connected
+        assert await client.db_read(1, 0, 2) == b"\x00\x00"
+    finally:
+        await client.disconnect()
+
+
+async def test_async_notification_cut_off_part_way_closes_the_session(proxy: _Proxy) -> None:
+    # Regression: the timeout cancelled the read between the TPKT header and the
+    # body, dropping the header while the session stayed open.
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=proxy.port)
+    try:
+        proxy.pipe.inject(PARTIAL_FRAME)
+        with pytest.raises(asyncio.TimeoutError):
+            await client.receive_subscription_notification(timeout=0.3)
+        assert not client.connected
+    finally:
+        await client.disconnect()
+
+
+async def test_async_read_cancelled_part_way_closes_the_session(proxy: _Proxy) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=proxy.port, request_timeout=30.0)
+    try:
+        proxy.pipe.inject(PARTIAL_FRAME)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(client.receive_subscription_notification(), timeout=0.5)
+        assert not client.connected
+    finally:
+        await client.disconnect()
+
+
+async def test_async_read_cancelled_before_a_frame_keeps_the_session(emulator: int) -> None:
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=emulator, request_timeout=30.0)
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(client.receive_subscription_notification(), timeout=0.3)
+        assert client.connected
+        assert await client.db_read(1, 0, 2) == b"\x00\x00"
+    finally:
+        await client.disconnect()

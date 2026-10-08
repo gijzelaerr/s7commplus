@@ -32,7 +32,7 @@ from .codec import (
     parse_create_object_session_id,
 )
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
-from .connection import FamilyOnlyFingerprintError, S7CommPlusConnection, SessionKeyCandidateRejectedError
+from .connection import FamilyOnlyFingerprintError, S7CommPlusConnection, SessionKeyCandidateRejectedError, _check_timeout
 from .protocol import (
     DataType,
     ElementID,
@@ -187,6 +187,8 @@ class S7CommPlusClient:
         allow_legacy_key_fallback: bool = True,
         legacy_session_key_refresh_interval: Optional[float] = 25 * 60.0,
         *,
+        timeout: float = 5.0,
+        request_timeout: Optional[float] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
     ) -> None:
@@ -206,6 +208,13 @@ class S7CommPlusClient:
                 fresh sessions when a legacy PLC omits its key id.
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals, or ``None`` to disable them.
+            timeout: Seconds for the TCP connect and the COTP, InitSSL, TLS
+                and CreateObject handshake together.
+            request_timeout: Seconds to wait for each reply once the handshake
+                is done (and for each further part of a multi-part reply), or
+                ``None`` to use ``timeout``. A reply that does not arrive in
+                time raises ``S7TimeoutError`` and closes the session, as its
+                state is then unknown; ``connected`` turns ``False``.
             legacy_s7_1500: Override the non-TLS V1 SessionKey profile (structured
                 browse, V2 object qualifier, trailing IntegrityId, chained fragment
                 HMAC). ``None`` (default) selects it automatically for every V1
@@ -223,6 +232,8 @@ class S7CommPlusClient:
         if legacy_s7_1500 and use_tls:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
         remote_tsap_for_connection_type(connection_type)  # validate early
+        _check_timeout("timeout", timeout, optional=False)
+        _check_timeout("request_timeout", request_timeout)
         self._symbol_catalog = None
         self._connect_params = {
             "host": host,
@@ -234,6 +245,8 @@ class S7CommPlusClient:
             "password": password,
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
+            "timeout": timeout,
+            "request_timeout": request_timeout,
             "legacy_s7_1500": legacy_s7_1500,
             "connection_type": connection_type,
         }
@@ -279,6 +292,8 @@ class S7CommPlusClient:
             connection_type=p["connection_type"],
         )
         self._connection.connect(
+            timeout=p["timeout"],
+            request_timeout=p["request_timeout"],
             use_tls=p["use_tls"],
             tls_cert=p["tls_cert"],
             tls_key=p["tls_key"],

@@ -182,6 +182,46 @@ The asyncio client separates connection from authentication:
 Never log passwords, session keys, challenges, private keys, or decrypted
 authentication material.
 
+Timeouts
+--------
+
+``connect()`` takes two timeouts in seconds, by keyword:
+
+``timeout`` (default 5)
+   bounds the TCP connect and the COTP, InitSSL, TLS and CreateObject
+   handshake together.
+``request_timeout`` (default: ``timeout``)
+   bounds the wait for each reply once the handshake is done, and for each
+   further part of a multi-part reply. Raise it for a PLC that is slow on long
+   answers.
+
+.. code-block:: python
+
+   client.connect("192.168.1.10", timeout=5.0, request_timeout=15.0)
+
+A timeout that is zero, negative or not finite raises ``ValueError``. The
+asyncio client bounds every network wait the same way, including a send that
+the PLC does not accept within the request timeout, and both clients enable
+TCP keepalive, so a silent PLC raises ``S7TimeoutError`` instead of hanging.
+
+What a timeout leaves of the session depends on where it struck:
+
+* A request whose reply does not arrive in time leaves the session in an
+  unknown state, so the client closes it (without a DeleteSession exchange)
+  and raises ``S7TimeoutError``. It is then handled like a connection the PLC
+  dropped: ``connected`` reports ``False``, the next request raises
+  ``S7ConnectionError("Not connected")``, and the connect parameters and the
+  subscription bookkeeping are kept, so reconnect to go on.
+* A read that stops part-way through a frame, or between the parts of a
+  multi-part reply, closes the session the same way, whatever it was waiting
+  for, because the unread rest would otherwise be taken for the next message.
+  In the asyncio client this includes a read cancelled from outside, for
+  example by ``asyncio.wait_for()`` around a call.
+* A notification wait that runs out before any byte of the next frame arrived
+  is clean: the session stays usable. The synchronous receivers wait for the
+  request timeout and raise ``S7TimeoutError``; the asyncio receivers wait for
+  their ``timeout`` argument, if given, and raise ``asyncio.TimeoutError``.
+
 Troubleshooting
 ---------------
 
