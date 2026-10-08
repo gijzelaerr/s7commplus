@@ -20,6 +20,13 @@ CHANGES
   request) and return the results in item order. The default is not a measured
   PLC limit: PLCSIM Advanced V8 (CPU 1511, FW V2.9) answered reads of up to 80
   items, and no hardware limit has been checked.
+* The same methods keep each request frame within `max_request_bytes` (default
+  900; `0` disables the check), counted from the S7CommPlus frame header to its
+  trailer with the IntegrityId at its 5-byte maximum and any SessionKey HMAC,
+  but without the TLS record, COTP and TPKT. On PLCSIM Advanced V8 (CPU 1511,
+  FW V2.9, TLS project) a read with a 1034-byte payload (a frame of about 1060
+  bytes) made the PLC drop the connection, and one with an 834-byte payload was
+  answered; real hardware has not been measured.
 
 ### Behaviour changes
 
@@ -43,6 +50,11 @@ CHANGES
   whole, where it returned a shorter list, and raises `RuntimeError` when an
   answer skips or repeats an item, so no value can land on another item. The
   multi-item methods send no request for an empty batch.
+* An item too large for one request on its own (for example a `db_write` of a
+  long byte block, or a long string in `write_tags`) raises `ValueError` before
+  anything is sent, where the request used to go out and the PLC dropped the
+  connection. Upgrade note: set `max_request_bytes` higher, or to `0`, for a
+  PLC that accepts larger requests.
 
 ### Bug fixes and hardening
 
@@ -62,6 +74,9 @@ CHANGES
 * The server emulator accepts `max_response_pdu`, which splits every response
   after session setup over several PDUs as a PLC does, authenticated V3
   responses included.
+* The server emulator accepts `max_request_bytes` and, like a PLC, closes the
+  connection on a longer request frame, counted after TLS decryption as the
+  clients count it.
 
 0.2.0 (2026-10-08)
 ------------------

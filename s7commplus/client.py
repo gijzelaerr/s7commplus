@@ -32,7 +32,12 @@ from .codec import (
     parse_create_object_session_id,
 )
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
-from .connection import FamilyOnlyFingerprintError, S7CommPlusConnection, SessionKeyCandidateRejectedError
+from .connection import (
+    FamilyOnlyFingerprintError,
+    S7CommPlusConnection,
+    SessionKeyCandidateRejectedError,
+    _request_frame_overhead,
+)
 from .protocol import (
     DataType,
     ElementID,
@@ -91,17 +96,60 @@ def _chunks(items: Sequence[_T], size: int) -> Iterator[list[_T]]:
 
 
 def _request_chunks(
-    items: Sequence[_T], max_items: int, build_payload: Callable[[list[_T]], bytes]
+    items: Sequence[_T],
+    max_items: int,
+    max_request_bytes: int,
+    overhead: int,
+    build_payload: Callable[[list[_T]], bytes],
 ) -> list[tuple[list[_T], bytes]]:
-    """Split ``items``, in order, into requests of at most ``max_items`` and build each payload.
+    """Split ``items``, in order, into requests and build each payload.
 
-    ``max_items <= 0`` puts every item in one request. All payloads are built
-    before the caller sends the first, so an item that cannot be encoded raises
-    before anything reaches the PLC.
+    A request holds at most ``max_items`` items (``<= 0``: no cap) and, unless
+    ``max_request_bytes <= 0``, its frame -- the payload plus ``overhead`` bytes
+    of framing (:func:`~s7commplus.connection._request_frame_overhead`) -- stays
+    within ``max_request_bytes``. All payloads are built before the caller sends
+    the first, so an item that cannot be encoded, or that is too large for a
+    request on its own, raises before anything reaches the PLC.
+
+    Linear in the number of items: each item is encoded alone once to learn its
+    size, and each request is built once, or again in the rare case that its
+    variable-length counts outgrow the estimate.
+
+    Raises:
+        ValueError: One item alone makes a frame over ``max_request_bytes``.
     """
     if not items:
         return []
-    return [(chunk, build_payload(chunk)) for chunk in _chunks(items, max_items)]
+    if max_request_bytes <= 0:
+        return [(chunk, build_payload(chunk)) for chunk in _chunks(items, max_items)]
+    budget = max_request_bytes - overhead
+    single = [len(build_payload([item])) for item in items]
+    # A payload is a fixed part plus one encoding per item, so two one-item
+    # payloads count the fixed part twice. The estimate leaves out the bytes a
+    # growing VLQ count adds; the built payload is checked and trimmed instead.
+    fixed = single[0] + single[1] - len(build_payload([items[0], items[1]])) if len(items) > 1 else 0
+    cap = max_items if max_items > 0 else len(items)
+    requests: list[tuple[list[_T], bytes]] = []
+    start = 0
+    while start < len(items):
+        end = start + 1
+        estimate = single[start]
+        while end < len(items) and end - start < cap and estimate + single[end] - fixed <= budget:
+            estimate += single[end] - fixed
+            end += 1
+        chunk = list(items[start:end])
+        payload = build_payload(chunk)
+        while len(payload) > budget and len(chunk) > 1:
+            chunk.pop()
+            payload = build_payload(chunk)
+        if len(payload) > budget:
+            raise ValueError(
+                f"item {start + 1} alone needs a {len(payload) + overhead}-byte request, over "
+                f"max_request_bytes={max_request_bytes}; split the value or raise max_request_bytes"
+            )
+        requests.append((chunk, payload))
+        start += len(chunk)
+    return requests
 
 
 def _db_read_values(response: bytes, count: int) -> list[bytes]:
@@ -190,6 +238,14 @@ class S7CommPlusClient:
             carries (default 100; ``0`` sends a batch in one request). A larger
             batch is split over several requests, in order. The default is not
             a measured PLC limit.
+        max_request_bytes: Largest request frame a multi-item read or write
+            sends (default 900; ``0`` disables the check). The frame runs from
+            the S7CommPlus frame header to its trailer and includes the 14-byte
+            request header, the IntegrityId at its 5-byte maximum and, after
+            SessionKey authentication, the 33-byte HMAC; the TLS record, COTP
+            and TPKT around it are not counted. A larger batch is split; an
+            item too large for one request raises ``ValueError`` before
+            anything is sent.
     """
 
     def __init__(self) -> None:
@@ -206,16 +262,29 @@ class S7CommPlusClient:
         # Most items one multi-item read or write request carries; a larger batch
         # is split over several requests, in order, and 0 sends it in one. 100 is
         # not a measured limit: PLCSIM Advanced V8 (CPU 1511, FW V2.9) answered
-        # reads of up to 80 items, and no hardware limit has been checked.
+        # reads of up to 80 items, and no hardware limit has been checked. Under
+        # the default max_request_bytes it binds only for small items: a DB read
+        # item takes 12 bytes, so about 70 fit, but a one-LID item of a small
+        # controller area takes 6.
         self.max_items_per_request = 100
+        # Largest request frame (see the class docstring). On PLCSIM Advanced V8
+        # (CPU 1511, FW V2.9, TLS) a read with an 834-byte payload, a frame of
+        # about 860 bytes, was answered; one with a 1034-byte payload, about 1060
+        # bytes, made the PLC drop the connection. Unverified on hardware.
+        self.max_request_bytes = 900
 
     @property
     def connected(self) -> bool:
         return self._connection is not None and self._connection.connected
 
+    def _frame_overhead(self) -> int:
+        """Bytes this session's request frames add to a payload."""
+        assert self._connection is not None
+        return _request_frame_overhead(self._connection._with_integrity_id, self._connection._session_key is not None)
+
     def _plan_requests(self, items: Sequence[_T], build_payload: Callable[[list[_T]], bytes]) -> list[tuple[list[_T], bytes]]:
         """Split a batch into the requests it needs, in order, with their payloads."""
-        return _request_chunks(items, self.max_items_per_request, build_payload)
+        return _request_chunks(items, self.max_items_per_request, self.max_request_bytes, self._frame_overhead(), build_payload)
 
     @property
     def protocol_version(self) -> int:
@@ -521,9 +590,10 @@ class S7CommPlusClient:
     def db_write_multi(self, items: list[DBWriteItem]) -> None:
         """Write multiple data block regions.
 
-        A batch over :attr:`max_items_per_request` items is split over several
-        requests, sent in order, so it is not atomic. The PLC writes every item
-        it does not refuse, and a refused item does not stop the batch.
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic. The PLC writes every item it does not refuse, and a
+        refused item does not stop the batch.
 
         Args:
             items: ``(db_number, start_offset, data, datatype)`` tuples.
@@ -538,6 +608,8 @@ class S7CommPlusClient:
                 ``unknown`` and ``not_sent`` then name the items that may or may
                 not have been written and the ones never sent. A failure of the
                 first request propagates unchanged, as for a single request.
+            ValueError: An item is too large for one request on its own;
+                nothing is sent.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -589,8 +661,9 @@ class S7CommPlusClient:
     def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
         """Read multiple data block regions.
 
-        A batch over :attr:`max_items_per_request` items is split over several
-        requests, sent in order, and the values are merged.
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        and the values are merged.
 
         Args:
             items: List of (db_number, start_offset, size) tuples
@@ -729,8 +802,9 @@ class S7CommPlusClient:
 
         .. warning:: This method is **experimental** and may change.
 
-        A batch over :attr:`max_items_per_request` items is split over several
-        requests, sent in order, and the values are merged.
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        and the values are merged.
 
         Args:
             items: ``(access_area, lids)`` tuples, or three-tuples adding a
@@ -817,8 +891,9 @@ class S7CommPlusClient:
     def read_tags(self, names: Sequence[str]) -> list[TagResult]:
         """Read names and return a success/error for every item.
 
-        A batch over :attr:`max_items_per_request` names is split over several
-        requests, as in :meth:`read_symbolic_multi`.
+        A batch over :attr:`max_items_per_request` names or
+        :attr:`max_request_bytes` is split over several requests, as in
+        :meth:`read_symbolic_multi`.
 
         Requests carry SymbolCRC 0 (no layout check): the browsed per-entry CRC
         is not the value the PLC validates, and real CPUs reject it. Failed
@@ -846,18 +921,22 @@ class S7CommPlusClient:
     def write_tags(self, values: Mapping[str, bytes]) -> list[TagResult]:
         """Write names and return a success/error per item.
 
-        A batch over :attr:`max_items_per_request` names is split over several
-        requests, sent in order, so it is not atomic; a tag the PLC refuses
-        does not stop the batch. If a connection, timeout or protocol failure
-        interrupts the batch after its first request, the tags written so far
-        keep their results and every later tag gets one
-        :class:`~s7commplus.error.S7WriteError`, raised from that failure, whose
-        ``unknown`` positions may or may not have been written and whose
-        ``not_sent`` positions were never sent. A failure of the first request
-        propagates unchanged, as for a single request.
+        A batch over :attr:`max_items_per_request` names or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic; a tag the PLC refuses does not stop the batch. If a
+        connection, timeout or protocol failure interrupts the batch after its
+        first request, the tags written so far keep their results and every
+        later tag gets one :class:`~s7commplus.error.S7WriteError`, raised from
+        that failure, whose ``unknown`` positions may or may not have been
+        written and whose ``not_sent`` positions were never sent. A failure of
+        the first request propagates unchanged, as for a single request.
 
         Writes are deliberately never retried: a transport failure can leave
         the caller unable to know whether the PLC applied the request.
+
+        Raises:
+            ValueError: A value is too large for one request on its own;
+                nothing is sent.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")

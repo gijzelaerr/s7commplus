@@ -922,6 +922,18 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
     return frame + struct.pack(">BBH", 0x72, protocol_version, 0x0000)
 
 
+def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
+    """Bytes a request frame adds to its payload, for sizing requests.
+
+    The 4-byte frame header and 4-byte trailer, the 14-byte request header, the
+    IntegrityId at its longest (a 5-byte VLQ) when the session sends one, and
+    the V3 HMAC (a length byte and a 32-byte digest) after SessionKey
+    authentication. TLS records, COTP and TPKT wrap the frame and are not
+    counted.
+    """
+    return 4 + 14 + (5 if with_integrity_id else 0) + (1 + 32 if session_key_active else 0) + 4
+
+
 def _v1_session_key_profile(override: Optional[bool], session_key: Optional[bytes], protocol_version: int) -> bool:
     """Whether the non-TLS V1 SessionKey request profile applies.
 

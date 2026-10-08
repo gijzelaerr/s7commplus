@@ -215,6 +215,7 @@ class S7CommPlusServer:
         session_key: Optional[bytes] = None,
         rst_after_symbolic_read: bool = False,
         max_response_pdu: Optional[int] = None,
+        max_request_bytes: Optional[int] = None,
     ) -> None:
         self._data_blocks: dict[int, DataBlock] = {}
         self._cpu_state = CPUState.RUN
@@ -257,6 +258,15 @@ class S7CommPlusServer:
         if max_response_pdu is not None and max_response_pdu <= 0:
             raise ValueError("max_response_pdu must be positive")
         self._max_response_pdu = max_response_pdu
+
+        # When set, the server closes the connection on a request frame longer
+        # than this many bytes, as PLCSIM Advanced does past about 1 KB. The frame
+        # is counted as the clients' max_request_bytes counts it: from the frame
+        # header to the trailer, after TLS decryption, including any V3 HMAC.
+        # Tests use it to catch a request the client failed to split.
+        if max_request_bytes is not None and max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be positive")
+        self._max_request_bytes = max_request_bytes
 
     @property
     def cpu_state(self) -> CPUState:
@@ -462,6 +472,11 @@ class S7CommPlusServer:
                 try:
                     data = recv_app_frame()
                     if data is None:
+                        break
+                    if self._max_request_bytes is not None and len(data) > self._max_request_bytes:
+                        logger.warning(
+                            f"Closing connection to {address}: {len(data)}-byte request exceeds {self._max_request_bytes} bytes"
+                        )
                         break
 
                     request_version, data_length, hdr_consumed = decode_header(data)
