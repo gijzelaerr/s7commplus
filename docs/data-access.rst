@@ -277,6 +277,12 @@ zone, or a string longer than its declared length) raises ``TypeError`` or
 ``ValueError`` naming the leaf before anything is sent, and a PLC rejection
 raises ``RuntimeError`` naming the failed tags. Writes are never retried, and a
 write batch split over several requests is not atomic, as for ``write_tags``.
+With ``auto_refresh_tags`` set, a name not in the catalog runs the program-change
+check described above once (with the same 10-second limit) and is looked up
+again before anything is encoded or sent; a failed read item does too, through
+``read_tags``. A struct or array is read with the members known when the call
+started: if a refresh during the read changes them, a member that is gone
+raises ``KeyError`` and a new one is left out until the next call.
 Member names that themselves contain ``.`` or ``[`` nest one level deeper than
 declared. ``TagResult.tag.decode_value`` and ``SymbolicTag.encode_value``
 convert single raw values the same way.

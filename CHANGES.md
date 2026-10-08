@@ -59,8 +59,10 @@ CHANGES
   times. The name of a struct, UDT, DTL or array reads or writes all its leaves
   as one batch, as a `dict`, `list` or `datetime`. A value the PLC type cannot
   hold raises `TypeError` or `ValueError` naming the leaf before anything is
-  sent. Validated against PLCSIM Advanced (V8.0, CPU 1511, FW V2.9) for every
-  type in the test project; not yet checked on hardware.
+  sent. With `auto_refresh_tags` set, a name not in the catalog runs the
+  rate-limited program-change check once and is looked up again, as in
+  `read_tags`. Validated against PLCSIM Advanced (V8.0, CPU 1511, FW V2.9) for
+  every type in the test project; not yet checked on hardware.
 * The new `s7commplus.values` module converts raw tag values to Python values
   and back (`decode()`, `encode()`; `SymbolicTag.encode_value()` is new) and
   builds structs and arrays from their leaves (`assemble()`, `split()`).

@@ -22,6 +22,7 @@ from .client import (
     _AUTO_REFRESH_MIN_INTERVAL,
     _block_signature,
     _type_info_times,
+    _ValuePlan,
     _assemble_values,
     _encode_values,
     _raise_failures,
@@ -1738,6 +1739,14 @@ class S7CommPlusAsyncClient:
         like :meth:`read_tags` when it is large); a DTL gives a
         :class:`datetime.datetime`.
 
+        With ``auto_refresh_tags`` set, a name not in the catalog runs the
+        program-change check of :meth:`read_tags` once (rate-limited, and not
+        when this call browsed the catalog itself) and is looked up again; a
+        failed item does too, inside :meth:`read_tags`. A struct or array is read
+        with the members known when the call started, or after that lookup: if a
+        refresh during the read changes them, the call raises ``KeyError`` for a
+        member that is gone and leaves out one that is new.
+
         Raises:
             KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
             RuntimeError: The PLC reported an error for one of the items.
@@ -1746,8 +1755,7 @@ class S7CommPlusAsyncClient:
 
     async def read_values(self, names: Sequence[str]) -> list[Any]:
         """Read several tags, structs or arrays as one batch of leaves; see :meth:`read_value`."""
-        catalog = self._symbol_catalog or await self.refresh_tag_catalog()
-        plans = _value_plans(catalog, names)
+        plans = await self._plan_values(names)
         results = await self.read_tags([tag.name for _, _, tags in plans for tag in tags])
         return _assemble_values(plans, results)
 
@@ -1759,7 +1767,9 @@ class S7CommPlusAsyncClient:
         leaf is encoded before anything is sent, then the leaves are written as
         one batch through :meth:`write_tags`, which splits a large batch over
         several requests; such a batch is not atomic. Like every write, it is
-        never retried.
+        never retried. With ``auto_refresh_tags`` set, a name not in the catalog
+        runs the program-change check once, as for :meth:`read_value`, before
+        anything is encoded or sent.
 
         Raises:
             KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
@@ -1773,9 +1783,24 @@ class S7CommPlusAsyncClient:
 
     async def write_values(self, values: Mapping[str, Any]) -> None:
         """Write several tags, structs or arrays as one batch of leaves; see :meth:`write_value`."""
-        catalog = self._symbol_catalog or await self.refresh_tag_catalog()
-        encoded = _encode_values(_value_plans(catalog, values), values)
+        encoded = _encode_values(await self._plan_values(list(values)), values)
         _raise_failures(await self.write_tags(encoded), "writes")
+
+    async def _plan_values(self, names: Sequence[str]) -> list[_ValuePlan]:
+        """Look up each name's leaf tags; with ``auto_refresh_tags``, an unknown name checks once for a program change.
+
+        Only the lookup is retried after the check, never an encoding or a
+        request. As in :meth:`_resolve_tags`, no check runs when this call
+        browsed the catalog, which is then current.
+        """
+        may_check = bool(self._symbol_catalog)  # refresh_tag_catalog() browses a missing or empty catalog
+        catalog = self._symbol_catalog or await self.refresh_tag_catalog()
+        try:
+            return _value_plans(catalog, names)
+        except KeyError:
+            if not (may_check and await self._auto_refresh_check()):
+                raise
+        return _value_plans(self._symbol_catalog or await self.refresh_tag_catalog(), names)
 
     async def list_datablocks(self) -> list[dict[str, Any]]:
         """List all datablocks on the PLC via EXPLORE.

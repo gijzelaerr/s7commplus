@@ -7,6 +7,7 @@ Known-answer vectors are the raw bytes PLCSIM Advanced (CPU 1511, FW V2.9) retur
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import math
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -16,7 +17,7 @@ import pytest
 from s7commplus import values
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.catalog import SymbolCatalog, SymbolicTag, TagResult
-from s7commplus.client import S7CommPlusClient
+from s7commplus.client import _AUTO_REFRESH_MIN_INTERVAL, S7CommPlusClient
 from s7commplus.codec import encode_pvalue_blob
 from s7commplus.typeinfo import Softdatatype as T
 from s7commplus.vlq import decode_uint32_vlq, encode_uint32_vlq, encode_uint64_vlq
@@ -565,3 +566,120 @@ async def test_values_of_a_large_array_are_split_like_any_batch(asynchronous: bo
     payloads = [call.args[1] for call in send.call_args_list]
     assert [decode_uint32_vlq(payload, 4)[0] for payload in payloads] == [2, 2, 1, 2, 2, 1]
     assert bytes.fromhex("01000700050200070004") in payloads[3]  # item 1 = 5, item 2 = 4, as INTs
+
+
+# --- Unknown names with auto_refresh_tags ------------------------------------------------
+
+GROWN = [*BROWSE, {"name": "T.new", "access_sequence": "8A0E0004.9", "data_type": "INT"}]
+GROWN_RAW = {**RAW, "T.new": b"\x00\x63"}
+
+kinds = pytest.mark.parametrize("asynchronous", [False, True])
+
+
+async def _call(result: Any) -> Any:
+    return await result if inspect.isawaitable(result) else result
+
+
+def _refreshing_client(asynchronous: bool, monkeypatch: pytest.MonkeyPatch, *, changed: bool = True) -> Any:
+    """A client with BROWSE cached; its program-change check finds GROWN when ``changed``."""
+    client: S7CommPlusClient | S7CommPlusAsyncClient = S7CommPlusAsyncClient() if asynchronous else S7CommPlusClient()
+    client._symbol_catalog = SymbolCatalog.from_browse(BROWSE)
+
+    def catalog() -> SymbolCatalog:
+        assert client._symbol_catalog is not None
+        return client._symbol_catalog
+
+    def check() -> bool:
+        if changed:
+            client._symbol_catalog = SymbolCatalog.from_browse(GROWN)
+        return changed
+
+    mock = AsyncMock if asynchronous else MagicMock
+    monkeypatch.setattr(
+        client,
+        "read_tags",
+        mock(side_effect=lambda names: [TagResult(tag=catalog().resolve(n), value=GROWN_RAW[n]) for n in names]),
+    )
+    monkeypatch.setattr(client, "write_tags", mock(side_effect=lambda raw: [TagResult(tag=catalog().resolve(n)) for n in raw]))
+    monkeypatch.setattr(client, "refresh_caches_if_program_changed", mock(side_effect=check))
+    return client
+
+
+@kinds
+async def test_read_value_of_an_unknown_name_reloads_stale_tags_once(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _refreshing_client(asynchronous, monkeypatch)
+    check = client.refresh_caches_if_program_changed
+    with pytest.raises(KeyError):
+        await _call(client.read_value("T.new"))  # auto_refresh_tags is off by default
+    check.assert_not_called()
+
+    client.auto_refresh_tags = True
+    assert await _call(client.read_value("T.new")) == 99
+    assert check.call_count == 1
+
+
+@kinds
+async def test_write_value_of_an_unknown_name_reloads_stale_tags_once(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _refreshing_client(asynchronous, monkeypatch)
+    client.auto_refresh_tags = True
+
+    await _call(client.write_values({"T.i": 1, "T.new": 5}))
+
+    assert client.write_tags.call_args.args[0] == {"T.i": b"\x00\x01", "T.new": b"\x00\x05"}
+    assert client.refresh_caches_if_program_changed.call_count == 1
+
+
+@kinds
+async def test_value_lookups_honour_the_auto_refresh_interval(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A misspelt name must not cost a program-change check on every poll.
+    client = _refreshing_client(asynchronous, monkeypatch, changed=False)
+    client.auto_refresh_tags = True
+    check = client.refresh_caches_if_program_changed
+
+    with pytest.raises(KeyError):
+        await _call(client.read_value("T.typo"))
+    with pytest.raises(KeyError):
+        await _call(client.write_value("T.typo", 1))
+    assert check.call_count == 1  # the second lookup came within the interval
+
+    assert client._last_auto_refresh_check is not None
+    client._last_auto_refresh_check -= _AUTO_REFRESH_MIN_INTERVAL  # the interval has passed
+    with pytest.raises(KeyError):
+        await _call(client.read_values(["T.i", "T.typo"]))
+    assert check.call_count == 2
+    client.read_tags.assert_not_called()
+    client.write_tags.assert_not_called()
+
+
+@kinds
+async def test_a_conversion_error_does_not_reload_tags(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the catalog lookup is retried after a check; encoding errors are the caller's.
+    client = _refreshing_client(asynchronous, monkeypatch)
+    client.auto_refresh_tags = True
+
+    with pytest.raises(TypeError, match="'T.i': INT takes an int"):
+        await _call(client.write_value("T.i", "x"))
+    with pytest.raises(ValueError, match="no member or element 'typo'"):
+        await _call(client.write_value("T.u", {"typo": 1}))
+
+    client.refresh_caches_if_program_changed.assert_not_called()
+    client.write_tags.assert_not_called()
+
+
+@kinds
+async def test_no_check_when_the_value_call_browsed_the_catalog(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _refreshing_client(asynchronous, monkeypatch)
+    client.auto_refresh_tags = True
+    client._symbol_catalog = None
+    fresh = SymbolCatalog.from_browse(BROWSE)
+
+    def browse() -> SymbolCatalog:
+        client._symbol_catalog = fresh
+        return fresh
+
+    monkeypatch.setattr(client, "refresh_tag_catalog", (AsyncMock if asynchronous else MagicMock)(side_effect=browse))
+    with pytest.raises(KeyError):
+        await _call(client.read_value("T.new"))  # the catalog is fresh, so a check cannot help
+    client.refresh_caches_if_program_changed.assert_not_called()
