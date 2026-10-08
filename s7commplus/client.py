@@ -3,13 +3,14 @@
 Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 """
 
+import dataclasses
 import logging
 import struct
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Optional, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError, S7WriteError
+from .error import S7ConnectionError, S7ProtocolError, S7SubscriptionError, S7WriteError
 
 from . import typeinfo
 from .alarm import (
@@ -228,6 +229,59 @@ def _interrupt_tag_writes(results: list[TagResult], start: int, count: int, erro
         results[index] = TagResult(tag=results[index].tag, error=interrupted)
 
 
+def _normalize_subscription_items(items: Sequence[SubscriptionItem | SymbolicTag | str]) -> list[SubscriptionItem]:
+    return [
+        SubscriptionItem.from_access_sequence(item)
+        if isinstance(item, str)
+        else SubscriptionItem.from_tag(item)
+        if isinstance(item, SymbolicTag)
+        else item
+        for item in items
+    ]
+
+
+def _check_subscription_size(payload: bytes, max_request_bytes: int, overhead: int) -> None:
+    """Refuse a subscription CreateObject the PLC would answer by dropping the connection."""
+    frame = len(payload) + overhead
+    if max_request_bytes > 0 and frame > max_request_bytes:
+        raise ValueError(
+            f"subscription request is {frame} bytes, over max_request_bytes={max_request_bytes}; "
+            "use create_subscriptions() to spread the items over several subscriptions"
+        )
+
+
+def _subscription_groups(
+    items: Sequence[SubscriptionItem],
+    max_request_bytes: int,
+    overhead: int,
+    build_payload: Callable[[list[SubscriptionItem]], bytes],
+) -> list[list[SubscriptionItem]]:
+    """Split subscription items, in order, into groups whose CreateObject fits ``max_request_bytes``.
+
+    Items without an explicit ``reference_id`` get their 1-based position in
+    ``items``, so reference ids stay unique across all the groups instead of
+    restarting at 1 in each subscription.
+
+    Raises:
+        ValueError: Two items share a reference id, or one item alone does not
+            fit a request.
+    """
+    numbered = [
+        item if item.reference_id else dataclasses.replace(item, reference_id=index) for index, item in enumerate(items, 1)
+    ]
+    used: set[int] = set()
+    for item in numbered:
+        if item.reference_id in used:
+            raise ValueError(f"duplicate subscription reference_id {item.reference_id}")
+        used.add(item.reference_id)
+    return [group for group, _ in _request_chunks(numbered, 0, max_request_bytes, overhead, build_payload)]
+
+
+def _subscriptions_interrupted(created: list[int], total: int, error: Exception) -> S7SubscriptionError:
+    """The error for ``create_subscriptions`` stopped by ``error`` after creating ``created``."""
+    return S7SubscriptionError(f"created {len(created)} of {total} subscriptions, then: {error}", created)
+
+
 class S7CommPlusClient:
     """S7CommPlus client for S7-1200/1500 PLCs.
 
@@ -238,14 +292,14 @@ class S7CommPlusClient:
             carries (default 100; ``0`` sends a batch in one request). A larger
             batch is split over several requests, in order. The default is not
             a measured PLC limit.
-        max_request_bytes: Largest request frame a multi-item read or write
-            sends (default 900; ``0`` disables the check). The frame runs from
-            the S7CommPlus frame header to its trailer and includes the 14-byte
-            request header, the IntegrityId at its 5-byte maximum and, after
-            SessionKey authentication, the 33-byte HMAC; the TLS record, COTP
-            and TPKT around it are not counted. A larger batch is split; an
-            item too large for one request raises ``ValueError`` before
-            anything is sent.
+        max_request_bytes: Largest request frame a multi-item read or write,
+            or a subscription, sends (default 900; ``0`` disables the check).
+            The frame runs from the S7CommPlus frame header to its trailer and
+            includes the 14-byte request header, the IntegrityId at its 5-byte
+            maximum and, after SessionKey authentication, the 33-byte HMAC; the
+            TLS record, COTP and TPKT around it are not counted. A larger batch
+            is split; an item too large for one request raises ``ValueError``
+            before anything is sent.
     """
 
     def __init__(self) -> None:
@@ -1256,6 +1310,10 @@ class S7CommPlusClient:
 
         Returns:
             Subscription object ID assigned by the PLC.
+
+        Raises:
+            ValueError: The request would exceed :attr:`max_request_bytes`; use
+                :meth:`create_subscriptions` for that many items.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -1264,14 +1322,7 @@ class S7CommPlusClient:
 
         if not 0 <= credit_step <= 255:
             raise ValueError("credit_step must be between 0 and 255")
-        normalized = [
-            SubscriptionItem.from_access_sequence(item)
-            if isinstance(item, str)
-            else SubscriptionItem.from_tag(item)
-            if isinstance(item, SymbolicTag)
-            else item
-            for item in items
-        ]
+        normalized = _normalize_subscription_items(items)
         change_counter = self._subscription_change_counter
         payload, integrity_tail = build_subscription_request(
             self._connection.subscription_container_id,
@@ -1281,6 +1332,7 @@ class S7CommPlusClient:
             change_counter=change_counter,
             relation_id=self._subscription_relation_id,
         )
+        _check_subscription_size(payload, self.max_request_bytes, self._frame_overhead())
         response = self._connection.send_request(
             FunctionCode.CREATE_OBJECT,
             payload,
@@ -1304,6 +1356,66 @@ class S7CommPlusClient:
         )
         logger.info(f"Subscription created, id={subscription_id:#x}")
         return subscription_id
+
+    def create_subscriptions(
+        self,
+        items: Sequence[SubscriptionItem | SymbolicTag | str],
+        cycle_ms: int = 100,
+        credit_limit: int = 10,
+        credit_step: int = 5,
+        queue_size: int = 100,
+    ) -> list[int]:
+        """Create as many data change subscriptions as ``items`` needs.
+
+        .. warning:: This method is **experimental** and may change.
+
+        One subscription request must fit :attr:`max_request_bytes`, which at
+        the default holds about 40 to 46 items with a one-level LID path, fewer
+        with longer paths. This splits ``items``, in order, into groups that fit
+        and creates one subscription per group with the same settings.
+        Reference ids stay unique across the groups: an item without an
+        explicit ``reference_id`` gets its 1-based position in ``items``.
+
+        :meth:`delete_subscription` deletes the session's whole subscription
+        container, so it removes these subscriptions together with every other
+        data and alarm subscription of the session.
+
+        Returns:
+            The subscription object IDs, one per group, in item order.
+
+        Raises:
+            ValueError: Two items share a reference id, or one item alone is
+                too large for a request; nothing is sent.
+            S7SubscriptionError: Creating a subscription after the first one
+                failed. Its ``created`` lists the subscriptions already created,
+                which stay active, and its ``__cause__`` is the failure. If the
+                first one fails, that error propagates unchanged.
+        """
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        if not items:
+            raise ValueError("a subscription requires at least one item")
+        container_id = self._connection.subscription_container_id
+
+        def build(group: list[SubscriptionItem]) -> bytes:
+            # The default change counter and relation id encode at least as long
+            # as the ones create_subscription() sends.
+            return build_subscription_request(container_id, group, cycle_ms=cycle_ms, credit_limit=credit_limit)[0]
+
+        groups = _subscription_groups(_normalize_subscription_items(items), self.max_request_bytes, self._frame_overhead(), build)
+        created: list[int] = []
+        for group in groups:
+            try:
+                created.append(
+                    self.create_subscription(
+                        group, cycle_ms=cycle_ms, credit_limit=credit_limit, credit_step=credit_step, queue_size=queue_size
+                    )
+                )
+            except Exception as error:
+                if not created:
+                    raise
+                raise _subscriptions_interrupted(created, len(groups), error) from error
+        return created
 
     def resubscribe(self) -> SubscriptionRestoreResult:
         """Recreate the data subscriptions lost with the previous session.
@@ -1396,12 +1508,17 @@ class S7CommPlusClient:
         )
 
     def delete_subscription(self, subscription_id: int) -> None:
-        """Delete a data change subscription.
+        """Delete the session's data change subscriptions.
 
         .. warning:: This method is **experimental** and may change.
 
+        Like the reference driver, this deletes the session's subscription
+        container rather than the one subscription, so every data and alarm
+        subscription of the session goes, not only ``subscription_id``.
+
         Args:
-            subscription_id: ID returned by :meth:`create_subscription`.
+            subscription_id: ID returned by :meth:`create_subscription`, used
+                for logging.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -1457,7 +1574,11 @@ class S7CommPlusClient:
         return subscription_id
 
     def delete_alarm_subscription(self, subscription_id: int) -> None:
-        """Delete an alarm subscription created by this client."""
+        """Delete an alarm subscription created by this client.
+
+        Like :meth:`delete_subscription`, this deletes the session's whole
+        subscription container, data subscriptions included.
+        """
         if self._connection is None:
             raise RuntimeError("Not connected")
         if self._connection.subscription_container_id == 0:

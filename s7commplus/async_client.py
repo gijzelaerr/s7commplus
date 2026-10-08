@@ -44,6 +44,10 @@ from .client import (
     _write_interrupted,
     _write_item_errors,
     _write_refused,
+    _check_subscription_size,
+    _normalize_subscription_items,
+    _subscription_groups,
+    _subscriptions_interrupted,
 )
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
 from .codec import (
@@ -184,10 +188,11 @@ class S7CommPlusAsyncClient:
             carries (default 100; ``0`` sends a batch in one request). A larger
             batch is split over several requests, in order. The default is not
             a measured PLC limit.
-        max_request_bytes: Largest request frame a multi-item read or write
-            sends (default 900; ``0`` disables the check), counted as for
-            :class:`S7CommPlusClient`. A larger batch is split; an item too
-            large for one request raises ``ValueError`` before anything is sent.
+        max_request_bytes: Largest request frame a multi-item read or write,
+            or a subscription, sends (default 900; ``0`` disables the check),
+            counted as for :class:`S7CommPlusClient`. A larger batch is split;
+            an item too large for one request raises ``ValueError`` before
+            anything is sent.
     """
 
     def __init__(self) -> None:
@@ -1139,19 +1144,16 @@ class S7CommPlusAsyncClient:
 
         Returns:
             Subscription object ID assigned by the PLC.
+
+        Raises:
+            ValueError: The request would exceed :attr:`max_request_bytes`; use
+                :meth:`create_subscriptions` for that many items.
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         if not 0 <= credit_step <= 255:
             raise ValueError("credit_step must be between 0 and 255")
-        normalized = [
-            SubscriptionItem.from_access_sequence(item)
-            if isinstance(item, str)
-            else SubscriptionItem.from_tag(item)
-            if isinstance(item, SymbolicTag)
-            else item
-            for item in items
-        ]
+        normalized = _normalize_subscription_items(items)
         change_counter = self._subscription_change_counter
         payload, integrity_tail = build_subscription_request(
             self._subscription_container_id,
@@ -1161,6 +1163,7 @@ class S7CommPlusAsyncClient:
             change_counter=change_counter,
             relation_id=self._subscription_relation_id,
         )
+        _check_subscription_size(payload, self.max_request_bytes, self._frame_overhead())
         response = await self._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=integrity_tail)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
@@ -1179,6 +1182,52 @@ class S7CommPlusAsyncClient:
         self._subscription_relation_id = (self._subscription_relation_id + 1) & 0xFFFFFFFF
         logger.info(f"Subscription created, id={subscription_id:#x}")
         return subscription_id
+
+    async def create_subscriptions(
+        self,
+        items: Sequence[SubscriptionItem | SymbolicTag | str],
+        cycle_ms: int = 100,
+        credit_limit: int = 10,
+        credit_step: int = 5,
+        queue_size: int = 100,
+    ) -> list[int]:
+        """Create as many data change subscriptions as ``items`` needs.
+
+        .. warning:: This method is **experimental** and may change.
+
+        Splits ``items``, in order, into groups whose request fits
+        :attr:`max_request_bytes` and creates one subscription per group. The
+        reference ids, errors and :meth:`delete_subscription` caveat are those
+        of :meth:`S7CommPlusClient.create_subscriptions`.
+
+        Returns:
+            The subscription object IDs, one per group, in item order.
+        """
+        if not self._connected:
+            raise RuntimeError("Not connected")
+        if not items:
+            raise ValueError("a subscription requires at least one item")
+        container_id = self._subscription_container_id
+
+        def build(group: list[SubscriptionItem]) -> bytes:
+            # The default change counter and relation id encode at least as long
+            # as the ones create_subscription() sends.
+            return build_subscription_request(container_id, group, cycle_ms=cycle_ms, credit_limit=credit_limit)[0]
+
+        groups = _subscription_groups(_normalize_subscription_items(items), self.max_request_bytes, self._frame_overhead(), build)
+        created: list[int] = []
+        for group in groups:
+            try:
+                created.append(
+                    await self.create_subscription(
+                        group, cycle_ms=cycle_ms, credit_limit=credit_limit, credit_step=credit_step, queue_size=queue_size
+                    )
+                )
+            except Exception as error:
+                if not created:
+                    raise
+                raise _subscriptions_interrupted(created, len(groups), error) from error
+        return created
 
     async def receive_subscription_notification(
         self, subscription_id: int | None = None, timeout: Optional[float] = None
@@ -1277,12 +1326,17 @@ class S7CommPlusAsyncClient:
         self._subscriptions.forget_pending_restore()
 
     async def delete_subscription(self, subscription_id: int) -> None:
-        """Delete a data change subscription.
+        """Delete the session's data change subscriptions.
 
         .. warning:: This method is **experimental** and may change.
 
+        Like the reference driver, this deletes the session's subscription
+        container rather than the one subscription, so every data and alarm
+        subscription of the session goes, not only ``subscription_id``.
+
         Args:
-            subscription_id: ID returned by :meth:`create_subscription`.
+            subscription_id: ID returned by :meth:`create_subscription`, used
+                for logging.
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
@@ -1314,7 +1368,11 @@ class S7CommPlusAsyncClient:
         return subscription_id
 
     async def delete_alarm_subscription(self, subscription_id: int) -> None:
-        """Delete an alarm subscription created by this client."""
+        """Delete an alarm subscription created by this client.
+
+        Like :meth:`delete_subscription`, this deletes the session's whole
+        subscription container, data subscriptions included.
+        """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(self._subscription_container_id, self._protocol_version)

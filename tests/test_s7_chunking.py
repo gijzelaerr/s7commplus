@@ -1,4 +1,4 @@
-"""Multi-item requests are split to the per-request item cap and request frame size."""
+"""Multi-item requests and subscriptions are split to the per-request item cap and frame size."""
 
 from __future__ import annotations
 
@@ -16,9 +16,10 @@ from s7commplus.catalog import SymbolCatalog, SymbolicTag
 from s7commplus.client import S7CommPlusClient, _build_read_payload, _chunks, _request_chunks
 from s7commplus.codec import encode_pvalue_blob
 from s7commplus.connection import _frame_request, _request_frame_overhead
-from s7commplus.error import S7ConnectionError, S7Error, S7TimeoutError, S7WriteError
+from s7commplus.error import S7ConnectionError, S7Error, S7SubscriptionError, S7TimeoutError, S7WriteError
 from s7commplus.protocol import DataType, FunctionCode, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
+from s7commplus.subscription import SubscriptionItem
 from s7commplus.typeinfo import Softdatatype
 from s7commplus.vlq import decode_uint32_vlq, encode_uint32_vlq, encode_uint64_vlq
 from tests.conftest import get_free_tcp_port
@@ -542,3 +543,153 @@ async def test_emulator_and_client_count_the_same_frame(
             await live.call("db_read_multi", items)
     finally:
         await live.close()
+
+
+# --- Subscriptions spread over several CreateObject requests ------------------------------
+
+
+def _created(subscription_id: int) -> bytes:
+    return encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(subscription_id)
+
+
+class _Subscriber:
+    """A sync or async client with a subscription container, answering CreateObject from a script.
+
+    Like ``_Client``, its request frames add 27 bytes to the payload.
+    """
+
+    def __init__(self, kind: str, answers: list[Any]) -> None:
+        self.client: S7CommPlusClient | S7CommPlusAsyncClient
+        if kind == "sync":
+            sync_client = S7CommPlusClient()
+            connection = MagicMock(
+                subscription_container_id=0x3C2, protocol_version=ProtocolVersion.V2, _with_integrity_id=True, _session_key=None
+            )
+            connection.send_request.side_effect = answers
+            sync_client._connection = connection
+            self.client, self.send = sync_client, connection.send_request
+        else:
+            async_client = S7CommPlusAsyncClient()
+            async_client._connected = True
+            async_client._subscription_container_id = 0x3C2
+            async_client._protocol_version = ProtocolVersion.V2
+            async_client._with_integrity_id = True
+            async_client._send_request = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
+            self.client, self.send = async_client, async_client._send_request
+
+    async def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        result = getattr(self.client, method)(*args, **kwargs)
+        return await result if inspect.isawaitable(result) else result
+
+
+def _sent_items(monkeypatch: pytest.MonkeyPatch, kind: str) -> list[list[SubscriptionItem]]:
+    """Record the items of each subscription request a client actually sends."""
+    import s7commplus.async_client
+    import s7commplus.client
+
+    module: Any = s7commplus.client if kind == "sync" else s7commplus.async_client
+    sent: list[list[SubscriptionItem]] = []
+    real = module.build_subscription_request
+
+    def build(container_id: int, items: Any, **kwargs: Any) -> Any:
+        if "relation_id" in kwargs:  # the request that is sent, not the size probe
+            sent.append(list(items))
+        return real(container_id, items, **kwargs)
+
+    monkeypatch.setattr(module, "build_subscription_request", build)
+    return sent
+
+
+@kinds
+async def test_create_subscription_refuses_a_request_over_max_request_bytes(kind: str) -> None:
+    plc = _Subscriber(kind, [_created(0x70400025)])
+
+    with pytest.raises(ValueError, match="1124 bytes, over max_request_bytes=900; use create_subscriptions"):
+        await plc.call("create_subscription", ["8A0E0007.A"] * 60)
+    plc.send.assert_not_called()
+
+
+@kinds
+async def test_create_subscription_size_check_can_be_disabled(kind: str) -> None:
+    plc = _Subscriber(kind, [_created(0x70400025)])
+    plc.client.max_request_bytes = 0
+
+    assert await plc.call("create_subscription", ["8A0E0007.A"] * 60) == 0x70400025
+    assert plc.send.call_count == 1
+
+
+@kinds
+async def test_create_subscriptions_splits_items_and_keeps_reference_ids_unique(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent = _sent_items(monkeypatch, kind)
+    plc = _Subscriber(kind, [_created(0x70400025 + index) for index in range(3)])
+
+    ids = await plc.call("create_subscriptions", [f"8A0E0007.{lid:X}" for lid in range(1, 121)], cycle_ms=250)
+
+    assert ids == [0x70400025, 0x70400026, 0x70400027]
+    assert [len(group) for group in sent] == [45, 45, 30]
+    assert [item.reference_id for group in sent for item in group] == list(range(1, 121))
+    assert [item.lids[0] for group in sent for item in group] == list(range(1, 121))
+    assert all(len(call.args[1]) + 27 <= 900 for call in plc.send.call_args_list)
+    assert set(plc.client._subscriptions.subscription_ids) == set(ids)
+
+
+@kinds
+async def test_create_subscriptions_keeps_explicit_reference_ids(kind: str) -> None:
+    plc = _Subscriber(kind, [_created(0x70400025)])
+    items: list[SubscriptionItem | str] = [SubscriptionItem.from_access_sequence("8A0E0007.1", reference_id=500), "8A0E0007.2"]
+
+    await plc.call("create_subscriptions", items)
+
+    assert set(plc.client._subscriptions._states[0x70400025].items) == {500, 2}
+
+
+@kinds
+async def test_create_subscriptions_rejects_duplicate_reference_ids(kind: str) -> None:
+    plc = _Subscriber(kind, [])
+    items: list[SubscriptionItem | str] = [SubscriptionItem.from_access_sequence("8A0E0007.1", reference_id=2), "8A0E0007.2"]
+
+    with pytest.raises(ValueError, match="duplicate subscription reference_id 2"):
+        await plc.call("create_subscriptions", items)
+    plc.send.assert_not_called()
+
+
+@kinds
+async def test_create_subscriptions_rejects_an_item_that_alone_exceeds_the_budget(kind: str) -> None:
+    plc = _Subscriber(kind, [])
+    plc.client.max_request_bytes = 100  # a one-item subscription is already about 170 bytes
+
+    with pytest.raises(ValueError, match="max_request_bytes=100"):
+        await plc.call("create_subscriptions", ["8A0E0007.1"])
+    plc.send.assert_not_called()
+
+
+@kinds
+async def test_create_subscriptions_reports_the_subscriptions_created_before_a_failure(kind: str) -> None:
+    lost = S7ConnectionError("Receive error: connection reset")
+    plc = _Subscriber(kind, [_created(0x70400025), lost])
+
+    with pytest.raises(S7SubscriptionError, match="created 1 of 3 subscriptions") as caught:
+        await plc.call("create_subscriptions", [f"8A0E0007.{lid:X}" for lid in range(1, 121)])
+
+    assert caught.value.created == [0x70400025]
+    assert caught.value.__cause__ is lost
+    assert set(plc.client._subscriptions.subscription_ids) == {0x70400025}
+
+
+@kinds
+async def test_create_subscriptions_first_failure_propagates_unchanged(kind: str) -> None:
+    plc = _Subscriber(kind, [encode_uint64_vlq(0x8001)])  # refused: non-zero return value, no object id
+
+    with pytest.raises(RuntimeError, match="Subscription creation failed") as caught:
+        await plc.call("create_subscriptions", [f"8A0E0007.{lid:X}" for lid in range(1, 121)])
+    assert not isinstance(caught.value, S7SubscriptionError)
+    assert plc.send.call_count == 1
+
+
+async def test_async_create_subscriptions_requires_a_connection() -> None:
+    client = S7CommPlusAsyncClient()
+
+    with pytest.raises(RuntimeError, match="Not connected"):
+        await client.create_subscriptions(["8A0E0007.1"])

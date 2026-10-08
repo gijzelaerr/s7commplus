@@ -87,6 +87,22 @@ class S7WriteError(S7Error, RuntimeError):
         self.not_sent: range = not_sent if not_sent is not None else range(0)
 
 
+class S7SubscriptionError(S7Error, RuntimeError):
+    """``create_subscriptions`` stopped after creating some of its subscriptions.
+
+    The error that stopped it is the ``__cause__``. Like the PLC's refusal of a
+    subscription, it is also a ``RuntimeError``.
+
+    Attributes:
+        created: IDs of the subscriptions already created, which cover the
+            first items in order. They stay active and registered.
+    """
+
+    def __init__(self, message: str, created: list[int]) -> None:
+        super().__init__(message)
+        self.created: list[int] = list(created)
+
+
 # S7 client error codes
 s7_client_errors = {
     0x00100000: "errNegotiatingPDU",

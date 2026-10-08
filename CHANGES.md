@@ -27,6 +27,11 @@ CHANGES
   FW V2.9, TLS project) a read with a 1034-byte payload (a frame of about 1060
   bytes) made the PLC drop the connection, and one with an 834-byte payload was
   answered; real hardware has not been measured.
+* `create_subscriptions()` (both clients) spreads items over as many
+  subscriptions as `max_request_bytes` requires, in order, and returns their
+  IDs; reference IDs stay unique across them. If a subscription after the first
+  fails, it raises the new `s7commplus.error.S7SubscriptionError`, whose
+  `created` lists the subscriptions already created; they stay active.
 
 ### Behaviour changes
 
@@ -55,6 +60,11 @@ CHANGES
   anything is sent, where the request used to go out and the PLC dropped the
   connection. Upgrade note: set `max_request_bytes` higher, or to `0`, for a
   PLC that accepts larger requests.
+* `create_subscription()` raises `ValueError` instead of sending a request over
+  `max_request_bytes`, which the PLC would answer by dropping the connection; at
+  the default that is about 40 to 46 items with a one-level LID path. Upgrade
+  note: call `create_subscriptions()` for more items, or set
+  `max_request_bytes = 0` to send the request anyway.
 
 ### Bug fixes and hardening
 
@@ -68,6 +78,12 @@ CHANGES
   like the sync one, rejects a final trailer of another protocol version. A
   notification split over several PDUs is still not reassembled; none has
   been observed.
+
+### Documentation
+
+* `delete_subscription()` and `delete_alarm_subscription()` now say that they
+  delete the session's whole subscription container, every data and alarm
+  subscription of the session, not only the one named.
 
 ### Testing
 
