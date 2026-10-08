@@ -179,6 +179,17 @@ The asyncio client separates connection from authentication:
        )
        await client.authenticate("secret")
 
+The exchange follows the device string in the PLC's ServerSessionVersion, as
+in the reference driver (thomas-v2/S7CommPlusDriver): S7-1500 firmware V2.9 to
+V3.0, S7-1200 V4.3 to V4.6 and software controllers use the legacy exchange
+(the password's SHA-1 XORed with a challenge); S7-1500 V3.1 and later, S7-1200
+V4.7 and later and the S7-1200 G2 use the new one (the credentials encrypted
+with AES-256-CBC under a key from the TLS session). S7-PLCSIM Advanced reports
+itself rather than the project's CPU (``1;6ES7 SIM-01500-APLC;S4.1`` on V8.0),
+so it takes the new exchange, and refuses the legacy one, even for a project
+whose CPU firmware would use the legacy one on hardware. This was seen on
+PLCSIM Advanced V8.0 only.
+
 Never log passwords, session keys, challenges, private keys, or decrypted
 authentication material.
 

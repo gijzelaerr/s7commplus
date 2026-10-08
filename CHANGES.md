@@ -30,6 +30,19 @@ CHANGES
   carries, so the PLC could not read them. With it, the correct password is
   accepted there. Real S7-1500 V3.1+ and S7-1200 V4.7+ build the same payload
   but are untested; the new exchange had not been validated on any PLC before.
+* TLS password legitimation now works on S7-PLCSIM Advanced. It reports itself as
+  `1;6ES7 SIM-01500-APLC;S4.1` instead of the project's CPU, which the device
+  string parser could not read, so `authenticate()` (and `connect(password=...)`)
+  raised "PLC firmware version does not support legitimation". The parser now
+  reads it as the reference driver's pattern does: an S7-1500 at version 4.1,
+  which takes the new exchange. PLCSIM refuses the legacy exchange, even for a
+  project whose CPU firmware (V2.9) would use it on hardware. Seen on PLCSIM
+  Advanced V8.0 only. With `AsyncClient`, the new exchange additionally needs
+  the async OMS exporter secret fix; without it, `authenticate()` raises "New
+  legitimation requires the TLS OMS exporter secret". A device string with a
+  newline or a minor version of more than four digits is now unreadable, so
+  `authenticate()` refuses it like any other; a minor version of thousands of
+  digits used to escape as a bare `ValueError`.
 
 0.2.0 (2026-10-08)
 ------------------
