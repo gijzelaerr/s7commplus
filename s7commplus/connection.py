@@ -155,6 +155,25 @@ def _is_stale_response_sequence(sequence: int, expected_sequence: int) -> bool:
     return 0 < distance < 0x8000
 
 
+def _response_continues(frame: bytes) -> bool:
+    """Whether a response PDU is not followed by its closing trailer, so more fragments follow.
+
+    A PLC splits a response larger than its frame size (a GetMultiVariables of
+    long strings, an Explore) over several PDUs and sends the ``0x72 <ver> 0x0000``
+    trailer only after the last one. Reading just the first would truncate the
+    result and leave the rest in the stream for the next request. Only the four
+    bytes after the data that equal that trailer mark a complete response; anything
+    else (no bytes, a partial trailer, the next fragment's header) is left to the
+    reassembly path, which validates it.
+    """
+    try:
+        version, data_length, consumed = decode_header(frame)
+    except ValueError:
+        return False
+    end = consumed + data_length
+    return bytes(frame[end : end + 4]) != struct.pack(">BBH", 0x72, version, 0x0000)
+
+
 def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> None:
     """Validate that application data is the response to one outstanding request."""
     from .error import S7ConnectionError, S7ProtocolError
@@ -901,6 +920,18 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
         return frame + struct.pack(">BBH", 0x72, ProtocolVersion.V3, 0x0000)
     frame = encode_header(protocol_version, len(request)) + request
     return frame + struct.pack(">BBH", 0x72, protocol_version, 0x0000)
+
+
+def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
+    """Bytes a request frame adds to its payload, for sizing requests.
+
+    The 4-byte frame header and 4-byte trailer, the 14-byte request header, the
+    IntegrityId at its longest (a 5-byte VLQ) when the session sends one, and
+    the V3 HMAC (a length byte and a 32-byte digest) after SessionKey
+    authentication. TLS records, COTP and TPKT wrap the frame and are not
+    counted.
+    """
+    return 4 + 14 + (5 if with_integrity_id else 0) + (1 + 32 if session_key_active else 0) + 4
 
 
 def _v1_session_key_profile(override: Optional[bool], session_key: Optional[bytes], protocol_version: int) -> bool:
@@ -1703,8 +1734,9 @@ class S7CommPlusConnection:
 
         response_frame = self._recv_response_frame(seq_num)
 
-        # Large responses (e.g. Explore) are split across several S7CommPlus PDUs.
-        if reassemble:
+        # Large responses (e.g. Explore) are split across several S7CommPlus PDUs;
+        # any response whose first PDU has no trailer is reassembled the same way.
+        if reassemble or _response_continues(response_frame):
             data = self._recv_reassembled_payload(response_frame)
             if len(data) < 10:
                 from .error import S7ConnectionError
@@ -1813,6 +1845,9 @@ class S7CommPlusConnection:
                 return response_frame
             opcode = data[0]
             if opcode == Opcode.NOTIFICATION:
+                # Notifications are queued as single frames. One the PLC splits over
+                # several PDUs is not reassembled: its continuation fragments would
+                # fail the next read, and no split notification has been observed.
                 if len(self._notification_frames) == self._notification_frames.maxlen:
                     self._notification_frame_overflows += 1
                 self._notification_frames.append(response_frame)
@@ -1832,6 +1867,10 @@ class S7CommPlusConnection:
                         raise S7ProtocolError(
                             f"Too many stale S7CommPlus responses while waiting for sequence {expected_sequence}"
                         )
+                    if _response_continues(response_frame):
+                        # Drain (and verify) the rest of a split stale response so its
+                        # fragments are not read as the next response.
+                        self._recv_reassembled_payload(response_frame)
                     continue
             return response_frame
 

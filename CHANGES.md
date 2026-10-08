@@ -14,6 +14,26 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `read_tags`, `read_symbolic_multi`, `db_read_multi`, `db_write_multi` and
+  `write_tags` (both clients) split a large batch over several requests of at
+  most `max_items_per_request` items (default 50; `0` sends a batch in one
+  request) and return the results in item order. A CPU 1215C FW V4.2 (non-TLS
+  V1 SessionKey session) answers a read of 50 items and refuses one of 51 or
+  more with return value `0xA027A6000054FFFC`, whatever the request size;
+  PLCSIM Advanced V8 (CPU 1511) is limited by the request size instead, and
+  S7-1500 hardware has not been measured.
+* The same methods keep each request frame within `max_request_bytes` (default
+  900; `0` disables the check), counted from the S7CommPlus frame header to its
+  trailer with the IntegrityId at its 5-byte maximum and any SessionKey HMAC,
+  but without the TLS record, COTP and TPKT. On PLCSIM Advanced V8 (CPU 1511,
+  FW V2.9, TLS project) a read with a 1034-byte payload (a frame of about 1060
+  bytes) made the PLC drop the connection, and one with an 834-byte payload was
+  answered; real hardware has not been measured.
+* `create_subscriptions()` (both clients) spreads items over as many
+  subscriptions as `max_request_bytes` requires, in order, and returns their
+  IDs; reference IDs stay unique across them. If a subscription after the first
+  fails, it raises the new `s7commplus.error.S7SubscriptionError`, whose
+  `created` lists the subscriptions already created; they stay active.
 
 ### Behaviour changes
 
@@ -21,6 +41,65 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* Multi-item reads and writes (`read_tags`, `read_symbolic_multi`,
+  `db_read_multi`, `db_write_multi`, `write_tags`, both clients) are split into
+  requests of at most 50 items and 900 bytes. A batch that used to go out in
+  one request may now take several; set `max_items_per_request` or
+  `max_request_bytes` to `0` to turn either bound off.
+* A `db_write_multi` or `write_tags` batch split over several requests is not
+  atomic. The requests go out in order and a refused item does not stop the
+  batch; `db_write_multi` then raises the new `s7commplus.error.S7WriteError`
+  after the last request, with `item_errors` keyed by position in the whole
+  batch. A connection, timeout or protocol failure after the first request
+  stops the batch: `db_write_multi` raises `S7WriteError` from it, and
+  `write_tags` returns its results with that error on every tag it could not
+  confirm; `unknown` and `not_sent` name the items that may or may not have been
+  written and the ones never sent. A failure of the first request propagates
+  unchanged. Upgrade note: `S7WriteError` is a `RuntimeError`, so existing
+  handlers still catch refused writes; keep a batch to one request if it must
+  not be applied in part.
+* `db_read_multi` returns `b""` for each item of a request the PLC refuses as a
+  whole, where it returned a shorter list, and raises `RuntimeError` when an
+  answer skips or repeats an item, so no value can land on another item. The
+  multi-item methods send no request for an empty batch.
+* An item too large for one request on its own (for example a `db_write` of a
+  long byte block, or a long string in `write_tags`) raises `ValueError` before
+  anything is sent, where the request used to go out and the PLC dropped the
+  connection. Upgrade note: set `max_request_bytes` higher, or to `0`, for a
+  PLC that accepts larger requests.
+* `create_subscription()` raises `ValueError` instead of sending a request over
+  `max_request_bytes`, which the PLC would answer by dropping the connection; at
+  the default that is about 40 to 46 items with a one-level LID path. Upgrade
+  note: call `create_subscriptions()` for more items, or set
+  `max_request_bytes = 0` to send the request anyway.
+
+### Bug fixes and hardening
+
+* Every data response the PLC splits over several PDUs is now reassembled,
+  not only Explore; the session-setup replies are still read as one PDU. A
+  read of many long strings returned only the items in the first PDU (PLCSIM
+  Advanced V8.0, CPU 1511, FW V2.9 sent 4 of 19 `String[254]` values) and left
+  the rest in the stream, so the next request failed. A response is complete
+  only when the `72 <ver> 00 00` trailer follows its data, a split stale
+  response is drained before the awaited one is read, and the async client,
+  like the sync one, rejects a final trailer of another protocol version. A
+  notification split over several PDUs is still not reassembled; none has
+  been observed.
+
+### Documentation
+
+* `delete_subscription()` and `delete_alarm_subscription()` now say that they
+  delete the session's whole subscription container, every data and alarm
+  subscription of the session, not only the one named.
+
+### Testing
+
+* The server emulator accepts `max_response_pdu`, which splits every response
+  after session setup over several PDUs as a PLC does, authenticated V3
+  responses included.
+* The server emulator accepts `max_request_bytes` and, like a PLC, closes the
+  connection on a longer request frame, counted after TLS decryption as the
+  clients count it.
 
 0.2.0 (2026-10-08)
 ------------------
