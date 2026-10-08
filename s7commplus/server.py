@@ -43,6 +43,8 @@ from .codec import (
 )
 from .connection import _S7_CIPHERS, _set_s7_groups
 from .protocol import (
+    OPERATING_STATE_RUN_OBSERVED,
+    OPERATING_STATE_STOP_OBSERVED,
     READ_FUNCTION_CODES,
     DataType,
     ElementID,
@@ -54,7 +56,7 @@ from .protocol import (
     ProtocolVersion,
     SoftDataType,
 )
-from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq, encode_uint64_vlq
+from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_int32_vlq, encode_uint32_vlq, encode_uint64_vlq
 
 logger = logging.getLogger(__name__)
 
@@ -893,6 +895,11 @@ class S7CommPlusServer:
 
         response += encode_uint32_vlq(0)  # Return code: success
 
+        if len(request_data) >= 4 and struct.unpack_from(">I", request_data)[0] == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID:
+            response += self._cpu_exec_unit_object()
+            response += struct.pack(">I", 0)
+            return bytes(response)
+
         # Return list of data blocks as objects using the real S7-1500 IDs:
         # a DataBlock object has ClassId DB_CLASS_RID and a RelationId in the DB area
         # (0x8A0E0000 | number), which is how the client recovers the DB number.
@@ -946,6 +953,28 @@ class S7CommPlusServer:
         # Final terminator
         response += struct.pack(">I", 0)
         return bytes(response)
+
+    def _cpu_exec_unit_object(self) -> bytes:
+        """theCPUexecUnit as PLCSIM Advanced reports it, reduced to its operating state.
+
+        The state code is the DINT member 0xD9E of the Struct attribute 0x8BD
+        (struct id 0xD99): 8 in RUN, 4 in STOP. Layout copied from
+        tests/fixtures/plcsim_cpu_exec_unit_20261008.py.
+        """
+        code = {CPUState.RUN: OPERATING_STATE_RUN_OBSERVED, CPUState.STOP: OPERATING_STATE_STOP_OBSERVED}.get(self._cpu_state, 0)
+        obj = bytearray([ElementID.START_OF_OBJECT])
+        obj += struct.pack(">I", Ids.NATIVE_THE_CPU_EXEC_UNIT_RID)  # Relation ID
+        obj += encode_uint32_vlq(0x883)  # Class: CPUexecUnit, as object_model.CLASS_NAMES lists it
+        obj += encode_uint32_vlq(0)  # Class flags
+        obj += encode_uint32_vlq(0)  # Attribute ID
+        obj += bytes([ElementID.ATTRIBUTE])
+        obj += encode_uint32_vlq(Ids.CPU_EXEC_UNIT_OPERATING_STATE_STRUCT)
+        obj += bytes([0x00, DataType.STRUCT]) + struct.pack(">I", Ids.CPU_EXEC_UNIT_OPERATING_STATE_STRUCT_ID)
+        obj += encode_uint32_vlq(Ids.CPU_EXEC_UNIT_OPERATING_STATE)
+        obj += bytes([0x00, DataType.DINT]) + encode_int32_vlq(code)
+        obj += b"\x00"  # end of struct members
+        obj += bytes([ElementID.TERMINATING_OBJECT])
+        return bytes(obj)
 
     def _explore_object_exists(self, explore_id: int) -> bool:
         """Whether an EXPLORE target names an object this emulator has.

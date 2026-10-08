@@ -276,12 +276,23 @@ class Ids(IntEnum):
     DATA_INTERFACE_INTERFACE_DESCRIPTION = 2544
     DATA_INTERFACE_LINE_COMMENTS = 2546
     AS_OBJECT_ES_COMMENT = 4288
-    CPU_EXEC_UNIT_EXECUTING = 8064  # 0x1F80; observed as 1 in RUN and 0 in STOP
-    CPU_EXEC_UNIT_OPERATING_MODE = 8065  # 0x1F81; observed as 7 in RUN and 0 in STOP
-    # CPUexecUnit attributes: OperatingState (0xD9E, read-only) and its
-    # writable counterpart OperatingStateREQ (0x877), which takes the
-    # OperatingStateRequest values. Reference:
-    # thomas-v2/S7CommPlusDriver/Core/Ids.cs (CPUexecUnit.*)
+    # Cycle-load values (see object_model.py); 1/7 in a hardware RUN capture and
+    # 0/0 in STOP, but 0/8 and 0/10 in RUN on PLCSIM Advanced, so they are only a
+    # fallback for get_cpu_state() when the operating-state code is absent.
+    CPU_EXEC_UNIT_EXECUTING = 8064  # 0x1F80
+    CPU_EXEC_UNIT_OPERATING_MODE = 8065  # 0x1F81
+    # CPUexecUnit operating state: a Struct-typed attribute (0x8BD) with struct
+    # id 0xD99, whose DINT member OperatingState (0xD9E) holds the state code.
+    # Source: three EXPLORE replies of theCPUexecUnit (RID 52) captured on
+    # PLCSIM Advanced V8.0, CPU 1511 FW V2.9, in RUN and STOP
+    # (tests/fixtures/plcsim_cpu_exec_unit_20261008.py); all three carry struct
+    # id 0xD99. On hardware, a read-only probe of a CPU 1215C DC/DC/DC (FW V4.2)
+    # read the same struct id with code 8 in RUN; STOP is unverified there. The
+    # writable counterpart OperatingStateREQ (0x877) takes the
+    # OperatingStateRequest values. Names: thomas-v2/S7CommPlusDriver/Core/Ids.cs
+    # (CPUexecUnit.*)
+    CPU_EXEC_UNIT_OPERATING_STATE_STRUCT = 0x8BD
+    CPU_EXEC_UNIT_OPERATING_STATE_STRUCT_ID = 0xD99
     CPU_EXEC_UNIT_OPERATING_STATE = 0xD9E
     CPU_EXEC_UNIT_OPERATING_STATE_REQ = 0x877
 
@@ -749,10 +760,11 @@ class OperatingStateRequest(IntEnum):
     RUN_REDUNDANT = 4
 
 
-# Values of the read-only OperatingState attribute (0xD9E) seen in TIA
-# Portal captures: 4 while stopped, 8 while running. "Observed" means seen in
-# those captures only — no live PLC was available to confirm, and the
-# STARTUP/HOLD-family values in between are not pinned.
+# Values of the read-only OperatingState member (0xD9E) seen in TIA Portal
+# captures and in EXPLORE replies from PLCSIM Advanced (CPU 1511, FW V2.9):
+# 4 while stopped, 8 while running. On real hardware only RUN (8) is confirmed,
+# read on a CPU 1215C (FW V4.2); STOP (4) is not, and the STARTUP/HOLD-family
+# values in between are not pinned.
 OPERATING_STATE_STOP_OBSERVED = 4
 OPERATING_STATE_RUN_OBSERVED = 8
 

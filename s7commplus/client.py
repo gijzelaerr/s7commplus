@@ -30,10 +30,13 @@ from .codec import (
     encode_pvalue_blob,
     encode_pvalue_typed,
     parse_create_object_session_id,
+    skip_typed_value,
 )
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
 from .connection import FamilyOnlyFingerprintError, S7CommPlusConnection, SessionKeyCandidateRejectedError
 from .protocol import (
+    OPERATING_STATE_RUN_OBSERVED,
+    OPERATING_STATE_STOP_OBSERVED,
     DataType,
     ElementID,
     FunctionCode,
@@ -54,7 +57,7 @@ from .subscription import (
     notification_subscription_id,
     parse_subscription_notification,
 )
-from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
+from .vlq import decode_int32_vlq, decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
 
 logger = logging.getLogger(__name__)
 
@@ -1682,12 +1685,18 @@ def _build_invoke_payload(state: int) -> bytes:
 
 
 def _parse_cpu_state(response: bytes) -> str:
-    """Parse corroborating execution-state attributes from a CPU EXPLORE reply.
+    """Parse the CPU operating state from an EXPLORE(theCPUexecUnit) reply.
 
-    Real S7-1200/1500 captures show attributes 0x1F80 and 0x1F81 changing
-    together across RUN/STOP transitions. Requiring both protects against
-    confusing an absent or default-initialized attribute with STOP.
+    The state code is the DINT member OperatingState (0xD9E) of the Struct
+    attribute 0x8BD (struct id 0xD99): 8 in RUN and 4 in STOP on PLCSIM
+    Advanced (CPU 1511, FW V2.9). It decides whenever present; other codes
+    (startup, hold) and conflicting duplicates give ``"UNKNOWN"``.
+
+    Without it, fall back to the cycle-load attributes 0x1F80 and 0x1F81, which
+    a hardware capture showed as 1/7 in RUN and 0/0 in STOP. Both must agree so
+    that an absent or default-initialized attribute is not mistaken for STOP.
     """
+    state_codes: set[int] = set()
     values: dict[int, set[int]] = {
         Ids.CPU_EXEC_UNIT_EXECUTING: set(),
         Ids.CPU_EXEC_UNIT_OPERATING_MODE: set(),
@@ -1704,6 +1713,11 @@ def _parse_cpu_state(response: bytes) -> str:
         except (ValueError, IndexError):
             continue
         value_offset = offset + consumed
+        if attribute_id == Ids.CPU_EXEC_UNIT_OPERATING_STATE_STRUCT:
+            code = _parse_operating_state_struct(response, value_offset)
+            if code is not None:
+                state_codes.add(code)
+            continue
         if attribute_id not in values:
             continue
         # Both observed state attributes are scalar UINT values. Checking the
@@ -1712,6 +1726,13 @@ def _parse_cpu_state(response: bytes) -> str:
             continue
         values[attribute_id].add(struct.unpack_from(">H", response, value_offset + 2)[0])
 
+    if state_codes:
+        if state_codes == {OPERATING_STATE_RUN_OBSERVED}:
+            return "RUN"
+        if state_codes == {OPERATING_STATE_STOP_OBSERVED}:
+            return "STOP"
+        return "UNKNOWN"
+
     executing = values[Ids.CPU_EXEC_UNIT_EXECUTING]
     operating_mode = values[Ids.CPU_EXEC_UNIT_OPERATING_MODE]
     if executing == {1} and operating_mode == {7}:
@@ -1719,6 +1740,40 @@ def _parse_cpu_state(response: bytes) -> str:
     if executing == {0} and operating_mode == {0}:
         return "STOP"
     return "UNKNOWN"
+
+
+def _parse_operating_state_struct(response: bytes, offset: int) -> Optional[int]:
+    """Return the OperatingState code from the Struct value at ``offset``, or None.
+
+    The value is a scalar Struct PValue: flags 0x00, type 0x17, a UInt32 struct
+    id, then ``[VLQ member id][flags][type][value]`` members up to a 0x00 byte.
+    A struct with another id than the captured 0xD99 is not read.
+    """
+    if response[offset : offset + 2] != bytes([0, DataType.STRUCT]) or offset + 6 > len(response):
+        return None
+    if struct.unpack_from(">I", response, offset + 2)[0] != Ids.CPU_EXEC_UNIT_OPERATING_STATE_STRUCT_ID:
+        return None
+    offset += 6
+    try:
+        while offset < len(response) and response[offset] != 0x00:
+            member_id, consumed = decode_uint32_vlq(response, offset)
+            offset += consumed
+            if offset + 2 > len(response):
+                return None
+            flags, datatype = response[offset], response[offset + 1]
+            offset += 2
+            if member_id == Ids.CPU_EXEC_UNIT_OPERATING_STATE:
+                if flags != 0 or datatype != DataType.DINT or offset >= len(response):
+                    return None
+                code, _ = decode_int32_vlq(response, offset)
+                return code
+            next_offset = skip_typed_value(response, offset, datatype, flags)
+            if next_offset <= offset and datatype != DataType.NULL:
+                return None  # a member type skip_typed_value cannot walk
+            offset = next_offset
+    except (ValueError, IndexError):
+        return None
+    return None
 
 
 def _build_explore_request(explore_id: int, attribute_ids: list[int]) -> bytes:
