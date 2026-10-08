@@ -9,6 +9,7 @@ import json
 import os
 import ssl
 import struct
+import subprocess
 import sys
 import time
 from collections.abc import Generator
@@ -18,7 +19,8 @@ from typing import Any
 import pytest
 
 from s7commplus.catalog import SymbolicTag, TagResult
-from s7commplus.cli import _json_safe, _parse_hex, build_parser, main
+from s7commplus.cli import COMMANDS, browse, build_parser, db_read, db_write, main, read, state, write
+from s7commplus.cli._common import json_safe, parse_hex
 from s7commplus.protocol import ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from tests.conftest import get_free_tcp_port
@@ -87,7 +89,7 @@ class _FakeClient:
 @pytest.fixture()
 def fake_client(monkeypatch: pytest.MonkeyPatch) -> _FakeClient:
     client = _FakeClient()
-    monkeypatch.setattr("s7commplus.cli.Client", lambda: client)
+    monkeypatch.setattr("s7commplus.cli._common.Client", lambda: client)
     monkeypatch.delenv("S7COMMPLUS_PASSWORD", raising=False)
     return client
 
@@ -135,15 +137,15 @@ def _strict_json(text: str) -> Any:
 
 
 def test_parse_hex_accepts_common_separators() -> None:
-    assert _parse_hex("01 02 03") == b"\x01\x02\x03"
-    assert _parse_hex("010203") == b"\x01\x02\x03"
-    assert _parse_hex("0x01,0x02,0x03") == b"\x01\x02\x03"
-    assert _parse_hex("01:02-03") == b"\x01\x02\x03"
+    assert parse_hex("01 02 03") == b"\x01\x02\x03"
+    assert parse_hex("010203") == b"\x01\x02\x03"
+    assert parse_hex("0x01,0x02,0x03") == b"\x01\x02\x03"
+    assert parse_hex("01:02-03") == b"\x01\x02\x03"
 
 
 def test_parse_hex_rejects_garbage() -> None:
     with pytest.raises(argparse.ArgumentTypeError):
-        _parse_hex("zz")
+        parse_hex("zz")
 
 
 def test_parser_requires_a_host() -> None:
@@ -164,7 +166,41 @@ def test_parser_defaults() -> None:
     assert args.tls is False
     assert args.password is None
     assert args.ask_password is False
-    assert args.handler.__name__ == "_cmd_browse"
+    assert args.handler is browse.run
+
+
+def test_commands_lists_the_command_modules_in_help_order() -> None:
+    assert COMMANDS == (browse, read, write, db_read, db_write, state)
+
+
+@pytest.mark.parametrize(
+    ("module", "argv"),
+    [
+        (browse, ["browse"]),
+        (read, ["read", "DB1.x"]),
+        (write, ["write", "DB1.x", "--int", "1"]),
+        (db_read, ["db-read", "1", "0", "4"]),
+        (db_write, ["db-write", "1", "0", "--hex", "00"]),
+        (state, ["state"]),
+    ],
+)
+def test_register_adds_the_command_and_its_handler(module: Any, argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="test")
+    subparsers = parser.add_subparsers(dest="command")
+    module.register(subparsers)
+    assert list(subparsers.choices) == [argv[0]]
+    args = parser.parse_args([*argv, "--host", "plc"])
+    assert args.command == argv[0]
+    assert args.handler is module.run
+
+
+def test_runs_as_python_m_s7commplus_cli() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "s7commplus.cli", "--help"], cwd=root, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("usage: s7commplus ")
 
 
 def test_pin_is_an_alias_for_tls_cert_fingerprint() -> None:
@@ -337,7 +373,7 @@ def test_cli_read_reports_unknown_tag(monkeypatch: pytest.MonkeyPatch, capsys: p
         def read_tags(self, names: list[str]) -> list[TagResult]:
             raise KeyError(f"Unknown symbolic tag: {names[0]!r}")
 
-    monkeypatch.setattr("s7commplus.cli.Client", lambda: _Unknown())
+    monkeypatch.setattr("s7commplus.cli._common.Client", lambda: _Unknown())
     assert main(["read", "--host", "plc", "DB1.nope"]) == 2
     assert capsys.readouterr().err.strip() == "error: Unknown symbolic tag: 'DB1.nope'"
 
@@ -398,7 +434,7 @@ def test_cli_ask_password_prompts_without_echo(
         return _SECRET
 
     monkeypatch.setenv("S7COMMPLUS_PASSWORD", "from-env")
-    monkeypatch.setattr("s7commplus.cli.getpass.getpass", fake_getpass)
+    monkeypatch.setattr("s7commplus.cli._common.getpass.getpass", fake_getpass)
     assert main(["state", "--host", "plc", "--ask-password"]) == 0
     assert prompts == ["PLC password: "]
     assert fake_client.connect_kwargs["password"] == _SECRET
@@ -412,7 +448,7 @@ def test_cli_ask_password_without_input_is_a_usage_error(
     def no_input(prompt: str = "Password: ", stream: Any = None) -> str:
         raise EOFError
 
-    monkeypatch.setattr("s7commplus.cli.getpass.getpass", no_input)
+    monkeypatch.setattr("s7commplus.cli._common.getpass.getpass", no_input)
     assert main(["state", "--host", "plc", "--ask-password"]) == 2
     assert "error:" in capsys.readouterr().err
     assert not fake_client.connected
@@ -525,7 +561,7 @@ def test_json_safe_converts_bytes_non_finite_floats_and_containers() -> None:
         "flag": True,
         "arr": (1, [float("inf"), "x"]),
     }
-    assert _strict_json(json.dumps(_json_safe(value), allow_nan=False)) == {
+    assert _strict_json(json.dumps(json_safe(value), allow_nan=False)) == {
         "raw": "01ff",
         "nan": None,
         "inf": None,
@@ -544,7 +580,7 @@ def test_json_safe_converts_dates_times_and_durations() -> None:
         "span": datetime.timedelta(milliseconds=1500),
         "arr": (1, [datetime.date(1990, 1, 1)]),
     }
-    assert json.loads(json.dumps(_json_safe(value))) == {
+    assert json.loads(json.dumps(json_safe(value))) == {
         "d": "2026-10-02",
         "t": "12:34:56",
         "dt": "2026-10-08T07:48:01.250000",

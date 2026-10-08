@@ -96,3 +96,15 @@ Exit status
    or an unknown tag.
 ``130``
    Interrupted.
+
+Adding a command
+----------------
+
+The tool is the ``s7commplus.cli`` package, and ``python -m s7commplus.cli``
+runs it without the console script. Each command is one module of the package
+(``browse.py``, ``read.py``, ``write.py``, ``db_read.py``, ``db_write.py`` and
+``state.py``) with a ``register(subparsers)`` function that adds the command's
+subparser and sets its handler; ``COMMANDS`` in ``s7commplus/cli/__init__.py``
+lists the modules in the order ``--help`` shows them. What the commands share
+(the connection options, the password, JSON output, error reporting and the
+exit codes) is in ``s7commplus/cli/_common.py``.
