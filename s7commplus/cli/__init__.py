@@ -13,6 +13,11 @@ password in the process list and the shell history.
 (``--pin``) imply ``--tls``: asking for a certificate check never leaves the
 connection in plaintext.
 
+``-v``/``--verbose`` before the command sends the library's log records to
+stderr: INFO with ``-v``, DEBUG with ``-vv``. DEBUG output contains every
+protocol frame in hex, including the authentication exchange, so review it
+before sharing it.
+
 Exit status: 0 on success; 1 when the operation fails (a connection, protocol,
 TLS, certificate or authentication error, a certificate or key file that cannot
 be loaded, or a PLC that rejects a read or write); 2 for a usage error (invalid
@@ -44,6 +49,7 @@ from ._common import (
     Subparsers,
     check_connection_options,
     has_connection_options,
+    library_logging,
     package_version,
     report_error,
     tolerate_unencodable_output,
@@ -71,6 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="log the library's activity to stderr: -v for INFO, -vv for DEBUG with every protocol frame (see logging below)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for command in COMMANDS:
         command.register(subparsers)
@@ -84,6 +97,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if has_connection_options(args):
         check_connection_options(parser, args)
     tolerate_unencodable_output()
+    with library_logging(args.verbose):
+        return _run(args)
+
+
+def _run(args: argparse.Namespace) -> int:
+    """Run the command's handler and turn what it raises into an exit status."""
     try:
         return int(args.handler(args))
     except (S7Error, OSError, RuntimeError) as exc:

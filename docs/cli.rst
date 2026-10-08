@@ -83,6 +83,28 @@ Raw data blocks and state
 ``db-read`` prints hex and ``db-write`` takes ``--hex``. ``state`` prints
 ``RUN``, ``STOP`` or ``UNKNOWN``.
 
+Logging
+-------
+
+``-v`` (``--verbose``), given before the command, sends the library's log
+records to stderr at INFO level; ``-vv`` adds DEBUG, which logs every protocol
+frame in hex. Without it the command prints only the library's warnings, as
+before. Stdout carries only the requested data either way, so ``--json`` output
+stays parseable.
+
+.. code-block:: console
+
+   s7commplus -v state --host 192.168.1.10
+   s7commplus -vv db-read --host 192.168.1.10 1 0 16 2> s7commplus-debug.log
+
+.. warning::
+
+   DEBUG output contains the raw frames: the data read and written, the session
+   setup and the password legitimation exchange, which in the legacy
+   legitimation mode is enough to test password guesses offline. The password
+   itself is never logged. Review a DEBUG log before you share it, and do not
+   post it publicly as it is.
+
 Exit status
 -----------
 

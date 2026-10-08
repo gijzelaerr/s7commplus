@@ -11,13 +11,15 @@ exit codes. Each command module in this package builds its subparser with
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import getpass
 import json
+import logging
 import math
 import os
 import sys
-from typing import Any, Callable, Optional, TypeAlias
+from typing import Any, Callable, Iterator, Optional, TypeAlias
 
 from ..client import S7CommPlusClient as Client
 
@@ -50,9 +52,21 @@ exit status:
   130  interrupted
 """
 
+LOGGING_HELP = """\
+logging:
+  -v, given before the command, logs what the library does to stderr
+  (INFO); -vv also logs every protocol frame in hex (DEBUG). DEBUG output
+  holds the data read and written and the authentication exchange with
+  the PLC: review it before you share it, and do not post it publicly as
+  it is.
+"""
+
 #: The epilog of the top-level help. A command's help carries the exit status
 #: and, when the command has the connection options, the password section.
-EPILOG = f"{PASSWORD_HELP}\n{EXIT_STATUS_HELP}"
+EPILOG = f"{PASSWORD_HELP}\n{LOGGING_HELP}\n{EXIT_STATUS_HELP}"
+
+#: The parent logger of every s7commplus module.
+LIBRARY_LOGGER = "s7commplus"
 
 
 def package_version() -> str:
@@ -256,3 +270,32 @@ def report_error(exc: BaseException) -> None:
     # str(KeyError) adds quotes around the message; show the message itself.
     message = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
     print(f"error: {message}", file=sys.stderr)
+
+
+@contextlib.contextmanager
+def library_logging(verbosity: int) -> Iterator[None]:
+    """Send the library's log records to stderr while the command runs.
+
+    ``verbosity`` is the ``-v`` count: 1 logs INFO and above, 2 or more also
+    DEBUG, which includes every protocol frame in hex. 0 changes nothing, so
+    the library stays as quiet as it is without the command line. Afterwards
+    the handler is removed and the logger's level restored, so calling
+    ``main()`` leaves no logging configuration behind.
+    """
+    if verbosity <= 0:
+        yield
+        return
+    level = logging.INFO if verbosity == 1 else logging.DEBUG
+    logger = logging.getLogger(LIBRARY_LOGGER)
+    handler = logging.StreamHandler(sys.stderr)
+    # The handler filters too: a module's logger may have a lower level of its own.
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    previous_level = logger.level
+    logger.setLevel(level)
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)

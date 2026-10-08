@@ -6,6 +6,7 @@ import argparse
 import datetime
 import io
 import json
+import logging
 import os
 import ssl
 import struct
@@ -287,6 +288,83 @@ def test_subcommand_help_carries_the_epilog(capsys: pytest.CaptureFixture[str]) 
     assert "exit status:" in out
     assert "--ask-password" in out
     assert "implied by" in out
+
+
+def test_help_warns_that_debug_output_holds_the_frames() -> None:
+    top = " ".join(build_parser().format_help().split())
+    assert "-v, --verbose" in top
+    assert "-vv also logs every protocol frame in hex (DEBUG)" in top
+    assert "review it before you share it" in top
+
+
+def _connect_and_log(client: _FakeClient) -> Any:
+    """A connect() for the fake client that logs like the library does."""
+
+    def connect(*args: Any, **kwargs: Any) -> None:
+        client.connected = True
+        client.connect_kwargs = kwargs
+        log = logging.getLogger("s7commplus.connection")
+        log.info("session created")
+        log.debug("frame 72 03 00")
+
+    return connect
+
+
+@pytest.mark.parametrize(
+    ("flags", "info", "debug"),
+    [
+        ([], False, False),
+        (["-v"], True, False),
+        (["--verbose"], True, False),
+        (["-vv"], True, True),
+        (["-v", "--verbose"], True, True),
+    ],
+)
+def test_verbose_turns_on_library_logging(
+    fake_client: _FakeClient,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    flags: list[str],
+    info: bool,
+    debug: bool,
+) -> None:
+    monkeypatch.setattr(fake_client, "connect", _connect_and_log(fake_client))
+    assert main([*flags, "state", "--host", "plc"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "RUN\n"  # logging goes to stderr only
+    assert ("INFO s7commplus.connection: session created" in captured.err) is info
+    assert ("DEBUG s7commplus.connection: frame 72 03 00" in captured.err) is debug
+
+
+def test_verbose_shows_no_debug_when_a_module_logger_is_set_to_debug(
+    fake_client: _FakeClient,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # tests/test_s7_e2e.py sets s7commplus.connection to DEBUG when it is
+    # imported, and an application may do the same; -v must still mean INFO.
+    caplog.set_level(logging.DEBUG, logger="s7commplus.connection")
+    monkeypatch.setattr(fake_client, "connect", _connect_and_log(fake_client))
+    assert main(["-v", "state", "--host", "plc"]) == 0
+    err = capsys.readouterr().err
+    assert "INFO s7commplus.connection: session created" in err
+    assert "frame 72 03 00" not in err
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_verbose_leaves_no_logging_configuration_behind(
+    fake_client: _FakeClient, monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise ConnectionRefusedError(111, "Connection refused")
+
+    monkeypatch.setattr(fake_client, "connect", refuse if fails else _connect_and_log(fake_client))
+    logger = logging.getLogger("s7commplus")
+    level, handlers = logger.level, list(logger.handlers)
+    assert main(["-vv", "state", "--host", "plc"]) == (1 if fails else 0)
+    assert logger.level == level
+    assert logger.handlers == handlers
 
 
 def test_cli_browse(fake_client: _FakeClient, capsys: pytest.CaptureFixture[str]) -> None:
@@ -578,6 +656,16 @@ def test_cli_db_write_end_to_end(emulator: tuple[S7CommPlusServer, int], capsys:
     capsys.readouterr()
     assert main(["db-read", "--host", "127.0.0.1", "--port", str(port), "1", "0", "4"]) == 0
     assert capsys.readouterr().out.strip() == "deadbeef"
+
+
+def test_cli_debug_logging_end_to_end(emulator: tuple[S7CommPlusServer, int], capsys: pytest.CaptureFixture[str]) -> None:
+    _srv, port = emulator
+    argv = ["-vv", "db-read", "--host", "127.0.0.1", "--port", str(port), "--password", _SECRET, "1", "0", "4"]
+    assert main(argv) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "00000000\n"  # stdout keeps only the data
+    assert "DEBUG s7commplus.connection: === SEND REQUEST ===" in captured.err
+    assert _SECRET not in captured.err
 
 
 def test_cli_tls_end_to_end_with_the_plc_ca(tls_emulator: tuple[int, str], capsys: pytest.CaptureFixture[str]) -> None:
