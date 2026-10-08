@@ -14,6 +14,28 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `Client.reconnect()` and `AsyncClient.reconnect()` build a new session with the
+  parameters of the last `connect()` and legitimate it with the same password; on
+  `AsyncClient`, a successful `authenticate()` replaces that password and adds its
+  username, while a refused one changes nothing. `connection_generation` counts
+  the reconnects. A failed attempt keeps the parameters, so it can be repeated
+  once the PLC is back. Data subscriptions lost with the old session stay
+  restorable with `resubscribe()`; alarm subscriptions must be created again.
+  Reconnects are serialized, and while one runs, other `AsyncClient` tasks' requests
+  fail with "Not connected" instead of interleaving with its handshake.
+* Opt-in automatic reconnect for reads: with `connect(..., auto_reconnect=True)`
+  (keyword-only) or the `auto_reconnect` property, a read that finds the connection
+  dropped reconnects and runs once more on the new session. Only `db_read`,
+  `db_read_multi`, `read_area`, `read_symbolic`, `read_symbolic_multi`, `read_tag`,
+  `read_tags`, `browse` and `get_cpu_state` are retried; writes never are, because
+  it is unknown whether the PLC applied a lost write. A read that timed out is
+  not retried either (`S7TimeoutError` is not an `S7ConnectionError`); when the
+  timeout ended the session, the next call reconnects. A read called from another
+  reconnects only through the outermost call. It stands down, raising
+  `S7ConnectionError`, while data or alarm subscriptions are live or lost data
+  subscriptions await `resubscribe()`. After an automatic attempt the next one
+  waits at least one second, and `AsyncClient` tasks that find the same
+  connection dropped share one reconnect. Off by default.
 
 ### Behaviour changes
 
@@ -21,6 +43,20 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* `AsyncClient` raises `S7ConnectionError` when the PLC closes or resets the
+  connection during a request, as `Client` already did, instead of letting
+  `asyncio.IncompleteReadError` or an `OSError` such as `ConnectionResetError`
+  escape. It also ends the session (`connected` turns false), so the next request
+  fails at once with "Not connected", and `AsyncClient.browse()` now reconnects on
+  firmware that resets the connection after a symbolic read, as `Client.browse()`
+  does. Upgrade note: catch `S7ConnectionError` where you caught those exceptions
+  from `AsyncClient` operations.
+
+### Bug fixes and hardening
+
+* A failed reconnect inside `AsyncClient.browse()` no longer discards the
+  `connect()` parameters, which made every later request fail with "Not
+  connected" until `connect()` was called again.
 
 0.2.0 (2026-10-08)
 ------------------

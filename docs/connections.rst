@@ -182,6 +182,70 @@ The asyncio client separates connection from authentication:
 Never log passwords, session keys, challenges, private keys, or decrypted
 authentication material.
 
+Reconnecting
+------------
+
+After a dropped connection, ``reconnect()`` builds a new session with the
+parameters of the last ``connect()``:
+
+.. code-block:: python
+
+   client.reconnect()
+
+The new session is legitimated with the password given to ``connect()``; on the
+asyncio client, a successful ``authenticate()`` replaces that password and adds
+its username, while a refused one changes nothing. ``connection_generation``
+counts the reconnects, so a caller can tell that the session was rebuilt. A
+failed attempt keeps the parameters, so ``reconnect()`` can be called again
+once the PLC is back. Data subscriptions lost with the old session are restored
+with ``resubscribe()`` (see :doc:`subscriptions-alarms`); alarm subscriptions
+must be created again.
+
+Automatic reconnect
+~~~~~~~~~~~~~~~~~~~
+
+With ``auto_reconnect=True`` on ``connect()`` (or ``client.auto_reconnect =
+True`` later), a read that finds the connection dropped reconnects and runs
+once more on the new session:
+
+.. code-block:: python
+
+   client.connect("192.168.1.10", auto_reconnect=True)
+
+Only these reads are retried: ``db_read``, ``db_read_multi``, ``read_area``,
+``read_symbolic``, ``read_symbolic_multi``, ``read_tag``, ``read_tags``,
+``browse`` (and through it ``refresh_tag_catalog`` and ``resolve_tag``) and
+``get_cpu_state``. Other operations, such as ``explore``, ``list_datablocks``
+and ``read_alarms``, are not. **Writes are never retried**: when a request is
+lost, it is unknown whether the PLC applied it, so the error reaches the caller.
+
+Any ``S7ConnectionError`` from one of these reads counts as a dropped
+connection, including "Not connected" after the client ended a broken session
+itself. A read called from another (``read_tag`` calls ``read_tags``) leaves the
+drop to the outermost call, so one call reconnects at most once and runs again
+at most once; the error of that second run reaches the caller.
+
+A timeout is not a dropped connection: :class:`~s7commplus.error.S7TimeoutError`
+is not an ``S7ConnectionError``, so a read that timed out is not retried and the
+timeout reaches the caller. When the timeout ended the session, as a receive
+timeout of the synchronous client does, the next call finds "Not connected" and
+reconnects.
+
+Auto-reconnect stands down, raising ``S7ConnectionError``, while data or alarm
+subscriptions are live, or while data subscriptions lost with an earlier session
+await ``resubscribe()``: a silent new session would end them unnoticed. Call
+``reconnect()``, then ``resubscribe()`` (or ``forget_lost_subscriptions()``) and
+create alarm subscriptions again.
+
+After an automatic attempt ends, successful or not, the next one waits at least
+one second; a read that finds the connection dropped within that second raises
+its error without reconnecting. ``browse()``'s own reconnect between its steps,
+for firmware that resets the connection after a symbolic read, counts as such an
+attempt. A PLC that is down, or a request that fails on every new session, is
+therefore not flooded with connection attempts. When several asyncio tasks find
+the same connection dropped, the first reconnects and the others retry on its
+session.
+
 Troubleshooting
 ---------------
 
