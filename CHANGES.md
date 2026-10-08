@@ -14,6 +14,14 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* `Client` and `AsyncClient` can pin a PLC's TLS certificate instead of relying
+  on a CA file: pass `tls_cert_fingerprint` (the SHA-256 as hex, separators
+  ignored) to `connect()` and the connection is refused unless the PLC presents
+  that exact certificate. `peer_certificate_fingerprint()` reads back the
+  presented digest, and a mismatch raises `S7CertificateError`. The pin is
+  checked right after the TLS handshake, before the session is created or a
+  password is sent. A pin without `use_tls=True` is refused with `ValueError`
+  before anything is sent, so a pinned certificate is never used in the clear.
 
 ### Behaviour changes
 
