@@ -89,11 +89,13 @@ determine it. The following combinations have been reported on real hardware:
    * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.8 project)
      - key family 03
      - V1, legacy SessionKey
-     - Validated (sync and async: connect, password legitimation, browse, reads, writes, data subscriptions; renewal skipped)
+     - Validated (sync and async: connect, password legitimation, browse, reads, writes, subscriptions from access
+       sequences; renewal skipped). Subscriptions to catalog tags are created but get no values yet
    * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.9 project)
      - V2.9
      - TLS
-     - Validated (connect, browse, reads, writes, subscriptions and alarms)
+     - Validated on an unprotected project (connect, browse, reads, writes, alarms, subscriptions from access
+       sequences). Not working yet: values for catalog-tag subscriptions, password legitimation
    * - S7-1200
      - V4.1, V4.5, V4.7.3
      - TLS

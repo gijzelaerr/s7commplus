@@ -20,7 +20,9 @@ CHANGES
   `password`; it is now validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN,
   NoAccess FW V2.8 project) with the sync and async clients: connect with a
   password, browse, symbolic and byte-offset reads and writes, and data
-  subscriptions, reaching `protection_level` 1 after `LegitimatedLevel1`.
+  subscriptions from access sequences, reaching `protection_level` 1 after
+  `LegitimatedLevel1`. Subscriptions to catalog tags are created and deleted
+  but get no values yet.
   Byte-offset reads/writes are refused on optimized blocks, as on real
   hardware; use symbolic access there (#66).
 

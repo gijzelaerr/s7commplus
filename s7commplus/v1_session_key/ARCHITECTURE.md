@@ -370,10 +370,13 @@ dispatches on the family.
 PLCSIM is **validated** on a real S7-PLCSIM Advanced V8 instance (CPU 1511-1 PN,
 FW V2.8 project, on the PLCSIM virtual adapter) with the sync and async clients:
 connect, SecurityKey setup, `browse()`, symbolic and byte-offset reads,
-symbolic and byte-offset writes, data subscriptions, password legitimation, and
-key handling. It uses the S7-1500 request layouts. CreateObject is parsed
-structurally (attribute 233 carries the `03:…` fingerprint, 303 the 20-byte
-challenge; no fixed offsets are used).
+symbolic and byte-offset writes, data subscriptions from access sequences,
+password legitimation, and key handling. Subscriptions to catalog tags are
+created and deleted but get no values yet: `SubscriptionItem.from_tag` sends the
+browsed SymbolCRC, which PLCSIM answers with item error 0x13. It uses the
+S7-1500 request layouts. CreateObject is parsed structurally (attribute 233
+carries the `03:…` fingerprint, 303 the 20-byte challenge; no fixed offsets are
+used).
 
 Four PLCSIM-specific behaviours were found and fixed (#66):
 

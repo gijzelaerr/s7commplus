@@ -359,9 +359,9 @@ def test_plcsim_session_version_patch_ignores_marker_bytes_in_values() -> None:
 
     lookalike = bytes.fromhex("823b00048800")
     blob_element = bytes.fromhex("822c0014") + bytes([len(lookalike)]) + lookalike  # element 300, BLOB
-    struct = bytes.fromhex("00170000013a") + blob_element + bytes.fromhex("823b00048800") + bytes([0x00])
+    value = bytes.fromhex("00170000013a") + blob_element + bytes.fromhex("823b00048800") + bytes([0x00])
     expected = bytes.fromhex("00170000013a") + blob_element + bytes.fromhex("823b00048400") + bytes([0x00])
-    assert _patch_plcsim_server_session_version(struct) == expected
+    assert _patch_plcsim_server_session_version(value) == expected
 
 
 def test_plcsim_session_version_patch_leaves_non_structs_alone() -> None:
