@@ -152,6 +152,66 @@ TLS records are carried inside COTP data frames by the library. Wrapping the
 TCP socket in a conventional TLS socket is not equivalent and will encrypt the
 wrong protocol layer.
 
+Certificate pinning
+~~~~~~~~~~~~~~~~~~~
+
+PLC certificates are usually self-signed, so a CA file is often unavailable. Pin
+the exact certificate instead with ``tls_cert_fingerprint`` — the SHA-256
+fingerprint as hex (``:``, ``-`` and whitespace are ignored, and the whole
+``sha256 Fingerprint=...`` line ``openssl x509 -noout -fingerprint -sha256``
+prints is accepted):
+
+.. code-block:: python
+
+   client.connect(
+       "192.168.1.10",
+       use_tls=True,
+       tls_cert_fingerprint="AA:BB:CC:...",  # openssl x509 -fingerprint -sha256
+   )
+
+The connection is refused unless the certificate the PLC presents matches, with
+:class:`~s7commplus.error.S7CertificateError`. Read the presented fingerprint
+back with ``client.peer_certificate_fingerprint()`` (the raw 32-byte digest;
+``.hex()`` gives the hex form to pin). Supplying ``tls_ca`` *and*
+``tls_cert_fingerprint`` requires both the chain and the pin to match. A
+fingerprint without ``use_tls=True`` is refused with ``ValueError`` before
+anything is sent, so a pinned certificate is never used on a plaintext
+connection. The pin is checked right after the TLS handshake, before the session
+is created or a password is sent.
+
+.. _automatic-tls:
+
+Automatic TLS selection
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``use_tls="auto"`` tries TLS first and continues without it only when the TLS
+handshake itself does not complete, which is what a PLC without TLS (V1, or a
+project with TLS switched off) does. It never continues in the clear when:
+
+- a ``tls_cert_fingerprint``, ``tls_ca`` or client certificate is given, or a
+  ``password``: these say the caller expects TLS, so the failed handshake is
+  raised as :class:`~s7commplus.error.S7TlsHandshakeError`;
+- anything fails *after* the handshake completed (a refused password, a
+  rejected session): that error is raised as usual.
+
+Each fallback is logged as a warning, and every reconnect tries TLS first
+again, so a fallback holds only for the connection it was made for. Other
+strings than ``"auto"`` are refused with ``ValueError``.
+
+.. warning::
+
+   ``use_tls="auto"`` with none of ``tls_cert_fingerprint``, ``tls_ca``, a
+   client certificate or ``password`` set is **not secure against an active
+   attacker**: anyone on the network path who resets the TLS handshake makes the
+   client continue in plaintext. It protects against passive eavesdropping only.
+   Use ``use_tls=True`` (with ``tls_cert_fingerprint`` or ``tls_ca``) wherever
+   that matters.
+
+A failed handshake raises :class:`~s7commplus.error.S7TlsHandshakeError` for
+``use_tls=True`` too, with the ``ssl`` or socket error as its ``__cause__``; a
+certificate that fails ``tls_ca`` verification raises
+:class:`~s7commplus.error.S7CertificateError`.
+
 Password authentication
 -----------------------
 

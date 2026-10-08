@@ -46,6 +46,23 @@ class S7AuthenticationError(S7Error):
     pass
 
 
+class S7CertificateError(S7ConnectionError):
+    """Raised when a PLC's TLS certificate fails verification or pinning."""
+
+    pass
+
+
+class S7TlsHandshakeError(S7ConnectionError):
+    """Raised when the TLS handshake with the PLC does not complete.
+
+    The underlying ``ssl``/socket error is the exception's ``__cause__``. A
+    certificate that fails verification raises :class:`S7CertificateError`
+    instead.
+    """
+
+    pass
+
+
 class S7RateLimitError(S7Error):
     """Raised when a non-blocking request rate limit is reached."""
 

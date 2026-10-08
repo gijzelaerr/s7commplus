@@ -11,9 +11,9 @@ import ssl
 import struct
 from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Awaitable, Callable, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Literal, Optional, TypeVar
 
-from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
+from .error import S7CertificateError, S7ConnectionError, S7Error, S7IntegrityError, S7ProtocolError, S7TlsHandshakeError
 
 from . import typeinfo
 from .blob_decompressor import find_and_decompress
@@ -75,7 +75,10 @@ from .connection import (
     _incoming_response_sequence,
     _is_stale_response_sequence,
     _log_create_object_return_value,
+    _check_certificate_pin,
+    _check_plaintext_fallback,
     _parse_get_var_substreamed_response,
+    _resolve_use_tls,
     _parse_protection_level_response,
     _resolve_session_key_fingerprint,
     _session_setup_accepted,
@@ -85,6 +88,7 @@ from .connection import (
     _v1_session_key_profile,
     _v1_integrity_tail,
     _validate_response_header,
+    _verify_pinned_certificate,
     _verify_v3_hmac,
 )
 from .subscription import (
@@ -205,6 +209,10 @@ class S7CommPlusAsyncClient:
         self._incoming_bio: Optional[ssl.MemoryBIO] = None
         self._outgoing_bio: Optional[ssl.MemoryBIO] = None
         self._oms_secret: Optional[bytes] = None
+        # Pinned TLS certificate: expected SHA-256 (set by connect) and the one
+        # the PLC actually presented (captured during the handshake).
+        self._tls_cert_fingerprint: Optional[bytes] = None
+        self._peer_certificate_fingerprint: Optional[bytes] = None
         # ServerSessionVersion is captured as its raw typed value (flags+datatype+data)
         # so it can be echoed back verbatim — real S7-1500 PLCs send it as a Struct.
         self._server_session_version: Optional[bytes] = None
@@ -329,10 +337,11 @@ class S7CommPlusAsyncClient:
         rack: int = 0,
         slot: int = 1,
         *,
-        use_tls: bool = False,
+        use_tls: bool | Literal["auto"] = False,
         tls_cert: Optional[str] = None,
         tls_key: Optional[str] = None,
         tls_ca: Optional[str] = None,
+        tls_cert_fingerprint: Optional[str] = None,
         password: Optional[str] = None,
         allow_legacy_key_fallback: bool = True,
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
@@ -350,6 +359,11 @@ class S7CommPlusAsyncClient:
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
+            tls_cert_fingerprint: Expected SHA-256 fingerprint of the PLC's TLS
+                certificate, as hex (``:``/``-``/spaces allowed). Refuses the
+                connection unless the PLC presents that exact certificate; use it
+                instead of ``tls_ca`` for a self-signed PLC certificate. Requires
+                ``use_tls=True``: a pin is never used on a plaintext connection.
             password: PLC password. V1 SessionKey sessions use it for the
                 post-handshake legitimation; TLS sessions pass it to
                 :meth:`authenticate` after connecting.
@@ -371,10 +385,12 @@ class S7CommPlusAsyncClient:
                 verified against a PLC, so try ``"es"`` if the default is
                 refused.
         """
-        if legacy_s7_1500 and use_tls:
+        tls_first, auto_tls = _resolve_use_tls(use_tls)
+        if legacy_s7_1500 and tls_first:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
         if legacy_session_key_refresh_interval is not None and legacy_session_key_refresh_interval <= 0:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
+        _check_certificate_pin(tls_cert_fingerprint, tls_first)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
         self._symbol_catalog = None
         self._connect_params = {
@@ -382,10 +398,12 @@ class S7CommPlusAsyncClient:
             "port": port,
             "rack": rack,
             "slot": slot,
-            "use_tls": use_tls,
+            "use_tls": tls_first,
+            "auto_tls": auto_tls,
             "tls_cert": tls_cert,
             "tls_key": tls_key,
             "tls_ca": tls_ca,
+            "tls_cert_fingerprint": tls_cert_fingerprint,
             "password": password,
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
@@ -400,6 +418,25 @@ class S7CommPlusAsyncClient:
             raise
 
     async def _open_connection(self) -> None:
+        """(Re)open the connection using the stored ``connect()`` arguments.
+
+        With ``use_tls="auto"`` every (re)connect tries TLS first, so a
+        fallback to plaintext never outlives the connection it was made for.
+        """
+        assert self._connect_params is not None
+        p = self._connect_params
+        if not p["auto_tls"]:
+            await self._open_connection_with_key_fallback()
+            return
+        p["use_tls"] = True
+        try:
+            await self._open_connection_with_key_fallback()
+        except S7TlsHandshakeError as exc:
+            _check_plaintext_fallback(p, exc)
+            p["use_tls"] = False
+            await self._open_connection_with_key_fallback()
+
+    async def _open_connection_with_key_fallback(self) -> None:
         """Open the connection, trying bundled same-family keys when the PLC withholds its key id."""
         assert self._connect_params is not None
         p = self._connect_params
@@ -459,6 +496,8 @@ class S7CommPlusAsyncClient:
         self._session_key_refresh_interval = p["legacy_session_key_refresh_interval"]
         self._session_key_refresh_error = None
         self._session_key_fingerprint_override = fingerprint
+        self._tls_cert_fingerprint = _check_certificate_pin(p["tls_cert_fingerprint"], use_tls)
+        self._peer_certificate_fingerprint = None
 
         # TCP connect
         self._reader, self._writer = await asyncio.open_connection(p["host"], p["port"])
@@ -647,8 +686,6 @@ class S7CommPlusAsyncClient:
     ) -> None:
         """Activate TLS over the COTP connection."""
         if self._writer is None:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("Cannot activate TLS: not connected")
 
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -681,8 +718,19 @@ class S7CommPlusAsyncClient:
             server_hostname=self._host if ctx.check_hostname else None,
         )
 
-        await self._do_tls_handshake()
+        try:
+            await self._do_tls_handshake()
+        except ssl.SSLCertVerificationError as exc:
+            raise S7CertificateError(f"PLC TLS certificate failed verification: {exc.verify_message}") from exc
+        except (ssl.SSLError, OSError, EOFError, asyncio.TimeoutError, S7Error) as exc:
+            raise S7TlsHandshakeError(f"TLS handshake with the PLC did not complete: {exc}") from exc
         self._tls_active = True
+
+        # Pin the PLC certificate before any application data is trusted.
+        # Not an assert: the check must also hold under ``python -O``.
+        if self._ssl_object is None:
+            raise S7ConnectionError("TLS session was closed during the handshake")
+        self._peer_certificate_fingerprint = _verify_pinned_certificate(self._ssl_object, self._tls_cert_fingerprint)
 
         try:
             exporter = getattr(self._ssl_object, "export_keying_material")
@@ -771,6 +819,14 @@ class S7CommPlusAsyncClient:
         self._session_key_refresh_error = None
         self._connect_params = None
 
+    def peer_certificate_fingerprint(self) -> Optional[bytes]:
+        """SHA-256 of the PLC's TLS certificate, or None without TLS.
+
+        The raw 32-byte digest; ``.hex()`` gives the hex string that
+        ``tls_cert_fingerprint`` takes.
+        """
+        return self._peer_certificate_fingerprint
+
     async def _close(self) -> None:
         """Tear down the session and transport, keeping the connect parameters and any renewal failure."""
         self._stop_session_key_refresh()
@@ -798,6 +854,7 @@ class S7CommPlusAsyncClient:
         self._incoming_bio = None
         self._outgoing_bio = None
         self._oms_secret = None
+        self._peer_certificate_fingerprint = None
         self._symbol_catalog = None
         self._server_session_version = None
         self._session_oms_version = None
@@ -892,6 +949,9 @@ class S7CommPlusAsyncClient:
         if self._connect_params is None:
             raise S7ConnectionError("Not connected")
         params = self._connect_params.copy()
+        # connect() takes the caller's use_tls, not the resolved one: "auto" tries TLS first again.
+        if params.pop("auto_tls"):
+            params["use_tls"] = "auto"
         await self.disconnect()
         await self.connect(**params)
 

@@ -7,9 +7,9 @@ import logging
 import struct
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Optional, TypeAlias, TypeVar
+from typing import Any, Literal, Optional, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError
+from .error import S7ConnectionError, S7ProtocolError, S7TlsHandshakeError
 
 from . import typeinfo
 from .alarm import (
@@ -32,7 +32,14 @@ from .codec import (
     parse_create_object_session_id,
 )
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
-from .connection import FamilyOnlyFingerprintError, S7CommPlusConnection, SessionKeyCandidateRejectedError
+from .connection import (
+    FamilyOnlyFingerprintError,
+    S7CommPlusConnection,
+    SessionKeyCandidateRejectedError,
+    _check_certificate_pin,
+    _check_plaintext_fallback,
+    _resolve_use_tls,
+)
 from .protocol import (
     DataType,
     ElementID,
@@ -179,7 +186,7 @@ class S7CommPlusClient:
         port: int = 102,
         rack: int = 0,
         slot: int = 1,
-        use_tls: bool = False,
+        use_tls: bool | Literal["auto"] = False,
         tls_cert: Optional[str] = None,
         tls_key: Optional[str] = None,
         tls_ca: Optional[str] = None,
@@ -187,6 +194,7 @@ class S7CommPlusClient:
         allow_legacy_key_fallback: bool = True,
         legacy_session_key_refresh_interval: Optional[float] = 25 * 60.0,
         *,
+        tls_cert_fingerprint: Optional[str] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
     ) -> None:
@@ -197,10 +205,18 @@ class S7CommPlusClient:
             port: TCP port (default 102)
             rack: PLC rack number (unused, kept for API symmetry)
             slot: PLC slot number (unused, kept for API symmetry)
-            use_tls: Whether to activate TLS (required for V2)
+            use_tls: Whether to activate TLS (required for V2). ``"auto"``
+                tries TLS first and continues without it only when the TLS
+                handshake does not complete and no pin, CA, client certificate
+                or password is given; see :ref:`automatic-tls`.
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
+            tls_cert_fingerprint: Expected SHA-256 fingerprint of the PLC's TLS
+                certificate, as hex (``:``/``-``/spaces allowed). Refuses the
+                connection unless the PLC presents that exact certificate; use it
+                instead of ``tls_ca`` for a self-signed PLC certificate. Requires
+                ``use_tls=True``: a pin is never used on a plaintext connection.
             password: PLC password for legitimation (V2+ with TLS)
             allow_legacy_key_fallback: Try known same-family public keys on
                 fresh sessions when a legacy PLC omits its key id.
@@ -220,17 +236,21 @@ class S7CommPlusClient:
                 verified against a PLC, so try ``"es"`` if the default is
                 refused.
         """
-        if legacy_s7_1500 and use_tls:
+        tls_first, auto_tls = _resolve_use_tls(use_tls)
+        if legacy_s7_1500 and tls_first:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
+        _check_certificate_pin(tls_cert_fingerprint, tls_first)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
         self._symbol_catalog = None
         self._connect_params = {
             "host": host,
             "port": port,
-            "use_tls": use_tls,
+            "use_tls": tls_first,
+            "auto_tls": auto_tls,
             "tls_cert": tls_cert,
             "tls_key": tls_key,
             "tls_ca": tls_ca,
+            "tls_cert_fingerprint": tls_cert_fingerprint,
             "password": password,
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
@@ -240,9 +260,28 @@ class S7CommPlusClient:
         self._open_connection()
 
     def _open_connection(self) -> None:
-        """(Re)open the connection using the stored ``connect()`` arguments."""
+        """(Re)open the connection using the stored ``connect()`` arguments.
+
+        With ``use_tls="auto"`` every (re)connect tries TLS first, so a
+        fallback to plaintext never outlives the connection it was made for.
+        """
         if self._connect_params is None:
             raise RuntimeError("Not connected")
+        p = self._connect_params
+        if not p["auto_tls"]:
+            self._open_connection_with_key_fallback()
+            return
+        p["use_tls"] = True
+        try:
+            self._open_connection_with_key_fallback()
+        except S7TlsHandshakeError as exc:
+            _check_plaintext_fallback(p, exc)
+            p["use_tls"] = False
+            self._open_connection_with_key_fallback()
+
+    def _open_connection_with_key_fallback(self) -> None:
+        """Open the connection, trying bundled same-family keys when the PLC withholds its key id."""
+        assert self._connect_params is not None
         p = self._connect_params
         cache_key = (p["host"], p["port"])
         cached = _LEGACY_KEY_CACHE.get(cache_key) if p["allow_legacy_key_fallback"] else None
@@ -283,6 +322,7 @@ class S7CommPlusClient:
             tls_cert=p["tls_cert"],
             tls_key=p["tls_key"],
             tls_ca=p["tls_ca"],
+            tls_cert_fingerprint=p["tls_cert_fingerprint"],
             password=p["password"] or "",
             legacy_session_key_refresh_interval=p["legacy_session_key_refresh_interval"],
             _session_key_fingerprint=fingerprint,
@@ -354,6 +394,16 @@ class S7CommPlusClient:
             self._connection = None
         self._connect_params = None
         self._symbol_catalog = None
+
+    def peer_certificate_fingerprint(self) -> Optional[bytes]:
+        """SHA-256 of the PLC's TLS certificate, or None without TLS.
+
+        The raw 32-byte digest; ``.hex()`` gives the hex string that
+        ``tls_cert_fingerprint`` takes.
+        """
+        if self._connection is None:
+            return None
+        return self._connection.peer_certificate_fingerprint()
 
     def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block.

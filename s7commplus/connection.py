@@ -47,7 +47,7 @@ import struct
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import TracebackType
 from typing import Any, Optional, Type
 
@@ -61,7 +61,7 @@ from .codec import (
     encode_object_qualifier,
     parse_create_object_attributes,
 )
-from .error import S7AuthenticationError, S7ConnectionError
+from .error import S7AuthenticationError, S7CertificateError, S7ConnectionError, S7Error, S7TlsHandshakeError
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -930,6 +930,107 @@ def _strip_response_integrity_id(function_code: int, payload: bytes, session_key
     return payload
 
 
+def _parse_certificate_fingerprint(fingerprint: str) -> bytes:
+    """Parse a SHA-256 TLS certificate fingerprint into its 32 raw bytes.
+
+    Accepts hex with optional ``:``, ``-`` or whitespace separators (the format
+    TIA Portal shows), and the whole line ``openssl x509 -fingerprint -sha256``
+    prints (``sha256 Fingerprint=AA:BB:...``), so it is the value to pass as
+    ``tls_cert_fingerprint`` on ``connect()``.
+
+    Raises:
+        ValueError: If the fingerprint is not exactly 32 bytes of hex.
+    """
+    value = fingerprint.rsplit("=", 1)[-1]
+    cleaned = "".join(value.split()).replace(":", "").replace("-", "")
+    if len(cleaned) != 64:
+        raise ValueError("certificate fingerprint must be 64 hex characters (a SHA-256 digest)")
+    try:
+        return bytes.fromhex(cleaned)
+    except ValueError as exc:
+        raise ValueError("certificate fingerprint is not valid hex") from exc
+
+
+def _check_certificate_pin(tls_cert_fingerprint: Optional[str], use_tls: bool) -> Optional[bytes]:
+    """Parse a ``connect()`` pin and refuse it on a plaintext connection.
+
+    Both clients call this before any network I/O, so a malformed pin, or a pin
+    without TLS, fails the same way and before anything is sent.
+
+    Raises:
+        ValueError: If the pin is malformed, or given without ``use_tls``.
+    """
+    if tls_cert_fingerprint is None:
+        return None
+    expected = _parse_certificate_fingerprint(tls_cert_fingerprint)
+    if not use_tls:
+        raise ValueError("tls_cert_fingerprint requires use_tls=True: a pinned certificate must never be used in the clear")
+    return expected
+
+
+def _resolve_use_tls(use_tls: "bool | str") -> tuple[bool, bool]:
+    """Split ``connect(use_tls=...)`` into (try TLS first, automatic mode).
+
+    Accepts ``True``, ``False`` or ``"auto"``. Any other string is refused: a
+    truthy ``"false"`` or ``"off"`` must not quietly turn TLS on.
+    """
+    if isinstance(use_tls, str):
+        if use_tls != "auto":
+            raise ValueError(f"use_tls must be True, False or 'auto', not {use_tls!r}")
+        return True, True
+    return bool(use_tls), False
+
+
+def _plaintext_fallback_refusal(params: Mapping[str, Any]) -> Optional[str]:
+    """Why ``use_tls="auto"`` must not continue without TLS, or None when it may.
+
+    Any TLS setting the caller supplied, or a password, means the caller
+    expects TLS, so a failed handshake is an error rather than a reason to
+    talk to the PLC in the clear.
+    """
+    if params.get("tls_cert_fingerprint") is not None:
+        return "a certificate is pinned (tls_cert_fingerprint)"
+    if params.get("tls_ca") is not None:
+        return "a CA certificate is configured (tls_ca)"
+    if params.get("tls_cert") is not None or params.get("tls_key") is not None:
+        return "a client certificate is configured (tls_cert/tls_key)"
+    if params.get("password") is not None:
+        return "a password is given"
+    return None
+
+
+def _check_plaintext_fallback(params: Mapping[str, Any], exc: S7TlsHandshakeError) -> None:
+    """Allow ``use_tls="auto"`` to retry without TLS after ``exc``, or raise why not."""
+    reason = _plaintext_fallback_refusal(params)
+    if reason is not None:
+        raise S7TlsHandshakeError(f"{exc}; use_tls='auto' does not fall back to plaintext because {reason}") from exc
+    logger.warning(
+        "TLS handshake with %s:%s did not complete (%s); continuing without TLS (use_tls='auto')",
+        params.get("host"),
+        params.get("port"),
+        exc,
+    )
+
+
+def _verify_pinned_certificate(ssl_object: ssl.SSLObject, expected: Optional[bytes]) -> Optional[bytes]:
+    """Return the peer certificate's SHA-256 digest and enforce a pin if given.
+
+    The digest is computed over the DER certificate the PLC presented in the
+    handshake. When ``expected`` is set, a mismatch (or a missing certificate)
+    raises ``S7CertificateError``; callers tear the connection down.
+    """
+    der = ssl_object.getpeercert(binary_form=True)
+    observed = hashlib.sha256(der).digest() if der else None
+    if expected is not None:
+        if observed is None:
+            raise S7CertificateError("PLC did not present a TLS certificate to pin")
+        if not hmac.compare_digest(observed, expected):
+            raise S7CertificateError(
+                f"PLC TLS certificate does not match the pinned fingerprint (expected {expected.hex()}, got {observed.hex()})"
+            )
+    return observed
+
+
 class S7CommPlusConnection:
     """S7CommPlus connection with multi-version support.
 
@@ -1013,6 +1114,11 @@ class S7CommPlusConnection:
 
         # TLS OMS exporter secret (for legitimation key derivation)
         self._oms_secret: Optional[bytes] = None
+
+        # Pinned TLS certificate: the expected SHA-256 (set by connect) and the
+        # one the PLC actually presented (captured during the handshake).
+        self._tls_cert_fingerprint: Optional[bytes] = None
+        self._peer_certificate_fingerprint: Optional[bytes] = None
 
         # Password for post-auth legitimation (V1-initial PLCs)
         self._connect_password: str = ""
@@ -1152,6 +1258,7 @@ class S7CommPlusConnection:
         password: str = "",
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         *,
+        tls_cert_fingerprint: Optional[str] = None,
         _session_key_fingerprint: Optional[str] = None,
     ) -> None:
         """Establish S7CommPlus connection.
@@ -1170,6 +1277,12 @@ class S7CommPlusConnection:
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
+            tls_cert_fingerprint: Expected SHA-256 fingerprint of the PLC's TLS
+                certificate, as hex (``:``/``-``/spaces allowed). The connection
+                is refused unless the certificate the PLC presents matches it.
+                Unlike ``tls_ca`` this pins the exact certificate, which is what
+                a self-signed PLC certificate offers. Keyword-only; requires
+                ``use_tls=True``.
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals. Defaults to 25 minutes; pass ``None`` to
                 disable automatic renewal.
@@ -1182,6 +1295,8 @@ class S7CommPlusConnection:
         self._session_key_refresh_error = None
         self._connect_password = password
         self._session_key_fingerprint_override = _session_key_fingerprint
+        self._tls_cert_fingerprint = _check_certificate_pin(tls_cert_fingerprint, use_tls)
+        self._peer_certificate_fingerprint = None
         try:
             # Step 1: COTP connection (same TSAP for all S7CommPlus versions)
             self._iso_conn.connect(timeout)
@@ -2469,8 +2584,19 @@ class S7CommPlusConnection:
 
         try:
             # TLS handshake — records tunnel through COTP frames
-            self._do_tls_handshake()
+            try:
+                self._do_tls_handshake()
+            except ssl.SSLCertVerificationError as exc:
+                raise S7CertificateError(f"PLC TLS certificate failed verification: {exc.verify_message}") from exc
+            except (ssl.SSLError, OSError, S7Error) as exc:
+                raise S7TlsHandshakeError(f"TLS handshake with the PLC did not complete: {exc}") from exc
             self._tls_active = True
+
+            # Pin the PLC certificate before any application data is trusted.
+            # Not an assert: the check must also hold under ``python -O``.
+            if self._ssl_object is None:
+                raise S7ConnectionError("TLS session was closed during the handshake")
+            self._peer_certificate_fingerprint = _verify_pinned_certificate(self._ssl_object, self._tls_cert_fingerprint)
 
             # Derive OMS exporter secret for legitimation key derivation
             self._oms_secret = self._derive_oms_secret(keylog_path)
@@ -2483,6 +2609,14 @@ class S7CommPlusConnection:
                 pass
 
         logger.info("TLS activated (tunneled inside COTP frames)")
+
+    def peer_certificate_fingerprint(self) -> Optional[bytes]:
+        """SHA-256 of the TLS certificate the PLC presented, or None without TLS.
+
+        The raw 32-byte digest; ``.hex()`` gives the hex string that
+        ``tls_cert_fingerprint`` takes.
+        """
+        return self._peer_certificate_fingerprint
 
     def _derive_oms_secret(self, keylog_path: str) -> Optional[bytes]:
         """Derive the OMS exporter secret (RFC 5705) for legitimation.

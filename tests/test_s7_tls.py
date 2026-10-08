@@ -1,6 +1,7 @@
 """Tests for S7CommPlus async client TLS support."""
 
 import contextlib
+import hashlib
 import ssl
 import struct
 import tempfile
@@ -9,7 +10,7 @@ from collections.abc import Generator
 
 import pytest
 
-from s7commplus.error import S7ConnectionError
+from s7commplus.error import S7CertificateError, S7ConnectionError
 from s7commplus import connection
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.connection import S7CommPlusConnection
@@ -71,6 +72,13 @@ def _generate_self_signed_cert() -> tuple[str, str]:
     key_file.close()
 
     return cert_file.name, key_file.name
+
+
+def _certificate_sha256_hex(pem_path: str) -> str:
+    """SHA-256 of a PEM certificate's DER, as colon-free hex (a pin value)."""
+    with open(pem_path, encoding="ascii") as fh:
+        der = ssl.PEM_cert_to_DER_cert(fh.read())
+    return hashlib.sha256(der).hexdigest()
 
 
 import ipaddress  # noqa: E402
@@ -200,6 +208,56 @@ class TestAsyncClientV2WithTLS:
             assert client.protocol_version == ProtocolVersion.V2
         finally:
             await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connect_with_pinned_certificate(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """A matching fingerprint authorizes the connection without a CA file."""
+        _, cert_path, _ = tls_server
+        pin = _certificate_sha256_hex(cert_path)
+
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_cert_fingerprint=pin)
+
+        try:
+            assert client.connected
+            assert client.peer_certificate_fingerprint() == bytes.fromhex(pin)
+        finally:
+            await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connect_rejects_a_wrong_pinned_certificate(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """A mismatching fingerprint refuses the connection and tears it down."""
+        client = S7CommPlusAsyncClient()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_cert_fingerprint="00" * 32)
+        assert not client.connected
+
+    @pytest.mark.asyncio
+    async def test_peer_fingerprint_is_reported_with_a_ca(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """The observed fingerprint is reported even when a CA file verified it."""
+        _, cert_path, _ = tls_server
+
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_ca=cert_path)
+
+        try:
+            assert client.peer_certificate_fingerprint() == bytes.fromhex(_certificate_sha256_hex(cert_path))
+        finally:
+            await client.disconnect()
+        assert client.peer_certificate_fingerprint() is None
+
+    @pytest.mark.asyncio
+    async def test_a_ca_does_not_override_a_wrong_pin(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """With tls_ca and tls_cert_fingerprint, both must match: a valid chain does not excuse the pin."""
+        _, cert_path, _ = tls_server
+
+        client = S7CommPlusAsyncClient()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            await client.connect(
+                "127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_ca=cert_path, tls_cert_fingerprint="00" * 32
+            )
+        assert not client.connected
+        assert client.peer_certificate_fingerprint() is None
 
     @pytest.mark.asyncio
     async def test_integrity_id_tracking_enabled(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
@@ -443,3 +501,65 @@ class TestTLSGroupSelection:
             "supported_groups was narrowed to secp256r1 alone - this is the ClientHello an S7-1500 answers with a TCP RST"
         )
         assert self.X25519 in groups, f"ClientHello must still offer x25519; offered {[hex(g) for g in groups]}"
+
+
+TEST_PORT_V2_TLS_SYNC = 11132
+
+
+@pytest.fixture()
+def tls_server_sync() -> Generator[tuple[S7CommPlusServer, str, str], None, None]:
+    """A V2 TLS server for the synchronous client (separate port from the async fixture)."""
+    cert_path, key_path = _generate_self_signed_cert()
+
+    srv = S7CommPlusServer(protocol_version=ProtocolVersion.V2)
+    srv.register_raw_db(1, bytearray(256))
+    srv.start(port=TEST_PORT_V2_TLS_SYNC, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+    time.sleep(0.1)
+
+    yield srv, cert_path, key_path
+
+    srv.stop()
+
+    import os
+
+    os.unlink(cert_path)
+    os.unlink(key_path)
+
+
+@pytest.mark.skipif(not _has_cryptography, reason="requires cryptography package")
+class TestSyncClientV2WithTLS:
+    """The synchronous client's TLS activation pins the PLC certificate too."""
+
+    def test_sync_connect_with_pinned_certificate(self, tls_server_sync: tuple[S7CommPlusServer, str, str]) -> None:
+        from s7commplus import Client
+
+        _, cert_path, _ = tls_server_sync
+        pin = _certificate_sha256_hex(cert_path)
+
+        client = Client()
+        client.connect("127.0.0.1", port=TEST_PORT_V2_TLS_SYNC, use_tls=True, tls_cert_fingerprint=pin)
+        try:
+            assert client.connected
+            assert client.peer_certificate_fingerprint() == bytes.fromhex(pin)
+        finally:
+            client.disconnect()
+
+    def test_sync_connect_rejects_a_wrong_pinned_certificate(self, tls_server_sync: tuple[S7CommPlusServer, str, str]) -> None:
+        from s7commplus import Client
+
+        client = Client()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            client.connect("127.0.0.1", port=TEST_PORT_V2_TLS_SYNC, use_tls=True, tls_cert_fingerprint="00" * 32)
+        assert not client.connected
+
+    def test_sync_a_ca_does_not_override_a_wrong_pin(self, tls_server_sync: tuple[S7CommPlusServer, str, str]) -> None:
+        from s7commplus import Client
+
+        _, cert_path, _ = tls_server_sync
+        client = Client()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            client.connect(
+                "127.0.0.1", port=TEST_PORT_V2_TLS_SYNC, use_tls=True, tls_ca=cert_path, tls_cert_fingerprint="00" * 32
+            )
+        assert not client.connected
+        assert client.peer_certificate_fingerprint() is None
