@@ -2,9 +2,10 @@ Command-line interface
 ======================
 
 Installing the package also installs a ``s7commplus`` command, a thin wrapper
-around :class:`~s7commplus.Client` for the common field tasks. Every command
-takes the connection options first: ``--host`` (required), ``--port``, the
-password options described below, and the TLS options ``--tls``, ``--tls-ca``,
+around :class:`~s7commplus.Client` for the common field tasks. Each command that
+talks to a PLC, which today is every command below, takes the connection
+options after the command name: ``--host`` (required), ``--port``, the password
+options described below, and the TLS options ``--tls``, ``--tls-ca``,
 ``--tls-cert``, ``--tls-key`` and ``--tls-cert-fingerprint`` (alias ``--pin``).
 ``s7commplus COMMAND --help`` lists them all.
 
@@ -108,3 +109,10 @@ subparser and sets its handler; ``COMMANDS`` in ``s7commplus/cli/__init__.py``
 lists the modules in the order ``--help`` shows them. What the commands share
 (the connection options, the password, JSON output, error reporting and the
 exit codes) is in ``s7commplus/cli/_common.py``.
+
+A command builds its subparser with ``add_command()``, which gives it the exit
+status help but no connection options. A command that talks to a PLC then calls
+``add_connection_options(parser)``, which adds ``--host`` (required), ``--port``,
+the TLS and the password options and the password help, and opens the
+connection with ``open_client(args)``. A command without a PLC leaves both out
+and needs no ``--host``.

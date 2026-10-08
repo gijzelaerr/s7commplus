@@ -14,13 +14,14 @@ import sys
 import time
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from s7commplus.catalog import SymbolicTag, TagResult
 from s7commplus.cli import COMMANDS, browse, build_parser, db_read, db_write, main, read, state, write
-from s7commplus.cli._common import json_safe, parse_hex
+from s7commplus.cli._common import add_command, json_safe, parse_hex
 from s7commplus.protocol import ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from tests.conftest import get_free_tcp_port
@@ -148,9 +149,78 @@ def test_parse_hex_rejects_garbage() -> None:
         parse_hex("zz")
 
 
-def test_parser_requires_a_host() -> None:
+# Each command module with the shortest valid arguments for it, apart from --host.
+_COMMAND_ARGV: list[tuple[Any, list[str]]] = [
+    (browse, ["browse"]),
+    (read, ["read", "DB1.x"]),
+    (write, ["write", "DB1.x", "--int", "1"]),
+    (db_read, ["db-read", "1", "0", "4"]),
+    (db_write, ["db-write", "1", "0", "--hex", "00"]),
+    (state, ["state"]),
+]
+
+
+@pytest.mark.parametrize(("module", "argv"), _COMMAND_ARGV)
+def test_every_command_that_connects_requires_a_host(module: Any, argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    assert _exit_code(argv) == 2
+    assert "the following arguments are required: --host" in capsys.readouterr().err
+
+
+def test_the_top_level_parser_has_no_connection_options() -> None:
+    options = {option for action in build_parser()._actions for option in action.option_strings}
+    assert not options & {"--host", "--port", "--tls", "--password", "--ask-password"}
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["browse"])
+        build_parser().parse_args(["--host", "plc", "state"])  # it goes after the command
+
+
+def _register_offline(subparsers: Any) -> None:
+    """A throwaway command that talks to no PLC, as a server or discover command would."""
+    parser = add_command(subparsers, "offline", "a command without a PLC")
+    parser.add_argument("--count", type=int, default=1)
+    parser.set_defaults(handler=lambda args: 0)
+
+
+def test_a_command_can_leave_out_the_connection_options() -> None:
+    parser = argparse.ArgumentParser(prog="test")
+    subparsers = parser.add_subparsers(dest="command")
+    _register_offline(subparsers)
+    args = parser.parse_args(["offline"])
+    for option in ("host", "port", "tls", "tls_ca", "password", "ask_password"):
+        assert not hasattr(args, option)
+    help_text = subparsers.choices["offline"].format_help()
+    assert "--host" not in help_text
+    assert "connection:" not in help_text
+    assert "S7COMMPLUS_PASSWORD" not in help_text  # no password section either
+    assert "exit status:" in help_text
+
+
+def test_main_runs_a_command_without_connection_options(
+    fake_client: _FakeClient, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[argparse.Namespace] = []
+
+    def register(subparsers: Any) -> None:
+        parser = add_command(subparsers, "offline", "a command without a PLC")
+
+        def run(args: argparse.Namespace) -> int:
+            seen.append(args)
+            return 0
+
+        parser.set_defaults(handler=run)
+
+    def no_prompt(prompt: str = "Password: ", stream: Any = None) -> str:
+        raise AssertionError("a command without connection options must not ask for a password")
+
+    monkeypatch.setattr("s7commplus.cli.COMMANDS", (*COMMANDS, SimpleNamespace(register=register)))
+    monkeypatch.setattr("s7commplus.cli._common.getpass.getpass", no_prompt)
+    monkeypatch.setenv("S7COMMPLUS_PASSWORD", _SECRET)
+    assert main(["offline"]) == 0
+    assert len(seen) == 1
+    assert not hasattr(seen[0], "host")
+    assert not hasattr(seen[0], "password")
+    assert not fake_client.connected
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
 
 
 def test_write_requires_a_value() -> None:
@@ -173,17 +243,7 @@ def test_commands_lists_the_command_modules_in_help_order() -> None:
     assert COMMANDS == (browse, read, write, db_read, db_write, state)
 
 
-@pytest.mark.parametrize(
-    ("module", "argv"),
-    [
-        (browse, ["browse"]),
-        (read, ["read", "DB1.x"]),
-        (write, ["write", "DB1.x", "--int", "1"]),
-        (db_read, ["db-read", "1", "0", "4"]),
-        (db_write, ["db-write", "1", "0", "--hex", "00"]),
-        (state, ["state"]),
-    ],
-)
+@pytest.mark.parametrize(("module", "argv"), _COMMAND_ARGV)
 def test_register_adds_the_command_and_its_handler(module: Any, argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="test")
     subparsers = parser.add_subparsers(dest="command")

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from ._common import EXIT_OK, Subparsers, add_command, open_client
+from ._common import EXIT_OK, Subparsers, add_command, add_connection_options, open_client
 
 
 def register(subparsers: Subparsers) -> None:
     """Add the ``state`` command."""
     parser = add_command(subparsers, "state", "read the CPU operating state (RUN/STOP)")
+    add_connection_options(parser)
     parser.set_defaults(handler=run)
 
 

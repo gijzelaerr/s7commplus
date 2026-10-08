@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import struct
 
-from ._common import EXIT_OK, Subparsers, add_command, int_in_range, open_client, parse_hex
+from ._common import EXIT_OK, Subparsers, add_command, add_connection_options, int_in_range, open_client, parse_hex
 
 
 def _parse_real(text: str) -> float:
@@ -21,6 +21,7 @@ def _parse_real(text: str) -> float:
 def register(subparsers: Subparsers) -> None:
     """Add the ``write`` command."""
     parser = add_command(subparsers, "write", "write one named tag")
+    add_connection_options(parser)
     parser.add_argument("name", metavar="NAME")
     value = parser.add_mutually_exclusive_group(required=True)
     value.add_argument("--hex", dest="hex_value", type=parse_hex, metavar="BYTES", help="raw big-endian bytes")

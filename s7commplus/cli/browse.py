@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from ._common import EXIT_OK, Subparsers, add_command, open_client, print_json
+from ._common import EXIT_OK, Subparsers, add_command, add_connection_options, open_client, print_json
 
 
 def register(subparsers: Subparsers) -> None:
     """Add the ``browse`` command."""
     parser = add_command(subparsers, "browse", "list the PLC's symbolic tags")
+    add_connection_options(parser)
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.set_defaults(handler=run)
 

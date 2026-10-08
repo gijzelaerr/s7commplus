@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import argparse
 
-from ._common import EXIT_OK, Subparsers, add_command, int_in_range, open_client, parse_db_number, parse_db_start
+from ._common import (
+    EXIT_OK,
+    Subparsers,
+    add_command,
+    add_connection_options,
+    int_in_range,
+    open_client,
+    parse_db_number,
+    parse_db_start,
+)
 
 
 def register(subparsers: Subparsers) -> None:
     """Add the ``db-read`` command."""
     parser = add_command(subparsers, "db-read", "read raw bytes from a DB")
+    add_connection_options(parser)
     parser.add_argument("db", type=parse_db_number, metavar="DB")
     parser.add_argument("start", type=parse_db_start, metavar="START")
     parser.add_argument("size", type=int_in_range("SIZE", 1, 0xFFFFFFFF), metavar="SIZE")

@@ -2,7 +2,10 @@
 
 The connection options, the PLC password, JSON output, error reporting and the
 exit codes. Each command module in this package builds its subparser with
-:func:`add_command` and opens its connection with :func:`open_client`.
+:func:`add_command`. A command that talks to a PLC also calls
+:func:`add_connection_options` and opens its connection with
+:func:`open_client`; a command without a PLC leaves both out and needs no
+``--host``.
 """
 
 from __future__ import annotations
@@ -28,13 +31,15 @@ EXIT_INTERRUPTED = 130
 #: What ``add_subparsers()`` returns; each command's ``register()`` takes it.
 Subparsers: TypeAlias = "argparse._SubParsersAction[argparse.ArgumentParser]"
 
-EPILOG = f"""\
+PASSWORD_HELP = f"""\
 password:
   The PLC password is read from the {PASSWORD_ENV} environment variable,
   or typed at the prompt --ask-password shows, which does not echo it.
   --password VALUE also works, but other users can see it in the process
   list and it stays in the shell history.
+"""
 
+EXIT_STATUS_HELP = """\
 exit status:
   0    success
   1    the operation failed: connection, protocol, TLS, certificate or
@@ -44,6 +49,10 @@ exit status:
        key file, or an unknown tag
   130  interrupted
 """
+
+#: The epilog of the top-level help. A command's help carries the exit status
+#: and, when the command has the connection options, the password section.
+EPILOG = f"{PASSWORD_HELP}\n{EXIT_STATUS_HELP}"
 
 
 def package_version() -> str:
@@ -91,9 +100,28 @@ def existing_file(text: str) -> str:
     return text
 
 
-def connection_parser() -> argparse.ArgumentParser:
-    """A reusable parent holding the connection options every command needs."""
-    parser = argparse.ArgumentParser(add_help=False)
+def add_command(subparsers: Subparsers, name: str, summary: str) -> argparse.ArgumentParser:
+    """Add the subparser of command ``name``, with ``summary`` as its one-line help.
+
+    The subparser has no connection options; a command that talks to a PLC adds
+    them with :func:`add_connection_options`.
+    """
+    return subparsers.add_parser(
+        name,
+        help=summary,
+        epilog=EXIT_STATUS_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
+def add_connection_options(parser: argparse.ArgumentParser) -> None:
+    """Add ``--host`` (required), ``--port``, the TLS and the password options to ``parser``.
+
+    Call it right after :func:`add_command`, before the command's own
+    arguments, so that the usage line lists the connection options first. It
+    also puts the password section into the command's help and marks the
+    command, so that ``main()`` runs :func:`check_connection_options` for it.
+    """
     group = parser.add_argument_group("connection")
     group.add_argument("--host", required=True, help="PLC IP address or hostname")
     group.add_argument("--port", type=int_in_range("port", 1, 65535), default=102, help="TCP port (default: 102)")
@@ -122,18 +150,21 @@ def connection_parser() -> argparse.ArgumentParser:
         metavar="VALUE",
         help=f"PLC password; visible in the process list and shell history, prefer {PASSWORD_ENV} or --ask-password",
     )
-    return parser
+    parser.set_defaults(connection_options=True)
+    parser.epilog = f"{PASSWORD_HELP}\n{parser.epilog}" if parser.epilog else PASSWORD_HELP
 
 
-def add_command(subparsers: Subparsers, name: str, summary: str) -> argparse.ArgumentParser:
-    """Add the subparser of command ``name``, with ``summary`` as its one-line help."""
-    return subparsers.add_parser(
-        name,
-        parents=[connection_parser()],
-        help=summary,
-        epilog=EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+def has_connection_options(args: argparse.Namespace) -> bool:
+    """Whether the command ``args`` were parsed for has the connection options."""
+    return bool(getattr(args, "connection_options", False))
+
+
+def check_connection_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """The checks between connection options that argparse cannot express; a failure exits with 2."""
+    if args.password is not None and args.ask_password:
+        parser.error("--password and --ask-password cannot be used together")
+    if bool(args.tls_cert) != bool(args.tls_key):
+        parser.error("--tls-cert and --tls-key must be given together")
 
 
 def uses_tls(args: argparse.Namespace) -> bool:
@@ -154,7 +185,8 @@ def resolve_password(args: argparse.Namespace) -> Optional[str]:
 
 
 def open_client(args: argparse.Namespace) -> Client:
-    """Connect a client with the connection options in ``args``."""
+    """Connect a client with the connection options in ``args``, asking for the password if needed."""
+    password = resolve_password(args)
     use_tls = uses_tls(args)
     client = Client()
     client.connect(
@@ -165,7 +197,7 @@ def open_client(args: argparse.Namespace) -> Client:
         tls_cert=args.tls_cert,
         tls_key=args.tls_key,
         tls_cert_fingerprint=args.tls_cert_fingerprint,
-        password=args.password,
+        password=password,
     )
     if use_tls:
         fingerprint = client.peer_certificate_fingerprint()

@@ -21,9 +21,11 @@ arguments or values, a missing certificate or key file, or an unknown tag);
 
 Each command is a module of this package with a ``register(subparsers)``
 function that adds the command's subparser and sets its handler;
-:data:`COMMANDS` lists them in the order ``--help`` shows them. What the
-commands share (connection options, password, JSON output, error reporting and
-exit codes) is in ``_common``.
+:data:`COMMANDS` lists them in the order ``--help`` shows them. A command that
+talks to a PLC adds the connection options itself, with
+``add_connection_options()``; the top-level parser has none. What the commands
+share (connection options, password, JSON output, error reporting and exit
+codes) is in ``_common``.
 """
 
 from __future__ import annotations
@@ -40,9 +42,10 @@ from ._common import (
     EXIT_INTERRUPTED,
     EXIT_USAGE,
     Subparsers,
+    check_connection_options,
+    has_connection_options,
     package_version,
     report_error,
-    resolve_password,
     tolerate_unencodable_output,
 )
 
@@ -78,13 +81,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point for the ``s7commplus`` console script."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.password is not None and args.ask_password:
-        parser.error("--password and --ask-password cannot be used together")
-    if bool(args.tls_cert) != bool(args.tls_key):
-        parser.error("--tls-cert and --tls-key must be given together")
+    if has_connection_options(args):
+        check_connection_options(parser, args)
     tolerate_unencodable_output()
     try:
-        args.password = resolve_password(args)
         return int(args.handler(args))
     except (S7Error, OSError, RuntimeError) as exc:
         # OSError covers socket errors, ssl.SSLError (a failed handshake or

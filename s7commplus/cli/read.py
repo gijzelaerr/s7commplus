@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 
 from ..catalog import TagResult
-from ._common import EXIT_FAILED, EXIT_OK, Subparsers, add_command, open_client, print_json
+from ._common import EXIT_FAILED, EXIT_OK, Subparsers, add_command, add_connection_options, open_client, print_json
 
 
 def register(subparsers: Subparsers) -> None:
     """Add the ``read`` command."""
     parser = add_command(subparsers, "read", "read one or more named tags")
+    add_connection_options(parser)
     parser.add_argument("names", nargs="+", metavar="NAME")
     parser.add_argument("--json", action="store_true", help="emit JSON (a NaN or infinite REAL/LREAL becomes null)")
     parser.set_defaults(handler=run)
