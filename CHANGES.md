@@ -20,8 +20,11 @@ CHANGES
   Date and time values are naive: no PLC date or time type stores a time zone,
   so an aware `datetime` or `time` raises `ValueError` instead of being shifted
   or stripped. Ranges follow the TIA Portal data type documentation (DATE to
-  2168-12-31, LDT and DTL 1970-01-01 to 2262-04-11). `SymbolCatalog.members()`
-  lists the leaf tags of a struct, UDT, DTL or array.
+  2168-12-31, LDT and DTL 1970-01-01 to 2262-04-11). A STRING or WSTRING is
+  encoded with its declared length (`string_length`), which sets its header and
+  padding; when the catalog does not give it (`0`), encoding raises `ValueError`
+  instead of assuming 254. `SymbolCatalog.members()` lists the leaf tags of a
+  struct, UDT, DTL or array.
 
 ### Behaviour changes
 

@@ -239,13 +239,15 @@ def encode(softdatatype: Softdatatype, value: Any, *, string_length: int = 0) ->
     like any other IEEE 754 value. Time types also take an ``int`` in their own
     unit (milliseconds for TIME, TIME_OF_DAY and S5TIME, nanoseconds for LTIME,
     LTOD and LDT). Date and time values must be naive. ``string_length`` is the
-    declared length of a STRING (up to 254) or WSTRING (up to 16382); ``0``
-    means unknown and is taken as 254.
+    declared length of a STRING (1 to 254) or WSTRING (1 to 16382), as the tag
+    catalog gives it; the header and the zero padding are built from it, so it
+    is required for these two types. ``0`` means unknown and raises.
 
     Raises:
         TypeError: ``value`` has the wrong Python type.
-        ValueError: ``value`` is out of range for the PLC type, carries a time
-            zone, or ``string_length`` is out of range.
+        ValueError: ``value`` is out of range for the PLC type or carries a time
+            zone, or a STRING or WSTRING ``string_length`` is unknown (``0``) or
+            out of range.
     """
     name = softdatatype.name
     if softdatatype in (Softdatatype.BOOL, Softdatatype.BBOOL):
@@ -277,9 +279,13 @@ def encode(softdatatype: Softdatatype, value: Any, *, string_length: int = 0) ->
             raise TypeError(f"{name} takes a str, got {type(value).__name__}")
         wide = softdatatype is Softdatatype.WSTRING
         limit = _WSTRING_MAX if wide else _STRING_MAX
-        if not 0 <= string_length <= limit:
+        if string_length == 0:
+            # A guessed maximum would not match a shorter declaration: PLCSIM Advanced V8
+            # (CPU 1511) refused a STRING[10] written with a maximum length of 254.
+            raise ValueError(f"A {name} is written with its declared length, which is unknown (string_length 0)")
+        if not 1 <= string_length <= limit:
             raise ValueError(f"A {name} is declared with 1 to {limit} characters, got {string_length}")
-        maximum = string_length or 254
+        maximum = string_length
         try:
             chars = value.encode("utf-16-be" if wide else "latin-1")
         except UnicodeEncodeError as exc:

@@ -232,6 +232,16 @@ def test_encode_rejects_a_declared_string_length_out_of_range(softdatatype: T, s
         values.encode(softdatatype, "a", string_length=string_length)
 
 
+@pytest.mark.parametrize("softdatatype", [T.STRING, T.WSTRING])
+def test_encode_refuses_a_string_of_unknown_declared_length(softdatatype: T) -> None:
+    # The header and padding follow the declared length; a guess would not match a shorter
+    # declaration (PLCSIM refused a STRING[10] written with a maximum length of 254).
+    with pytest.raises(ValueError, match=r"declared length, which is unknown \(string_length 0\)"):
+        values.encode(softdatatype, "a")
+    with pytest.raises(ValueError, match="unknown"):
+        values.encode(softdatatype, "", string_length=0)
+
+
 def _tag(name: str, softdatatype: T, *, string_length: int = 0, dimensions: Any = ()) -> SymbolicTag:
     return SymbolCatalog.from_browse(
         [
@@ -257,6 +267,9 @@ def test_symbolic_tag_encodes_with_its_declared_string_length() -> None:
     assert _tag("w", T.WSTRING, string_length=2).encode_value("ä") == bytes.fromhex("0002000100e40000")
     with pytest.raises(ValueError, match="declared with 1 to 254 characters, got 300"):
         _tag("s", T.STRING, string_length=300).encode_value("x")
+    for softdatatype in (T.STRING, T.WSTRING):  # no declared length in the catalog
+        with pytest.raises(ValueError, match="unknown"):
+            _tag("s", softdatatype).encode_value("x")
 
 
 # --- Structs and arrays ------------------------------------------------------------------

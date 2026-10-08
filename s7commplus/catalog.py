@@ -112,8 +112,9 @@ class SymbolicTag:
 
         Raises:
             TypeError: ``value`` has the wrong Python type for the tag.
-            ValueError: ``value`` is out of range for the tag, or the tag's
-                declared string length is.
+            ValueError: ``value`` is out of range for the tag, or the tag is a
+                STRING or WSTRING whose declared length (``string_length``) is
+                unknown or out of range.
         """
         return values.encode(self.softdatatype, value, string_length=self.string_length)
 
