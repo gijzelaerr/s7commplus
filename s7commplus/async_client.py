@@ -1682,9 +1682,10 @@ class S7CommPlusAsyncClient:
         :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
         characters...]`` and a WSTRING the same as big-endian UINTs, both padded
         with zeros to the declared length (``SymbolicTag.string_length``); a
-        DATE_AND_TIME is its eight BCD bytes. With :attr:`legacy_write_forms`
-        set, CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3
-        forms instead, and a STRING or WSTRING value is sent as given.
+        DATE_AND_TIME is its eight BCD bytes. :meth:`SymbolicTag.encode_value`
+        builds these from Python values. With :attr:`legacy_write_forms` set,
+        CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3 forms
+        instead, and a STRING or WSTRING value is sent as given.
 
         Writes are deliberately never retried: a transport failure can leave
         the caller unable to know whether the PLC applied the request.
@@ -1771,10 +1772,17 @@ class S7CommPlusAsyncClient:
         runs the program-change check once, as for :meth:`read_value`, before
         anything is encoded or sent.
 
+        Leaves go out in the forms :attr:`legacy_write_forms` selects. With it
+        set, a STRING or WSTRING leaf raises ``ValueError`` before anything is
+        sent, because those forms send the raw bytes as given rather than the
+        layout this method builds; CHAR and DATE_AND_TIME have the same raw bytes
+        in both forms.
+
         Raises:
             KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
-            TypeError, ValueError: ``value`` does not fit the PLC type, or a leaf
-                is too large for one request; nothing is sent.
+            TypeError, ValueError: ``value`` does not fit the PLC type, a leaf
+                is too large for one request, or a STRING or WSTRING leaf is
+                written with :attr:`legacy_write_forms` set; nothing is sent.
             RuntimeError: The PLC rejected one of the items, or a failure
                 interrupted a split batch; it is raised from the first failed
                 item's error, and the other items may have been written.
@@ -1783,7 +1791,7 @@ class S7CommPlusAsyncClient:
 
     async def write_values(self, values: Mapping[str, Any]) -> None:
         """Write several tags, structs or arrays as one batch of leaves; see :meth:`write_value`."""
-        encoded = _encode_values(await self._plan_values(list(values)), values)
+        encoded = _encode_values(await self._plan_values(list(values)), values, self.legacy_write_forms)
         _raise_failures(await self.write_tags(encoded), "writes")
 
     async def _plan_values(self, names: Sequence[str]) -> list[_ValuePlan]:

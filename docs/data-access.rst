@@ -275,8 +275,16 @@ WSTRING up to 16382 characters. REAL and LREAL also take infinities and NaN.
 A value the PLC type cannot hold (the wrong type, out of range, carrying a time
 zone, or a string longer than its declared length) raises ``TypeError`` or
 ``ValueError`` naming the leaf before anything is sent, and a PLC rejection
-raises ``RuntimeError`` naming the failed tags. Writes are never retried, and a
-write batch split over several requests is not atomic, as for ``write_tags``.
+raises ``RuntimeError`` naming the failed tags. A STRING or WSTRING whose
+declared length the catalog does not give also raises ``ValueError`` before
+anything is sent, since its header and padding follow that length. Writes are
+never retried, and a write batch split over several requests is not atomic, as
+for ``write_tags``.
+The leaves go out in the forms ``legacy_write_forms`` selects (see above). With
+it set, ``write_value`` refuses a STRING or WSTRING with ``ValueError`` before
+anything is sent, because those forms send the raw bytes as given, not the
+layout ``write_value`` builds; CHAR and DATE_AND_TIME have the same raw bytes in
+both forms.
 With ``auto_refresh_tags`` set, a name not in the catalog runs the program-change
 check described above once (with the same 10-second limit) and is looked up
 again before anything is encoded or sent; a failed read item does too, through
