@@ -5,7 +5,7 @@ Installing the package also installs a ``s7commplus`` command, a thin wrapper
 around :class:`~s7commplus.Client` for the common field tasks. Every command
 takes the connection options first: ``--host`` (required), ``--port``, the
 password options described below, and the TLS options ``--tls``, ``--tls-ca``,
-``--tls-cert``, ``--tls-key`` and ``--tls-cert-fingerprint``.
+``--tls-cert``, ``--tls-key`` and ``--tls-cert-fingerprint`` (alias ``--pin``).
 ``s7commplus COMMAND --help`` lists them all.
 
 TLS
@@ -13,12 +13,15 @@ TLS
 
 ``--tls-ca``, ``--tls-cert``, ``--tls-key`` and ``--tls-cert-fingerprint`` imply
 ``--tls``: asking for a certificate check never leaves the connection in
-plaintext. ``--tls-cert`` and ``--tls-key`` must be given together.
+plaintext. ``--tls-cert`` and ``--tls-key`` must be given together. With TLS the
+PLC certificate's SHA-256 fingerprint is printed to stderr on connect, so you
+can copy it into ``--pin``:
 
 .. code-block:: console
 
    s7commplus state --host 192.168.1.10 --tls
    s7commplus state --host 192.168.1.10 --tls-ca plc-ca.pem
+   s7commplus state --host 192.168.1.10 --pin 3f1a...c09e
 
 Passwords
 ---------

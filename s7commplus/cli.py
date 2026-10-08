@@ -10,7 +10,7 @@ The PLC password is never logged or echoed. Give it through the
 password in the process list and the shell history.
 
 ``--tls-ca``, ``--tls-cert``, ``--tls-key`` and ``--tls-cert-fingerprint``
-imply ``--tls``: asking for a certificate check never leaves the
+(``--pin``) imply ``--tls``: asking for a certificate check never leaves the
 connection in plaintext.
 
 Exit status: 0 on success; 1 when the operation fails (a connection, protocol,
@@ -120,7 +120,7 @@ def _connection_parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--tls",
         action="store_true",
-        help="use TLS (S7CommPlus V2/V3); implied by --tls-ca, --tls-cert, --tls-key and --tls-cert-fingerprint",
+        help="use TLS (S7CommPlus V2/V3); implied by --tls-ca, --tls-cert, --tls-key and --pin",
     )
     group.add_argument(
         "--tls-ca", type=_existing_file, metavar="PEM", help="CA certificate (PEM) that signed the PLC certificate"
@@ -129,6 +129,7 @@ def _connection_parser() -> argparse.ArgumentParser:
     group.add_argument("--tls-key", type=_existing_file, metavar="PEM", help="client private key (PEM); needs --tls-cert")
     group.add_argument(
         "--tls-cert-fingerprint",
+        "--pin",
         dest="tls_cert_fingerprint",
         metavar="SHA256",
         help="pin the PLC TLS certificate by its SHA-256 fingerprint (hex)",
@@ -230,6 +231,10 @@ def _open(args: argparse.Namespace) -> Client:
         tls_cert_fingerprint=args.tls_cert_fingerprint,
         password=args.password,
     )
+    if use_tls:
+        fingerprint = client.peer_certificate_fingerprint()
+        if fingerprint is not None:
+            print(f"TLS peer certificate SHA-256: {fingerprint.hex()}", file=sys.stderr)
     return client
 
 

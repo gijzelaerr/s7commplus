@@ -80,6 +80,9 @@ class _FakeClient:
     def get_cpu_state(self) -> str:
         return "RUN"
 
+    def peer_certificate_fingerprint(self) -> bytes:
+        return bytes.fromhex("ab" * 32)
+
 
 @pytest.fixture()
 def fake_client(monkeypatch: pytest.MonkeyPatch) -> _FakeClient:
@@ -162,6 +165,16 @@ def test_parser_defaults() -> None:
     assert args.password is None
     assert args.ask_password is False
     assert args.handler.__name__ == "_cmd_browse"
+
+
+def test_pin_is_an_alias_for_tls_cert_fingerprint() -> None:
+    args = build_parser().parse_args(["state", "--host", "plc", "--pin", "aabb"])
+    assert args.tls_cert_fingerprint == "aabb"
+
+
+def test_cli_prints_the_fingerprint_when_tls(fake_client: _FakeClient, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["state", "--host", "plc", "--tls"]) == 0
+    assert "ab" * 32 in capsys.readouterr().err
 
 
 def test_help_documents_exit_status_and_password_sources() -> None:
@@ -407,6 +420,13 @@ def test_cli_ask_password_without_input_is_a_usage_error(
 
 def test_cli_password_and_ask_password_are_exclusive(fake_client: _FakeClient) -> None:
     assert _exit_code(["state", "--host", "plc", "--password", "x", "--ask-password"]) == 2
+
+
+def test_cli_pin_implies_tls(fake_client: _FakeClient, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["state", "--host", "plc", "--pin", "ab" * 32]) == 0
+    assert fake_client.connect_kwargs["use_tls"] is True
+    assert fake_client.connect_kwargs["tls_cert_fingerprint"] == "ab" * 32
+    assert "ab" * 32 in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("option", ["--tls-ca", "--tls-cert-fingerprint"])
