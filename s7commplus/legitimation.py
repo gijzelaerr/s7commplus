@@ -15,7 +15,7 @@ Install with ``pip install cryptography``. The legacy mode uses only stdlib.
 import hashlib
 import logging
 import struct
-from typing import Optional
+from typing import Iterator, NamedTuple, Optional
 
 from .protocol import DataType, Ids, LegitimationType
 from .vlq import decode_uint32_vlq, encode_uint32_vlq
@@ -134,6 +134,70 @@ def oms_session_version_name(value: int) -> str:
     return f"OMS {value}"
 
 
+class StructElement(NamedTuple):
+    """One sized element of a struct typed value: ``[VLQ key][flags][datatype][value]``."""
+
+    key: int
+    flags: int
+    datatype: int
+    value_start: int
+    end: int
+
+
+def iter_struct_elements(raw: bytes) -> Iterator[StructElement]:
+    """Walk the elements of a struct typed value at their boundaries.
+
+    A raw typed value is ``[flags][STRUCT][fixed u32 struct id][elements...][terminator]``
+    where each element is ``[VLQ key][flags][datatype][value]``. Walking at
+    element boundaries (rather than searching for key bytes, which can match
+    inside another element's data) yields every element the walk can size.
+
+    The walk stops at the terminator, at an element type whose length it cannot
+    determine, or at damage; a caller that rewrites values must copy the bytes
+    after the last yielded element verbatim. A value that is not a struct yields
+    nothing.
+    """
+    if len(raw) < 2 or raw[1] != DataType.STRUCT:
+        return
+    offset = 6  # flags + datatype + 4-byte fixed struct id
+    while offset < len(raw):
+        try:
+            key, consumed = decode_uint32_vlq(raw, offset)
+        except ValueError:
+            return
+        offset += consumed
+        if key == 0:  # struct terminator
+            return
+        if offset + 2 > len(raw):
+            return
+        flags = raw[offset]
+        datatype = raw[offset + 1]
+        value_start = offset + 2
+        if not flags & 0x10 and datatype == DataType.UDINT:
+            try:
+                _, consumed = decode_uint32_vlq(raw, value_start)
+            except ValueError:
+                return
+            end = value_start + consumed
+        elif not flags & 0x10 and datatype in _LENGTH_PREFIXED_ELEMENT_TYPES:
+            # WSTRING/BLOB/string elements carry their byte length as a VLQ
+            # prefix, so the walk can continue past them — the PAOM string
+            # (element 319) sits between the version elements on real PLCs.
+            try:
+                length, consumed = decode_uint32_vlq(raw, value_start)
+            except ValueError:
+                return
+            end = value_start + consumed + length
+            if end > len(raw):
+                return
+        else:
+            # An element whose length we cannot determine: stop rather than
+            # guess a boundary.
+            return
+        yield StructElement(key, flags, datatype, value_start, end)
+        offset = end
+
+
 def _iter_struct_element_uints(raw: bytes) -> dict[int, int]:
     """Walk the elements of a ServerSessionVersion struct value by boundary.
 
@@ -144,44 +208,11 @@ def _iter_struct_element_uints(raw: bytes) -> dict[int, int]:
     Malformed values yield whatever decoded before the damage; a value that
     is not a struct at all yields an empty dict.
     """
-    if len(raw) < 2 or raw[1] != DataType.STRUCT:
-        return {}
-    offset = 6  # flags + datatype + 4-byte fixed struct id
     elements: dict[int, int] = {}
-    while offset < len(raw):
-        try:
-            key, consumed = decode_uint32_vlq(raw, offset)
-        except ValueError:
-            break
-        offset += consumed
-        if key == 0:  # struct terminator
-            break
-        if offset + 2 > len(raw):
-            break
-        flags = raw[offset]
-        datatype = raw[offset + 1]
-        if not flags & 0x10 and datatype == DataType.UDINT:
-            try:
-                value, consumed = decode_uint32_vlq(raw, offset + 2)
-            except ValueError:
-                break
-            elements[key] = value
-            offset += 2 + consumed
-        elif not flags & 0x10 and datatype in _LENGTH_PREFIXED_ELEMENT_TYPES:
-            # WSTRING/BLOB/string elements carry their byte length as a VLQ
-            # prefix, so the walk can continue past them — the PAOM string
-            # (element 319) sits between the version elements on real PLCs.
-            try:
-                length, consumed = decode_uint32_vlq(raw, offset + 2)
-            except ValueError:
-                break
-            if offset + 2 + consumed + length > len(raw):
-                break
-            offset += 2 + consumed + length
-        else:
-            # An element whose length we cannot determine: stop rather than
-            # guess a boundary.
-            break
+    for element in iter_struct_elements(raw):
+        if not element.flags & 0x10 and element.datatype == DataType.UDINT:
+            value, _ = decode_uint32_vlq(raw, element.value_start)
+            elements[element.key] = value
     return elements
 
 

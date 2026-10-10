@@ -623,7 +623,12 @@ class S7CommPlusClient:
             raise RuntimeError("Not connected")
 
         payload = _build_symbolic_write_payload(
-            access_area, lids, data, symbol_crc, protocol_version=self._connection.protocol_version, datatype=datatype
+            access_area,
+            lids,
+            data,
+            symbol_crc,
+            protocol_version=self._connection.write_delete_qualifier_version,
+            datatype=datatype,
         )
         response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
@@ -1148,7 +1153,9 @@ class S7CommPlusClient:
 
         # Subscription children are owned by the session's second CreateObject
         # result. The reference driver deletes that container, not the child ID.
-        payload = build_delete_subscription_request(self._connection.subscription_container_id, self._connection.protocol_version)
+        payload = build_delete_subscription_request(
+            self._connection.subscription_container_id, self._connection.write_delete_qualifier_version
+        )
         self._connection.send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
             self._subscriptions.unregister(active_id)
