@@ -214,6 +214,8 @@ class S7CommPlusServer:
         session_challenge: Optional[bytes] = None,
         session_key: Optional[bytes] = None,
         rst_after_symbolic_read: bool = False,
+        max_response_pdu: Optional[int] = None,
+        max_request_bytes: Optional[int] = None,
     ) -> None:
         self._data_blocks: dict[int, DataBlock] = {}
         self._cpu_state = CPUState.RUN
@@ -249,6 +251,22 @@ class S7CommPlusServer:
         # to a GetMultiVariables request (emulating firmware like S7-1200
         # FW V4.1 that RSTs the session after a symbolic read).
         self._rst_after_symbolic_read = rst_after_symbolic_read
+
+        # When set, a response after session setup whose application data is longer
+        # than this is split over several PDUs with the trailer only after the last,
+        # as a PLC splits a large response (V3: see _protect_v3_fragments).
+        if max_response_pdu is not None and max_response_pdu <= 0:
+            raise ValueError("max_response_pdu must be positive")
+        self._max_response_pdu = max_response_pdu
+
+        # When set, the server closes the connection on a request frame longer
+        # than this many bytes, as PLCSIM Advanced does past about 1 KB. The frame
+        # is counted as the clients' max_request_bytes counts it: from the frame
+        # header to the trailer, after TLS decryption, including any V3 HMAC.
+        # Tests use it to catch a request the client failed to split.
+        if max_request_bytes is not None and max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be positive")
+        self._max_request_bytes = max_request_bytes
 
     @property
     def cpu_state(self) -> CPUState:
@@ -428,28 +446,37 @@ class S7CommPlusServer:
                             return None
                         tls["in"].write(more)
 
-            def send_app_frame(data: bytes, frame_version: int) -> None:
+            def send_app_frame(data: bytes, frame_version: int, split: bool) -> None:
+                size = len(data) or 1
+                if split and self._max_response_pdu is not None:
+                    size = self._max_response_pdu
+                pieces = [data[start : start + size] for start in range(0, len(data), size)] or [b""]
                 if frame_version == ProtocolVersion.V3:
                     if self._session_key is None:
                         raise ConnectionError("V3 response requested without a session key")
-                    digest = hmac.new(self._session_key[:24], data, hashlib.sha256).digest()
-                    frame_data = bytes([len(digest)]) + digest + data
+                    bodies = self._protect_v3_fragments(self._session_key, pieces)
                 else:
-                    frame_data = data
-                frame = encode_header(frame_version, len(frame_data)) + frame_data
-                frame += struct.pack(">BBH", 0x72, frame_version, 0x0000)
-                if tls["obj"] is None:
-                    self._send_cotp_dt_raw(client_sock, frame)
-                else:
-                    tls["obj"].write(frame)
-                    out = tls["out"].read()
-                    if out:
-                        self._send_cotp_dt_raw(client_sock, out)
+                    bodies = pieces
+                frames = [encode_header(frame_version, len(body)) + body for body in bodies]
+                frames[-1] += struct.pack(">BBH", 0x72, frame_version, 0x0000)
+                for frame in frames:
+                    if tls["obj"] is None:
+                        self._send_cotp_dt_raw(client_sock, frame)
+                    else:
+                        tls["obj"].write(frame)
+                        out = tls["out"].read()
+                        if out:
+                            self._send_cotp_dt_raw(client_sock, out)
 
             while self._running:
                 try:
                     data = recv_app_frame()
                     if data is None:
+                        break
+                    if self._max_request_bytes is not None and len(data) > self._max_request_bytes:
+                        logger.warning(
+                            f"Closing connection to {address}: {len(data)}-byte request exceeds {self._max_request_bytes} bytes"
+                        )
                         break
 
                     request_version, data_length, hdr_consumed = decode_header(data)
@@ -463,13 +490,24 @@ class S7CommPlusServer:
 
                     # Decode the request function code once (used for TLS + IntegrityId).
                     func_code = None
+                    session_setup_write = False
                     try:
                         _, _, hdr_consumed = decode_header(data)
                         payload = data[hdr_consumed:]
                         if len(payload) >= 14:
                             func_code = struct.unpack_from(">H", payload, 3)[0]
+                            if func_code == FunctionCode.SET_MULTI_VARIABLES:
+                                session_setup_write = self._is_session_setup_write(payload[14:])
                     except (ValueError, struct.error):
                         pass
+
+                    # The clients read the session-setup replies (InitSSL, CreateObject,
+                    # the session setup write) as one PDU, so only later responses are split.
+                    split_response = (
+                        session_id != 0
+                        and func_code not in (FunctionCode.INIT_SSL, FunctionCode.CREATE_OBJECT)
+                        and not session_setup_write
+                    )
 
                     response, rst = self._process_request(data, session_id, integrity_id_read, integrity_id_write)
                     if response is not None:
@@ -493,7 +531,9 @@ class S7CommPlusServer:
                             else:
                                 response = response[:10] + encode_uint32_vlq(response_integrity_id) + response[10:]
                         send_app_frame(
-                            response, request_version if request_version == ProtocolVersion.V3 else self._protocol_version
+                            response,
+                            request_version if request_version == ProtocolVersion.V3 else self._protocol_version,
+                            split_response,
                         )
 
                     if rst:
@@ -534,6 +574,34 @@ class S7CommPlusServer:
             except Exception:
                 pass
             logger.info(f"Client disconnected: {address}")
+
+    @staticmethod
+    def _protect_v3_fragments(session_key: bytes, pieces: list[bytes]) -> list[bytes]:
+        """Prefix each fragment of one V3 response with its HMAC.
+
+        The first fragment carries a standard HMAC. Each later one carries the
+        digest of both HMAC SHA-256 states finalized and then continued over its
+        data: the legacy continuation that ``_fragment_hmac`` verifies in the V1
+        SessionKey profile, which every V3 session of this emulator uses. A
+        response sent as one fragment keeps its standard HMAC.
+        """
+        from ._fragment_hmac import _continue_sha256
+
+        key = session_key[:24]
+        first = pieces[0]
+        inner = hashlib.sha256(bytes(value ^ 0x36 for value in key.ljust(64, b"\0")) + first).digest()
+        outer = hmac.new(key, first, hashlib.sha256).digest()
+        # Message byte counts include the 64-byte HMAC pads; the outer hash takes
+        # one 32-byte inner digest per fragment.
+        inner_count, outer_count = 64 + len(first), 64 + 32
+        protected = [bytes([len(outer)]) + outer + first]
+        for piece in pieces[1:]:
+            inner_count += len(piece)
+            outer_count += 32
+            inner = _continue_sha256(inner, piece, inner_count)
+            outer = _continue_sha256(outer, inner, outer_count)
+            protected.append(bytes([len(outer)]) + outer + piece)
+        return protected
 
     @staticmethod
     def _verify_v3_data(protected: bytes, session_key: bytes) -> bytes:

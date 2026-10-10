@@ -37,9 +37,19 @@ from .client import (
     _parse_cpu_state,
     _parse_read_response,
     _parse_write_response,
-    _parse_write_response_errors,
+    _db_read_values,
+    _interrupt_tag_writes,
+    _record_tag_writes,
+    _request_chunks,
+    _write_interrupted,
+    _write_item_errors,
+    _write_refused,
+    _check_subscription_size,
+    _normalize_subscription_items,
+    _subscription_groups,
+    _subscriptions_interrupted,
 )
-from .catalog import SymbolCatalog, SymbolicTag, TagResult
+from .catalog import SymbolCatalog, SymbolicTag, TagResult, _write_type
 from .codec import (
     SERVER_SESSION_ROLE_SECURED_BIT,
     decode_header,
@@ -78,6 +88,7 @@ from .connection import (
     _parse_get_var_substreamed_response,
     _parse_protection_level_response,
     _patch_plcsim_server_session_version,
+    _request_frame_overhead,
     _resolve_session_key_fingerprint,
     _session_setup_accepted,
     _set_s7_groups,
@@ -86,6 +97,7 @@ from .connection import (
     _write_delete_qualifier_version,
     _v1_integrity_tail,
     _v1_legitimation_integrity_tail,
+    _response_continues,
     _validate_response_header,
     _verify_v3_hmac,
 )
@@ -172,6 +184,24 @@ class S7CommPlusAsyncClient:
     """Async S7CommPlus client for S7-1200/1500 PLCs.
 
     Use ``from s7commplus import AsyncClient`` to instantiate.
+
+    Attributes:
+        max_items_per_request: Most items one multi-item read or write request
+            carries (default 100; ``0`` sends a batch in one request). A larger
+            batch is split over several requests, in order. The default is not
+            a measured PLC limit.
+        max_request_bytes: Largest request frame a multi-item read or write,
+            or a subscription, sends (default 900; ``0`` disables the check),
+            counted as for :class:`S7CommPlusClient`. A larger batch is split;
+            an item too large for one request raises ``ValueError`` before
+            anything is sent.
+        legacy_write_forms: Send CHAR, STRING, WSTRING and DATE_AND_TIME from
+            :meth:`write_tags` in the forms used before 0.3 (default ``False``),
+            as described for :class:`S7CommPlusClient`: a CHAR as a BYTE, a
+            STRING or WSTRING as an S7STRING or WSTRING PValue of the value's
+            bytes as given, and a DATE_AND_TIME as a TIMESTAMP. The default
+            forms are verified on PLCSIM Advanced only, and neither has been
+            checked on a hardware PLC.
     """
 
     def __init__(self) -> None:
@@ -189,6 +219,13 @@ class S7CommPlusAsyncClient:
         self._notification_frame_overflows = 0
         self._connect_params: Optional[dict[str, Any]] = None
         self._symbol_catalog: Optional[SymbolCatalog] = None
+        # Most items per request and largest request frame of a multi-item read
+        # or write; see S7CommPlusClient for the defaults' evidence.
+        self.max_items_per_request = 50
+        self.max_request_bytes = 900
+        # Send CHAR, STRING, WSTRING and DATE_AND_TIME in their pre-0.3 forms; see
+        # S7CommPlusClient.
+        self.legacy_write_forms: bool = False
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
@@ -323,6 +360,14 @@ class S7CommPlusAsyncClient:
         negotiated V1; its PLCs reset the connection on the V1 layout.
         """
         return ProtocolVersion.V2 if self.legacy_s7_1500 else self._protocol_version
+
+    def _frame_overhead(self) -> int:
+        """Bytes this session's request frames add to a payload."""
+        return _request_frame_overhead(self._with_integrity_id, self._session_key is not None)
+
+    def _plan_requests(self, items: Sequence[_T], build_payload: Callable[[list[_T]], bytes]) -> list[tuple[list[_T], bytes]]:
+        """Split a batch into the requests it needs, in order, with their payloads."""
+        return _request_chunks(items, self.max_items_per_request, self.max_request_bytes, self._frame_overhead(), build_payload)
 
     @property
     def write_delete_qualifier_version(self) -> int:
@@ -941,21 +986,64 @@ class S7CommPlusAsyncClient:
         await self.db_write_multi([(db_number, start, data, datatype)])
 
     async def db_write_multi(self, items: list[DBWriteItem]) -> None:
-        """Write (db_number, start_offset, data, datatype) tuples matching the PLC target types."""
-        payload = _build_write_payload(items, self.object_qualifier_version)
-        response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
-        _parse_write_response(response)
+        """Write (db_number, start_offset, data, datatype) tuples matching the PLC target types.
+
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic. The PLC writes every item it does not refuse, and a
+        refused item does not stop the batch.
+
+        Raises:
+            S7WriteError: After the last request, if the PLC refused any item;
+                ``item_errors`` is keyed by position in ``items``. Also when a
+                connection, timeout or protocol failure interrupts a split batch
+                after its first request (the failure is the ``__cause__``):
+                ``unknown`` and ``not_sent`` then name the items that may or may
+                not have been written and the ones never sent. A failure of the
+                first request propagates unchanged, as for a single request.
+            ValueError: An item is too large for one request on its own;
+                nothing is sent.
+        """
+
+        def build_write(chunk: list[DBWriteItem]) -> bytes:
+            return _build_write_payload(chunk, self.object_qualifier_version)
+
+        item_errors: dict[int, int] = {}
+        answered = 0
+        for chunk, payload in self._plan_requests(items, build_write):
+            try:
+                response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+                errors = _write_item_errors(response, len(chunk))
+            except Exception as error:
+                if answered == 0:
+                    raise
+                raise _write_interrupted(item_errors, answered, len(chunk), len(items), error) from error
+            item_errors.update((answered + number, code) for number, code in errors.items())
+            answered += len(chunk)
+        if item_errors:
+            raise _write_refused(item_errors)
 
     async def write_multi(self, items: list[DBWriteItem]) -> None:
         """Alias for :meth:`db_write_multi`."""
         await self.db_write_multi(items)
 
     async def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
-        """Read multiple data block regions in a single request."""
-        payload = _build_read_payload(items, self.object_qualifier_version)
-        response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
-        parsed = _parse_read_response(response)
-        return [r if r is not None else b"" for r in parsed]
+        """Read multiple data block regions, one value per item in item order.
+
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests. An item the
+        PLC could not read, including every item of a request it refused as a
+        whole, is ``b""``; see :meth:`S7CommPlusClient.db_read_multi`.
+        """
+
+        def build_read(chunk: list[tuple[int, int, int]]) -> bytes:
+            return _build_read_payload(chunk, self.object_qualifier_version)
+
+        results: list[bytes] = []
+        for chunk, payload in self._plan_requests(items, build_read):
+            response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            results.extend(_db_read_values(response, len(chunk)))
+        return results
 
     async def read_area(self, area_rid: int, start: int, size: int) -> bytes:
         """Read raw bytes from a controller memory area (M, I, Q, counters, timers)."""
@@ -1095,19 +1183,16 @@ class S7CommPlusAsyncClient:
 
         Returns:
             Subscription object ID assigned by the PLC.
+
+        Raises:
+            ValueError: The request would exceed :attr:`max_request_bytes`; use
+                :meth:`create_subscriptions` for that many items.
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         if not 0 <= credit_step <= 255:
             raise ValueError("credit_step must be between 0 and 255")
-        normalized = [
-            SubscriptionItem.from_access_sequence(item)
-            if isinstance(item, str)
-            else SubscriptionItem.from_tag(item)
-            if isinstance(item, SymbolicTag)
-            else item
-            for item in items
-        ]
+        normalized = _normalize_subscription_items(items)
         change_counter = self._subscription_change_counter
         payload, integrity_tail = build_subscription_request(
             self._subscription_container_id,
@@ -1117,6 +1202,7 @@ class S7CommPlusAsyncClient:
             change_counter=change_counter,
             relation_id=self._subscription_relation_id,
         )
+        _check_subscription_size(payload, self.max_request_bytes, self._frame_overhead())
         response = await self._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=integrity_tail)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
@@ -1135,6 +1221,52 @@ class S7CommPlusAsyncClient:
         self._subscription_relation_id = (self._subscription_relation_id + 1) & 0xFFFFFFFF
         logger.info(f"Subscription created, id={subscription_id:#x}")
         return subscription_id
+
+    async def create_subscriptions(
+        self,
+        items: Sequence[SubscriptionItem | SymbolicTag | str],
+        cycle_ms: int = 100,
+        credit_limit: int = 10,
+        credit_step: int = 5,
+        queue_size: int = 100,
+    ) -> list[int]:
+        """Create as many data change subscriptions as ``items`` needs.
+
+        .. warning:: This method is **experimental** and may change.
+
+        Splits ``items``, in order, into groups whose request fits
+        :attr:`max_request_bytes` and creates one subscription per group. The
+        reference ids, errors and :meth:`delete_subscription` caveat are those
+        of :meth:`S7CommPlusClient.create_subscriptions`.
+
+        Returns:
+            The subscription object IDs, one per group, in item order.
+        """
+        if not self._connected:
+            raise RuntimeError("Not connected")
+        if not items:
+            raise ValueError("a subscription requires at least one item")
+        container_id = self._subscription_container_id
+
+        def build(group: list[SubscriptionItem]) -> bytes:
+            # The default change counter and relation id encode at least as long
+            # as the ones create_subscription() sends.
+            return build_subscription_request(container_id, group, cycle_ms=cycle_ms, credit_limit=credit_limit)[0]
+
+        groups = _subscription_groups(_normalize_subscription_items(items), self.max_request_bytes, self._frame_overhead(), build)
+        created: list[int] = []
+        for group in groups:
+            try:
+                created.append(
+                    await self.create_subscription(
+                        group, cycle_ms=cycle_ms, credit_limit=credit_limit, credit_step=credit_step, queue_size=queue_size
+                    )
+                )
+            except Exception as error:
+                if not created:
+                    raise
+                raise _subscriptions_interrupted(created, len(groups), error) from error
+        return created
 
     async def receive_subscription_notification(
         self, subscription_id: int | None = None, timeout: Optional[float] = None
@@ -1233,12 +1365,17 @@ class S7CommPlusAsyncClient:
         self._subscriptions.forget_pending_restore()
 
     async def delete_subscription(self, subscription_id: int) -> None:
-        """Delete a data change subscription.
+        """Delete the session's data change subscriptions.
 
         .. warning:: This method is **experimental** and may change.
 
+        Like the reference driver, this deletes the session's subscription
+        container rather than the one subscription, so every data and alarm
+        subscription of the session goes, not only ``subscription_id``.
+
         Args:
-            subscription_id: ID returned by :meth:`create_subscription`.
+            subscription_id: ID returned by :meth:`create_subscription`, used
+                for logging.
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
@@ -1270,7 +1407,11 @@ class S7CommPlusAsyncClient:
         return subscription_id
 
     async def delete_alarm_subscription(self, subscription_id: int) -> None:
-        """Delete an alarm subscription created by this client."""
+        """Delete an alarm subscription created by this client.
+
+        Like :meth:`delete_subscription`, this deletes the session's whole
+        subscription container, data subscriptions included.
+        """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(self._subscription_container_id, self._protocol_version)
@@ -1335,6 +1476,10 @@ class S7CommPlusAsyncClient:
 
         .. warning:: This method is **experimental** and may change.
 
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        and the values are merged.
+
         Args:
             items: `(access_area, lids)` tuples, or three-tuples adding a
                 symbol CRC.
@@ -1347,11 +1492,17 @@ class S7CommPlusAsyncClient:
         """
         if not items:
             return []
-        payload = _build_multi_symbolic_read_payload(items, self.object_qualifier_version)
-        response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
-        results = _parse_read_response(response, expected_count=len(items))
-        if len(results) != len(items):
-            raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(results)} of {len(items)} items")
+
+        def build_read(chunk: list[SymbolicReadItem]) -> bytes:
+            return _build_multi_symbolic_read_payload(chunk, self.object_qualifier_version)
+
+        results: list[Optional[bytes]] = []
+        for chunk, payload in self._plan_requests(items, build_read):
+            response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            parsed = _parse_read_response(response, expected_count=len(chunk))
+            if len(parsed) != len(chunk):
+                raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
+            results.extend(parsed)
         return results
 
     async def write_symbolic(
@@ -1393,7 +1544,12 @@ class S7CommPlusAsyncClient:
         return result.value
 
     async def read_tags(self, names: Sequence[str]) -> list[TagResult]:
-        """Read names in one request and return a success/error for every item."""
+        """Read names and return a success/error for every item.
+
+        A batch over :attr:`max_items_per_request` names or
+        :attr:`max_request_bytes` is split over several requests, as in
+        :meth:`read_symbolic_multi`.
+        """
         if not names:
             return []
         tags = [await self.resolve_tag(name) for name in names]
@@ -1413,32 +1569,64 @@ class S7CommPlusAsyncClient:
             raise result.error
 
     async def write_tags(self, values: Mapping[str, bytes]) -> list[TagResult]:
-        """Write names once and return per-item results without automatic retry."""
+        """Write names once and return per-item results without automatic retry.
+
+        A batch over :attr:`max_items_per_request` names or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic; a tag the PLC refuses does not stop the batch. If a
+        connection, timeout or protocol failure interrupts the batch after its
+        first request, the tags written so far keep their results and every
+        later tag gets one :class:`~s7commplus.error.S7WriteError`, raised from
+        that failure, whose ``unknown`` positions may or may not have been
+        written and whose ``not_sent`` positions were never sent. A failure of
+        the first request propagates unchanged, as for a single request.
+
+        Each value is the tag's raw big-endian bytes in the layout
+        :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
+        characters...]`` and a WSTRING the same as big-endian UINTs, both padded
+        with zeros to the declared length (``SymbolicTag.string_length``); a
+        DATE_AND_TIME is its eight BCD bytes. With :attr:`legacy_write_forms`
+        set, CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3
+        forms instead, and a STRING or WSTRING value is sent as given.
+
+        Writes are deliberately never retried: a transport failure can leave
+        the caller unable to know whether the PLC applied the request.
+
+        Raises:
+            ValueError: A value is too large for one request on its own;
+                nothing is sent.
+        """
         if not self._connected:
             raise RuntimeError("Not connected")
         if not values:
             return []
         tags = [await self.resolve_tag(name) for name in values]
-        unsupported = [tag.name for tag in tags if tag.datatype is None]
+        legacy = self.legacy_write_forms
+        unsupported = [tag.name for tag in tags if _write_type(tag, legacy) is None]
         if unsupported:
             raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
         items: list[SymbolicWriteItem] = [
-            (tag.access_area, list(tag.lids), data, 0, tag.datatype)
+            (tag.access_area, list(tag.lids), data, 0, write_type)
             for tag, data in zip(tags, values.values())
-            if tag.datatype is not None
+            if (write_type := _write_type(tag, legacy)) is not None
         ]
-        payload = _build_multi_symbolic_write_payload(items, self.object_qualifier_version)
-        response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
-        try:
-            errors = _parse_write_response_errors(response, expected_count=len(tags))
-        except RuntimeError as error:
-            return [TagResult(tag=tag, error=error) for tag in tags]
-        return [
-            TagResult(tag=tag, error=RuntimeError(f"Symbolic write failed for {tag.name!r}: PLC error {errors[index]}"))
-            if index in errors
-            else TagResult(tag=tag)
-            for index, tag in enumerate(tags, 1)
-        ]
+
+        def build_write(chunk: list[SymbolicWriteItem]) -> bytes:
+            return _build_multi_symbolic_write_payload(chunk, self.object_qualifier_version)
+
+        results: list[TagResult] = [TagResult(tag=tag) for tag in tags]
+        answered = 0
+        for chunk, payload in self._plan_requests(items, build_write):
+            try:
+                response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+            except Exception as error:
+                if answered == 0:
+                    raise
+                _interrupt_tag_writes(results, answered, len(chunk), error)
+                break
+            _record_tag_writes(results, answered, len(chunk), response)
+            answered += len(chunk)
+        return results
 
     async def list_datablocks(self) -> list[dict[str, Any]]:
         """List all datablocks on the PLC via EXPLORE.
@@ -1647,8 +1835,9 @@ class S7CommPlusAsyncClient:
 
         response_data = await self._recv_response_frame(seq_num)
 
-        # Large responses (e.g. Explore) are split across several S7CommPlus PDUs.
-        if reassemble:
+        # Large responses (e.g. Explore) are split across several S7CommPlus PDUs;
+        # any response whose first PDU has no trailer is reassembled the same way.
+        if reassemble or _response_continues(response_data):
             data = await self._recv_reassembled_payload(response_data)
             if len(data) < 10:
                 raise S7ConnectionError("Response too short")
@@ -1718,6 +1907,8 @@ class S7CommPlusAsyncClient:
                 return response_data
             opcode = _incoming_frame_opcode(response_data)
             if opcode == Opcode.NOTIFICATION:
+                # See S7CommPlusConnection._recv_response_frame: a notification split
+                # over several PDUs is not reassembled.
                 if len(self._notification_frames) == self._notification_frames.maxlen:
                     self._notification_frame_overflows += 1
                 self._notification_frames.append(response_data)
@@ -1737,6 +1928,10 @@ class S7CommPlusAsyncClient:
                         raise S7ProtocolError(
                             f"Too many stale S7CommPlus responses while waiting for sequence {expected_sequence}"
                         )
+                    if _response_continues(response_data):
+                        # Drain (and verify) the rest of a split stale response so its
+                        # fragments are not read as the next response.
+                        await self._recv_reassembled_payload(response_data)
                     continue
             return response_data
 
@@ -1825,7 +2020,7 @@ class S7CommPlusAsyncClient:
             # The next 4 bytes are either the trailer (0x72 ver 0x0000) or the next
             # fragment's header (0x72 ver len>0).
             await ensure(4)
-            if buf[0] == 0x72 and buf[2] == 0 and buf[3] == 0:
+            if buf[0] == 0x72 and buf[1] == expected_version and buf[2] == 0 and buf[3] == 0:
                 del buf[:4]  # consume trailer — last fragment
                 break
         return bytes(data)
