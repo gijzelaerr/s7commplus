@@ -981,6 +981,30 @@ def _v1_session_key_profile(override: Optional[bool], session_key: Optional[byte
     return override is not False
 
 
+def _sends_session_activation(family: Optional[KeyFamily]) -> bool:
+    """Whether a V1 SessionKey session is activated with the address-323 SetVariable.
+
+    PLCSIM Advanced V8 (#66) and a CPU 1215C FW V4.2 both reset the connection
+    on the next CreateObject (a subscription) when the activation was sent,
+    while reads keep working; without it they accept the subscription. S7-1500
+    sessions keep the activation: whether they need it is not verified.
+    """
+    return family not in (KeyFamily.PLCSIM, KeyFamily.S7_1200)
+
+
+def _integrity_id_follows_body(family: Optional[KeyFamily], function_code: int) -> bool:
+    """Whether a V1 SessionKey response carries its IntegrityId after the body, not before it.
+
+    PLCSIM Advanced does so for the set-side operations (SET/CREATE/DELETE_OBJECT).
+    A CPU 1215C FW V4.2 starts its CreateObject response with the return value
+    as well; its other responses keep the existing handling, which is all that
+    has been exercised on it.
+    """
+    if family == KeyFamily.PLCSIM:
+        return True
+    return family == KeyFamily.S7_1200 and function_code == FunctionCode.CREATE_OBJECT
+
+
 def _strip_response_integrity_id(function_code: int, payload: bytes, session_key_active: bool, legacy_s7_1500: bool) -> bytes:
     """Remove the IntegrityId that leads SessionKey response payloads.
 
@@ -1321,13 +1345,10 @@ class S7CommPlusConnection:
                 logger.info("V2 IntegrityId tracking enabled")
 
             if self._session_key is not None and self._session_setup_ok:
-                if self._v1_session_key_family == KeyFamily.PLCSIM:
-                    # PLCSIM Advanced resets the connection on the next CreateObject /
-                    # SetMultiVariables if the address-323 session activation was sent
-                    # first (reads still work); seen live on PLCSIM Advanced V8 (#66).
-                    logger.info("PLCSIM session: skipping the address-323 session activation")
-                else:
+                if _sends_session_activation(self._v1_session_key_family):
                     self._session_activate()
+                else:
+                    logger.info("Skipping the address-323 session activation for this key family")
                 if self._connect_password:
                     self._post_auth_legitimation(password=self._connect_password)
                 else:
@@ -1860,10 +1881,7 @@ class S7CommPlusConnection:
     def _response_payload(self, function_code: int, payload: bytes) -> bytes:
         """Preserve legacy return values where IntegrityId follows the body."""
         self._last_raw_response_payload = payload
-        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.PLCSIM:
-            # PLCSIM Advanced places the response IntegrityId after the body for the
-            # set-side operations too (SET/CREATE/DELETE_OBJECT), while older real
-            # firmware leads with it outside GET_MULTI_VARIABLES/EXPLORE.
+        if self.legacy_s7_1500 and _integrity_id_follows_body(self._v1_session_key_family, function_code):
             return payload
         return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
 
