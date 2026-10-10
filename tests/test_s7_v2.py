@@ -1390,6 +1390,17 @@ class TestLegacySessionKeyRefresh:
         with pytest.raises(ValueError, match="must be positive"):
             conn.connect(legacy_session_key_refresh_interval=0)
 
+    def test_plcsim_family_does_not_schedule_renewal(self) -> None:
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        conn = self._authenticated_connection()
+        conn._v1_session_key_family = KeyFamily.PLCSIM
+        conn._session_key_refresh_interval = 0.01
+        conn._schedule_session_key_refresh()
+        # PLCSIM resets the connection on a renewal SecurityKey write, so the
+        # session must not schedule one.
+        assert conn._session_key_refresh_timer is None
+
 
 class TestSessionKeyDescriptors:
     def test_security_key_descriptor_uses_pending_generated_key(self) -> None:

@@ -371,6 +371,18 @@ async def test_async_refresh_failure_is_terminal_and_surfaces_on_next_request() 
         await client._send_request(FunctionCode.GET_VARIABLE, bytes(4))
 
 
+@pytest.mark.asyncio
+async def test_async_plcsim_family_does_not_schedule_renewal() -> None:
+    from s7commplus.v1_session_key.keys import KeyFamily
+
+    client = _authenticated_client()
+    client._v1_session_key_family = KeyFamily.PLCSIM
+    client._session_key_refresh_interval = 0.01
+    client._schedule_session_key_refresh()
+    # PLCSIM resets the connection on a renewal SecurityKey write.
+    assert client._session_key_refresh_task is None
+
+
 # --- Public API parity ---
 
 

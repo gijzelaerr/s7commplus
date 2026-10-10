@@ -515,10 +515,19 @@ class S7CommPlusServer:
                             session_id = struct.unpack_from(">I", response, 9)[0]
                         if request_version == ProtocolVersion.V3 and func_code is not None:
                             response_integrity_id = integrity_id_read if func_code in READ_FUNCTION_CODES else integrity_id_write
-                            if func_code == FunctionCode.GET_MULTI_VARIABLES and self._protocol_version == ProtocolVersion.V1:
-                                # V1 SessionKey PLCs (S7-1200 FW V4.2, S7-1500 FW 2.6) put the
-                                # IntegrityId after the body, in place of the legacy zero id.
+                            if self._protocol_version == ProtocolVersion.V1 and func_code in (
+                                FunctionCode.GET_MULTI_VARIABLES,
+                                FunctionCode.GET_VAR_SUBSTREAMED,
+                            ):
+                                # V1 SessionKey PLCs (S7-1200 FW V4.2, S7-1500 FW 2.6,
+                                # PLCSIM) put the IntegrityId after the body, in place
+                                # of the legacy zero id.
                                 response = response[:-1] + encode_uint32_vlq(response_integrity_id)
+                            elif self._protocol_version == ProtocolVersion.V1 and func_code == FunctionCode.SET_VAR_SUBSTREAMED:
+                                # The legitimation write ends with a four-byte fill; the
+                                # IntegrityId goes before it (as the real PLC and the
+                                # HarpoS7 capture do).
+                                response = response[:-4] + encode_uint32_vlq(response_integrity_id) + response[-4:]
                             else:
                                 response = response[:10] + encode_uint32_vlq(response_integrity_id) + response[10:]
                         send_app_frame(
