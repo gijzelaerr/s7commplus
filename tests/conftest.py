@@ -1,5 +1,6 @@
 """Pytest configuration for s7commplus tests."""
 
+import os
 import socket
 import sys
 from pathlib import Path
@@ -8,12 +9,13 @@ from typing import Any
 import pytest
 
 from tests.real_plc.reporting import RealPLCReport, report_metadata
+from tests.real_plc.support import PASSWORD_ENV
 
 _REAL_PLC_REPORT = RealPLCReport()
 
 
 def get_free_tcp_port() -> int:
-    """Return a TCP port that is free *right now* on 127.0.0.1.
+    """Return a TCP port that ``S7CommPlusServer.start()`` can bind *right now*.
 
     Bind a throwaway socket to port 0, let the OS pick an ephemeral port,
     read it back, then close the socket. Preferred over ``random.randint``
@@ -22,13 +24,19 @@ def get_free_tcp_port() -> int:
     of thousands of ports wide) instead of 1-in-5000 from a random pick
     that drifts toward collision under pytest-xdist or repeated reruns.
 
+    The probe binds the way the emulator does: the wildcard address with
+    ``SO_REUSEADDR``. A port that is free on 127.0.0.1 alone can still be
+    taken on another interface, and the emulator's wildcard bind then fails
+    with "Address already in use" (seen on a macOS CI runner).
+
     There is a tiny TOCTOU race between closing this socket and the test
     server binding, but the pool is large enough that it is not observed
     in practice. Servers that set ``SO_REUSEADDR`` tolerate lingering
     TIME_WAIT sockets too.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", 0))
         port: int = s.getsockname()[1]
         return port
 
@@ -99,6 +107,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--plc-tls-key", default="", help="PEM client private key path")
     parser.addoption("--plc-tls-ca", default="", help="PEM CA certificate path")
     parser.addoption(
+        "--plc-client",
+        choices=("sync", "async", "both"),
+        default="sync",
+        help="Client the real-PLC scenarios use; 'both' runs each scenario with each (default: sync)",
+    )
+    parser.addoption(
+        "--plc-expected-cpu-state",
+        choices=("", "RUN", "STOP"),
+        default="",
+        help="CPU state the real-PLC scenarios expect; by default the state is only recorded",
+    )
+    parser.addoption(
         "--allow-plc-write",
         action="store_true",
         default=False,
@@ -143,6 +163,7 @@ def pytest_configure(config: pytest.Config) -> None:
                 config.getoption("--plc-tls-cert"),
                 config.getoption("--plc-tls-key"),
                 config.getoption("--plc-tls-ca"),
+                os.environ.get(PASSWORD_ENV, ""),
             )
             if value
         )

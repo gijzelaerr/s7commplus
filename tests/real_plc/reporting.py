@@ -15,6 +15,20 @@ from typing import Any
 from tests.real_plc.support import MetadataValue
 
 SCHEMA_VERSION = "1.0"
+# Scenario tags copied into reports; each is a marker registered in pyproject.toml.
+_REPORTED_TAGS = (
+    "administrative",
+    "alarm",
+    "cpu_state",
+    "password",
+    "pending",
+    "real_plc",
+    "smoke",
+    "subscription",
+    "symbolic",
+    "tls",
+    "write",
+)
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 _SENSITIVE_ASSIGNMENT = re.compile(
     r"(?i)(password|passwd|secret|private[_ -]?key|plc[_ -]?(?:ip|host)|tls[_ -]?(?:cert|key|ca))\s*[:=]\s*([^\s,;]+)"
@@ -68,7 +82,10 @@ class RealPLCReport:
             status = "skipped"
         else:
             return
-        tags = sorted(tag for tag in ("smoke", "write", "administrative", "real_plc") if tag in report.keywords)
+        tags = sorted(tag for tag in _REPORTED_TAGS if tag in report.keywords)
+        # The client a scenario ran with is one of its parameter ids (see --plc-client).
+        parameters = nodeid.rsplit("[", 1)[1].rstrip("]").split("-") if nodeid.endswith("]") else []
+        tags += sorted(kind for kind in ("sync", "async") if kind in parameters)
         diagnostic = None if report.passed else sanitize_diagnostic(report.longrepr, self.sensitive_values)
         self.scenarios[nodeid] = ScenarioResult(nodeid, status, tags, report.duration, diagnostic)
 

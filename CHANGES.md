@@ -30,9 +30,20 @@ CHANGES
   the session activation and SessionKey renewal, the response IntegrityId
   placement, the legitimation layout and the `write_symbolic`/subscription-delete
   ObjectQualifier version all apply to key family 03 only, so the other families
-  send the same requests as in 0.2.0, apart from the S7-1200 subscription fix
-  below. The one shared change, in the V1 fragment HMAC check, only adds a
-  dialect: every response accepted before is accepted as before.
+  send the same requests as in 0.2.0. The one shared change, in the V1 fragment
+  HMAC check, only adds a dialect: every response accepted before is accepted as
+  before.
+* The new `s7commplus.values` module converts raw tag values to Python values
+  and back (`decode()`, `encode()`; `SymbolicTag.encode_value()` is new) and
+  builds structs and arrays from their leaves (`assemble()`, `split()`).
+  Date and time values are naive: no PLC date or time type stores a time zone,
+  so an aware `datetime` or `time` raises `ValueError` instead of being shifted
+  or stripped. Ranges follow the TIA Portal data type documentation (DATE to
+  2168-12-31, LDT and DTL 1970-01-01 to 2262-04-11). A STRING or WSTRING is
+  encoded with its declared length (`string_length`), which sets its header and
+  padding; when the catalog does not give it (`0`), encoding raises `ValueError`
+  instead of assuming 254. `SymbolCatalog.members()` lists the leaf tags of a
+  struct, UDT, DTL or array.
 
 ### Behaviour changes
 
@@ -40,6 +51,11 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+* `SymbolicTag.decode_value()`, and with it subscription `decoded_values`, now
+  decodes STRING and WSTRING by their length header (it used to decode the
+  header bytes as text), CHAR, WCHAR, the date and time types, and array
+  elements, which it used to leave as bytes. Bytes that are not a valid value
+  of the type, or lie outside its range, are still returned unchanged.
 
 ### Bug fixes and hardening
 
@@ -58,13 +74,6 @@ CHANGES
 * On a PLCSIM family-03 legacy session, `SET`/`CREATE`/`DELETE_OBJECT` response
   payloads keep their body-leading bytes so the per-item error list parses; the
   response IntegrityId follows the body there (#66).
-* `create_subscription()` failed on a CPU 1215C FW V4.2 without TLS (V1
-  SessionKey, key family 01) the way it did on PLCSIM: after the address-323
-  session activation the PLC answered the subscription's `CreateObject` with a
-  SystemEvent and a TCP reset, while reads kept working. Its `CreateObject`
-  response also starts with the return value, not with an IntegrityId. Key
-  family 01 now skips the activation and keeps that response whole, in both
-  clients; S7-1500 sessions (key family 00) are unchanged.
 * On a PLCSIM family-03 session, `Client.write_symbolic`/`AsyncClient.write_symbolic`
   and the subscription delete use the session's `object_qualifier_version` like
   every other data path, instead of the negotiated protocol version. Other PLCs
