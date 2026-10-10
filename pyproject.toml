@@ -70,6 +70,13 @@ markers = [
     "write: real-PLC scenario that changes and restores scratch data",
     "plc_write: existing real-PLC test that modifies scratch data",
     "administrative: disruptive real-PLC scenario requiring separate opt-in",
+    "symbolic: real-PLC scenario that browses or addresses tags by name",
+    "subscription: real-PLC scenario using data change subscriptions",
+    "alarm: real-PLC scenario using the alarm snapshot or alarm subscriptions",
+    "cpu_state: real-PLC scenario reading the CPU operating state",
+    "tls: real-PLC scenario that needs --plc-use-tls",
+    "password: real-PLC scenario that needs the S7COMMPLUS_TEST_PASSWORD environment variable",
+    "pending: real-PLC scenario for an API from an open pull request; skipped until it is merged",
 ]
 
 [tool.mypy]

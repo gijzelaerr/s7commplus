@@ -1,5 +1,6 @@
 """Pytest configuration for s7commplus tests."""
 
+import os
 import socket
 import sys
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 import pytest
 
 from tests.real_plc.reporting import RealPLCReport, report_metadata
+from tests.real_plc.support import PASSWORD_ENV
 
 _REAL_PLC_REPORT = RealPLCReport()
 
@@ -105,6 +107,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--plc-tls-key", default="", help="PEM client private key path")
     parser.addoption("--plc-tls-ca", default="", help="PEM CA certificate path")
     parser.addoption(
+        "--plc-client",
+        choices=("sync", "async", "both"),
+        default="sync",
+        help="Client the real-PLC scenarios use; 'both' runs each scenario with each (default: sync)",
+    )
+    parser.addoption(
+        "--plc-expected-cpu-state",
+        choices=("", "RUN", "STOP"),
+        default="",
+        help="CPU state the real-PLC scenarios expect; by default the state is only recorded",
+    )
+    parser.addoption(
         "--allow-plc-write",
         action="store_true",
         default=False,
@@ -149,6 +163,7 @@ def pytest_configure(config: pytest.Config) -> None:
                 config.getoption("--plc-tls-cert"),
                 config.getoption("--plc-tls-key"),
                 config.getoption("--plc-tls-ca"),
+                os.environ.get(PASSWORD_ENV, ""),
             )
             if value
         )

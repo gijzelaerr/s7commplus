@@ -27,10 +27,14 @@ datatype and reference metadata for decoded notifications:
        finally:
            client.delete_subscription(subscription_id)
 
-Raw bytes remain in ``values``. Known scalar catalog tags are decoded in
-``decoded_values``; unknown, structured, array, and truncated values remain
-bytes. Explicit ``SubscriptionItem`` values can set symbol CRCs, sub-areas,
-and stable reference IDs.
+Raw bytes remain in ``values``. ``decoded_values`` holds the value of each
+catalog tag decoded by its type with :meth:`~s7commplus.SymbolicTag.decode_value`,
+array elements and the members of struct-array elements included; values
+without a conversion, and bytes that are not a valid value of the type, remain
+bytes. Since 0.3.0 this also decodes STRING and WSTRING (by their length
+header), CHAR, WCHAR, the date and time types, and array elements, which 0.2.0
+left as bytes. Explicit ``SubscriptionItem`` values can set symbol CRCs,
+sub-areas, and stable reference IDs.
 
 One subscription request must fit ``client.max_request_bytes``, the request
 frame limit described in :doc:`data-access` (default 900; ``0`` disables the

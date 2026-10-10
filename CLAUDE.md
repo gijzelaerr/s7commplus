@@ -142,10 +142,15 @@ pre-commit run --all-files
 
 GitHub Releases whose tags match the package version (for example, `v0.1.0`
 for version `0.1.0`) publish the validated wheel and source distribution to
-PyPI through trusted publishing. Record user-visible changes under the unreleased
-heading in `CHANGES.md` as they land, with an upgrade note for any renamed or
-removed public API, and give that heading its version when tagging. The ``pypi`` GitHub environment and the PyPI
+PyPI through trusted publishing. The ``pypi`` GitHub environment and the PyPI
 trusted publisher must both be configured before the first release.
+
+Do not edit `CHANGES.md` in a pull request: every open pull request that adds to
+the same unreleased section conflicts with all the others. Describe user-visible
+changes in the pull request description's "Changelog" section instead, with an
+upgrade note for any renamed or removed public API. Before tagging a release, the
+maintainer writes the `CHANGES.md` section for it from those descriptions (see
+"Release process" in `docs/development.rst`).
 
 Useful focused commands:
 
