@@ -72,17 +72,6 @@ CHANGES
   PLCSIM reject the request with a fatal SystemEvent. The other families keep the
   pre-existing layout byte-for-byte (#66).
 
-### Testing
-
-* The real-PLC acceptance suite gains Gherkin scenarios for browsing and named
-  reads and writes, data and alarm subscriptions, the CPU operating state, TLS
-  (an untrusted CA is refused) and password legitimation, plus `@pending`
-  scenarios for `reconnect()` and certificate pinning from open pull requests.
-  Every scenario runs with both `Client` and `AsyncClient` (`--client`). The
-  password comes only from `S7COMMPLUS_TEST_PASSWORD` and is redacted from the
-  reports. CI dry-runs every scenario against fake clients, so an unbound step
-  or stale step code fails before a volunteer's PLC run does.
-
 0.2.0 (2026-10-08)
 ------------------
 
