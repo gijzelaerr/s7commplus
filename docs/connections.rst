@@ -40,7 +40,7 @@ response-parsing helpers:
      - Supported
    * - V1 with legacy SessionKey authentication
      - Supported
-     - Supported (emulator-tested; not yet validated on hardware)
+     - Supported (validated on PLCSIM Advanced)
    * - V2 or V3 with TLS
      - Supported
      - Supported
@@ -49,10 +49,10 @@ Both clients authenticate a PLC that advertises legacy public-key fingerprint or
 session-challenge attributes. They share the same blob, framing, key-fallback
 and renewal logic, and accept the same ``connect()`` options: ``password``,
 ``allow_legacy_key_fallback``, ``legacy_session_key_refresh_interval`` and
-``legacy_s7_1500`` (an override; the profile is automatic). The synchronous path is the one validated on real
-controllers; the asyncio path so far runs against the emulator and captured
-request layouts only. Password legitimation over a TLS session is also
-available through ``authenticate``, and happens during ``connect`` when a
+``legacy_s7_1500`` (an override; the profile is automatic). Both paths were
+validated on real controllers (S7-1200 sync and async, S7-1500 sync) and on
+S7-PLCSIM Advanced (sync and async). Password legitimation over a TLS session is
+also available through ``authenticate``, and happens during ``connect`` when a
 ``password`` is given.
 
 Observed firmware and session paths
@@ -86,10 +86,16 @@ determine it. The following combinations have been reported on real hardware:
      - V2.9
      - V1, legacy SessionKey
      - Not working; session setup is reset
-   * - PLCSIM / PLCSIM Advanced (TIA Portal V16 or older)
+   * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.8 project)
      - key family 03
      - V1, legacy SessionKey
-     - Emulator-tested only; no password legitimation
+     - Validated (sync and async: connect, password legitimation, browse, reads, writes, subscriptions from access
+       sequences; renewal skipped). Subscriptions to catalog tags are created but get no values yet
+   * - PLCSIM Advanced (CPU 1511-1 PN, FW V2.9 project)
+     - V2.9
+     - TLS
+     - Validated on an unprotected project (connect, browse, reads, writes, alarms, subscriptions from access
+       sequences). Not working yet: values for catalog-tag subscriptions, password legitimation
    * - S7-1200
      - V4.1, V4.5, V4.7.3
      - TLS
@@ -129,6 +135,14 @@ rejects the profile (the S7-1200 CPU 1212C FW V4.2.2 report predates it; please
 report if it needs the override). The setting is retained across reconnects and
 never applies to TLS or V2/V3 sessions. Writes, alarms and subscriptions with
 this profile have not been hardware validated.
+
+A response the PLC splits across several V3 fragments chains their digests. Two
+dialects are seen in the field and both are accepted transparently: real
+firmware *resumes* the finalized HMAC-SHA256 state on the next fragment
+(`HMAC` finalize/update continuation), while PLCSIM Advanced re-keys each time
+and chains *feed-forward*, `HMAC(key, digest_{n-1} ‖ fragment_n)`. The dialect is
+detected from the second fragment and must stay fixed for the rest of the
+response. This was found and fixed while validating PLCSIM (#66).
 
 TLS
 ---

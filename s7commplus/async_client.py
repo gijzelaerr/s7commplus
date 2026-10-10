@@ -77,13 +77,15 @@ from .connection import (
     _log_create_object_return_value,
     _parse_get_var_substreamed_response,
     _parse_protection_level_response,
+    _patch_plcsim_server_session_version,
     _resolve_session_key_fingerprint,
     _session_setup_accepted,
-    _skip_plcsim_legitimation,
     _set_s7_groups,
     _strip_response_integrity_id,
     _v1_session_key_profile,
+    _write_delete_qualifier_version,
     _v1_integrity_tail,
+    _v1_legitimation_integrity_tail,
     _validate_response_header,
     _verify_v3_hmac,
 )
@@ -322,6 +324,15 @@ class S7CommPlusAsyncClient:
         """
         return ProtocolVersion.V2 if self.legacy_s7_1500 else self._protocol_version
 
+    @property
+    def write_delete_qualifier_version(self) -> int:
+        """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
+
+        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
+        other PLCs the negotiated protocol version.
+        """
+        return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
+
     async def connect(
         self,
         host: str,
@@ -525,7 +536,10 @@ class S7CommPlusAsyncClient:
                 logger.info("V2 IntegrityId tracking enabled")
 
             if self._session_key is not None:
-                await self._session_activate()
+                if self._v1_session_key_family == KeyFamily.PLCSIM:
+                    logger.info("PLCSIM session: skipping the address-323 session activation")
+                else:
+                    await self._session_activate()
                 if p["password"]:
                     await self._post_auth_legitimation(p["password"])
                 else:
@@ -841,6 +855,12 @@ class S7CommPlusAsyncClient:
         """Start renewing an authenticated legacy session's key periodically."""
         interval = self._session_key_refresh_interval
         if interval is None or self._session_key is None or not self._connected:
+            return
+        if self._v1_session_key_family == KeyFamily.PLCSIM:
+            # PLCSIM Advanced FW 2.8 resets the connection when the SessionKey is
+            # re-sent to address 1830, so an automatic renewal would kill a
+            # long-lived session. Skip it and keep the session alive.
+            logger.info("PLCSIM session: automatic SessionKey renewal disabled (key family 03 resets the connection on renewal)")
             return
         self._session_key_refresh_task = asyncio.get_running_loop().create_task(self._session_key_refresh_loop(interval))
 
@@ -1222,7 +1242,7 @@ class S7CommPlusAsyncClient:
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
-        payload = build_delete_subscription_request(self._subscription_container_id, self._protocol_version)
+        payload = build_delete_subscription_request(self._subscription_container_id, self.write_delete_qualifier_version)
         await self._send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
             self._subscriptions.unregister(active_id)
@@ -1344,7 +1364,9 @@ class S7CommPlusAsyncClient:
         Set ``datatype`` to the target PLC datatype reported by browse().
         The legacy BLOB default is not a generic replacement for scalar types.
         """
-        payload = _build_symbolic_write_payload(access_area, lids, data, symbol_crc, self._protocol_version, datatype=datatype)
+        payload = _build_symbolic_write_payload(
+            access_area, lids, data, symbol_crc, self.write_delete_qualifier_version, datatype=datatype
+        )
         response = await self._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
 
@@ -1656,6 +1678,8 @@ class S7CommPlusAsyncClient:
     def _response_payload(self, function_code: int, payload: bytes) -> bytes:
         """Preserve legacy return values where IntegrityId follows the body."""
         self._last_raw_response_payload = payload
+        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.PLCSIM:
+            return payload
         return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
 
     async def _verified_incoming_data(self, frame: bytes) -> bytes:
@@ -1975,10 +1999,13 @@ class S7CommPlusAsyncClient:
             security_key = _encode_security_key_struct(
                 self._v1_session_key_public_key, self._v1_session_key_family, blob, session_key
             )
+            server_session_version = self._server_session_version
+            if self._v1_session_key_family == KeyFamily.PLCSIM:
+                server_session_version = _patch_plcsim_server_session_version(server_session_version)
             frame = _build_session_setup_frame(
                 self._session_id,
                 self._next_sequence_number(),
-                self._server_session_version,
+                server_session_version,
                 self._protocol_version,
                 security_key,
             )
@@ -2037,9 +2064,6 @@ class S7CommPlusAsyncClient:
 
     async def _post_auth_legitimation(self, password: str = "") -> None:
         """Solve the V1 legitimation challenge after the SessionKey handshake (see the sync connection)."""
-        if self._v1_session_key_family == KeyFamily.PLCSIM:
-            _skip_plcsim_legitimation(password)
-            return
         async with self._lock:
             payload = _build_v1_get_var_substreamed_payload(
                 self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
@@ -2054,18 +2078,22 @@ class S7CommPlusAsyncClient:
         if len(challenge) != 20:
             raise S7ConnectionError("Post-auth legitimation failed: expected a 20-byte challenge")
 
-        from .v1_session_key.legitimation import solve_legitimate_challenge_real_plc
+        from .v1_session_key.legitimation import solve_legitimate_challenge
 
         session_key = self._session_key
         if session_key is None:
             raise S7ConnectionError("Post-auth legitimation failed: no session key")
-        blob = solve_legitimate_challenge_real_plc(
+        blob = solve_legitimate_challenge(
             challenge, self._v1_session_key_public_key, self._v1_session_key_family, session_key, password
         )
 
         async with self._lock:
-            payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob)
-            response = await self._send_request_locked(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=3)
+            payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob, self._v1_session_key_family)
+            response = await self._send_request_locked(
+                FunctionCode.SET_VAR_SUBSTREAMED,
+                payload,
+                integrity_tail=_v1_legitimation_integrity_tail(self._v1_session_key_family),
+            )
         _check_v1_legitimation_response(response, self._last_raw_response_payload)
         logger.info("Post-auth legitimation completed")
 

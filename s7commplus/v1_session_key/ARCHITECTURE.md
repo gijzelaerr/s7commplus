@@ -66,7 +66,8 @@ The interval is configurable in seconds through
 `S7CommPlusClient.connect(legacy_session_key_refresh_interval=...)` (or the
 low-level connection method). Pass `None` to disable automatic renewal. This
 timer applies only to legacy V1-initial SessionKey sessions; TLS sessions do not
-start it.
+start it. It is also skipped for key family 03 (PLCSIM), whose firmware resets
+the connection on a renewal SecurityKey write (see the family-03 note below).
 
 Activation and firmware-specific failures require protocol evidence, not
 changes to the arithmetic models. The CPU1515/FW2.9 investigation is tracked
@@ -366,10 +367,66 @@ P-256 and the existing KDF and `AesGcm24`, and is pinned to HarpoS7's
 supports only families 00 and 01, and `handshake.authenticate_session_key()`
 dispatches on the family.
 
-PLCSIM is **emulator-tested only**. It uses the S7-1500 request layouts, skips
-the post-auth legitimation (HarpoS7 has no PLCSIM legitimation, so it is
-unknown what PLCSIM expects) and rejects a `password`, until a capture from a
-real PLCSIM or PLCSIM Advanced instance settles those points (#56).
+PLCSIM is **validated** on a real S7-PLCSIM Advanced V8 instance (CPU 1511-1 PN,
+FW V2.8 project, on the PLCSIM virtual adapter) with the sync and async clients:
+connect, SecurityKey setup, `browse()`, symbolic and byte-offset reads,
+symbolic and byte-offset writes, data subscriptions from access sequences,
+password legitimation, and key handling. Subscriptions to catalog tags are
+created and deleted but get no values yet: `SubscriptionItem.from_tag` sends the
+browsed SymbolCRC, which PLCSIM answers with item error 0x13. It uses the
+S7-1500 request layouts. CreateObject is parsed structurally (attribute 233
+carries the `03:…` fingerprint, 303 the 20-byte challenge; no fixed offsets are
+used).
+
+Four PLCSIM-specific behaviours were found and fixed (#66):
+
+- A multi-fragment V3 response chains its continuation digests **feed-forward**
+  (`HMAC(key, digest_{n-1} ‖ fragment_n)`), while real firmware resumes the
+  finalized HMAC state; `FragmentHMACVerifier` now detects the dialect from the
+  second fragment and accepts either, so `browse()` works.
+- The SetupSession SecurityKey write echoes the PLC's own ServerSessionVersion
+  **with elements 315–318 rewritten to the S7-1500 (real-PLC) values**. Echoing
+  PLCSIM's own values back is accepted for the setup and serves reads, but it
+  makes PLCSIM reject the post-auth legitimation; the real-PLC values, taken
+  from the S7-1500 session-setup capture in HarpoS7 (MIT,
+  `HarpoS7.PoC/Packets/SetMultiVarsRequest.cs`, `S71500Data`), work for both.
+- PLCSIM Advanced does **not** want the address-323 session activation
+  (`SET_VARIABLE` = USINT(5)) that real firmware needs: reads still work after
+  it, but the next `CreateObject` / `SetMultiVariables` (write, subscription,
+  delete) answers with a fatal SystemEvent and a TCP reset. The activation is now
+  skipped for family 03 (seen live on PLCSIM Advanced V8).
+- On the family-03 legacy session the response IntegrityId follows the body for
+  the set-side operations too (`SET`/`CREATE`/`DELETE_OBJECT`), not only for
+  `GET_MULTI_VARIABLES`/`EXPLORE`; those payloads are kept whole so the
+  per-item error list parses correctly.
+
+The post-auth legitimation is **implemented and validated**. HarpoS7 does have a
+PLCSIM variant (`LegitimateScheme.SolveLegitimateChallengePlcSim`) — contrary to
+an earlier note here — and
+`v1_session_key.legitimation.solve_legitimate_challenge_plcsim` is a manual port
+of it that byte-matches HarpoS7's known answer (the IV and the ECIES seed are
+injected in the vector, since the scalar is random; the seed generator has its
+own HarpoS7 known-answer test). It uses the same P-256 seed as the session
+handshake and AES-GCM-encrypts the SHA-1 password hash and the address-303
+challenge. On a password-protected (NoAccess) family-03 PLCSIM session the PLC
+answers the address-303 read with a 20-byte challenge, and the client's 284-byte
+blob is accepted once (a) the setup carries the real-PLC 315–318 values and
+(b) the request uses HarpoS7's captured layout (object qualifier key 1, no
+item-number byte, the IntegrityId before the trailing fill). Both are scoped to
+family 03: the setup rewrite is PLCSIM-only, and the other families keep the
+pre-existing request layout (key qualifier = sequence number, an item-number
+byte, and a three-byte tail) byte-for-byte, unchanged from before this work.
+The result is
+`LegitimatedLevel1`: the client reaches `protection_level` 1, browses, reads and
+writes; `Client` and `AsyncClient` both work. Automatic 25-minute
+**renewal is disabled for family 03**: PLCSIM Advanced FW V2.8 resets the
+connection when a new SecurityKey is written to address 1830, in both the
+`SET_VARIABLE` and the `SET_MULTI_VARIABLES` layout, so a renewal would end a
+long-lived session instead of extending it. Byte-offset `db_read`/`db_write` work
+on a standard (non-optimized) DB and are refused with PLC error `0xA40013` on an
+optimized DB, exactly as on real hardware; use symbolic access there. Deleting
+the subscription container works once the payload uses the legacy object
+qualifier.
 
 [`MAINTAINER_GUIDE.md`](MAINTAINER_GUIDE.md) maps the stable handwritten
 interfaces, source/fixture evidence, failure triage, model limits and issue #1
