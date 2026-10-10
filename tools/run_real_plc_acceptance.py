@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 import pytest
+
+# Kept in step with tests/real_plc/support.py; the runner must not import the test package.
+PASSWORD_ENV = "S7COMMPLUS_TEST_PASSWORD"
 
 
 def redact_junit_hostname(path: Path) -> None:
@@ -39,8 +43,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plc-tls-cert", type=Path, help="PEM client certificate")
     parser.add_argument("--plc-tls-key", type=Path, help="PEM client private key")
     parser.add_argument("--plc-tls-ca", type=Path, help="PEM CA certificate used to verify the PLC")
+    parser.add_argument(
+        "--client",
+        choices=("sync", "async", "both"),
+        default="both",
+        help="Client to run the scenarios with (default: both, each scenario once per client)",
+    )
+    parser.add_argument(
+        "--expected-cpu-state",
+        choices=("RUN", "STOP"),
+        help="Fail the CPU-state scenario unless the PLC reports this state",
+    )
     parser.add_argument("--allow-write", action="store_true", help="Also run scratch writes with verified restoration")
     parser.add_argument("--allow-admin", action="store_true", help="Also run disruptive administrative scenarios")
+    parser.add_argument(
+        "--include-pending",
+        action="store_true",
+        help="Also run scenarios for APIs from open pull requests (skipped unless the checkout has them)",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("real-plc-results"))
     args = parser.parse_args()
     if bool(args.plc_tls_cert) != bool(args.plc_tls_key):
@@ -50,6 +70,29 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def marker_expression(args: argparse.Namespace, password_configured: bool) -> str:
+    """Select the scenarios this run can execute, so a skip never means 'not configured'.
+
+    Read-only ``smoke`` scenarios always run; writes and administrative ones
+    only when allowed. Scenarios needing TLS or a password are left out unless
+    the run provides them, and ``pending`` ones unless asked for.
+    """
+    selected = ["smoke"]
+    if args.allow_write:
+        selected.append("write")
+    if args.allow_admin:
+        selected.append("administrative")
+    excluded = []
+    if not args.plc_use_tls:
+        excluded.append("tls")
+    if not password_configured:
+        excluded.append("password")
+    if not args.include_pending:
+        excluded.append("pending")
+    expression = f"({' or '.join(selected)})"
+    return " and ".join([expression, *(f"not {marker}" for marker in excluded)])
+
+
 def main() -> int:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -57,11 +100,7 @@ def main() -> int:
     stem = f"real-plc-s7commplus-{stamp}"
     junit = args.output_dir / f"{stem}.junit.xml"
     report = args.output_dir / f"{stem}.json"
-    marker = "smoke"
-    if args.allow_write:
-        marker += " or write"
-    if args.allow_admin:
-        marker += " or administrative"
+    marker = marker_expression(args, bool(os.environ.get(PASSWORD_ENV)))
     pytest_args = [
         "tests/real_plc/test_acceptance.py",
         "--e2e",
@@ -84,7 +123,10 @@ def main() -> int:
         f"--plc-slot={args.plc_slot}",
         f"--plc-db-read={args.plc_db_read}",
         f"--plc-db-write={args.plc_db_write}",
+        f"--plc-client={args.client}",
     ]
+    if args.expected_cpu_state:
+        pytest_args.append(f"--plc-expected-cpu-state={args.expected_cpu_state}")
     if args.plc_use_tls:
         pytest_args.append("--plc-use-tls")
     for option, value in (

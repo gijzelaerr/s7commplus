@@ -13,3 +13,11 @@ Feature: Connect to and identify a real S7CommPlus PLC
     And the negotiated protocol version and TLS mode are recorded
     When I disconnect
     Then the client reports that it is disconnected
+
+  @smoke @cpu_state
+  Scenario: Report the CPU operating state
+    Given the client uses the configured S7CommPlus security mode
+    And I am connected to the PLC
+    When I read the CPU operating state
+    Then the state is RUN, STOP or UNKNOWN and is recorded
+    And the state matches the expected state when one is configured

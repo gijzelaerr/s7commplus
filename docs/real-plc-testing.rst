@@ -72,6 +72,76 @@ attribute with ``redacted`` after pytest finishes. Review both artifacts for
 other identifying or sensitive content before publishing them. Add
 ``--allow-write`` only after confirming DB2 is disposable scratch space.
 
+By default every scenario runs twice, once with ``Client`` and once with
+``AsyncClient``; ``--client sync`` or ``--client async`` selects one. Pass
+``--expected-cpu-state RUN`` (or ``STOP``) to check the reported CPU state;
+without it the state is only recorded.
+
+For a password-protected PLC, put the password in the
+``S7COMMPLUS_TEST_PASSWORD`` environment variable. There is deliberately no
+command-line option for it, so it stays out of the shell history and the
+process list. The value is redacted from both artifacts. The runner selects the
+``@password`` scenarios only when the variable is set, and the ``@tls``
+scenarios only with ``--plc-use-tls``, so a run never reports ``partial``
+merely because it was not configured for them. The wrong-password scenario is
+``@administrative``, because repeated failed logins may raise security events
+or lock the PLC.
+
+Scenarios
+---------
+
+Each feature file in ``tests/features/real_plc`` covers one area. Tags decide
+when a scenario runs:
+
+``@smoke``
+   Read-only; runs by default.
+``@write``
+   Changes DB2 and restores it; needs ``--allow-write``.
+``@administrative``
+   May disturb the PLC; needs ``--allow-admin``.
+``@tls`` / ``@password``
+   Need ``--plc-use-tls`` / ``S7COMMPLUS_TEST_PASSWORD``.
+``@pending``
+   Tests an API from an open pull request; needs ``--include-pending``, and is
+   skipped with the pull request named until the checkout has that API.
+
+The features are:
+
+- ``connection.feature``: connect, record the negotiated protocol, and read the
+  CPU operating state.
+- ``lifecycle.feature``: reconnect after a clean disconnect, repeated reads, and
+  ``reconnect()`` (``@pending``).
+- ``read.feature``: byte-offset reads of DB1, single and multi-item.
+- ``write.feature``: byte-offset and named round-trips on DB2, restored and
+  verified afterwards.
+- ``symbolic.feature``: list the data blocks, browse DB1 (names, types and byte
+  offsets against the documented layout), and read every DB1 member by name.
+  Members are found by their DB's access area and member name, so the DB names
+  in TIA Portal do not matter.
+- ``subscriptions.feature``: the initial value of a subscription to DB1 and a
+  change notification for a write to DB2.
+- ``alarms.feature``: the active-alarm snapshot and an alarm subscription. No
+  alarm needs to be active.
+- ``security.feature``: TLS is active when requested, a PLC certificate is
+  refused against a freshly generated CA, password legitimation, a wrong
+  password, and certificate pinning (``@pending``).
+
+Checking the scenarios without a PLC
+------------------------------------
+
+CI runs every scenario against in-memory fake clients
+(``tests/real_plc/fake_plc.py``) in ``tests/test_real_plc_dry_run.py``, for
+both clients and with every opt-in enabled. That catches a step without a
+binding or step code that no longer matches the client API before it reaches
+a volunteer. It proves nothing about the protocol; only a run against a PLC
+does. To run it by hand:
+
+.. code-block:: console
+
+   S7COMMPLUS_TEST_PASSWORD=dry-run pytest tests/real_plc/test_acceptance.py \
+     -p tests.real_plc.fake_plc --e2e --allow-plc-write --allow-plc-admin \
+     --plc-use-tls --plc-client both
+
 Result policy
 -------------
 
