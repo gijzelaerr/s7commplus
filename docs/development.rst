@@ -118,6 +118,18 @@ neither a compact curve replacement nor a speed improvement is claimed.
 Release process
 ---------------
 
+Pull requests do not edit ``CHANGES.md``; each describes its user-visible changes
+in a "Changelog" section of its description. Before a release, write the
+release's section of ``CHANGES.md`` from the pull requests merged since the
+previous tag, for example the list that this prints:
+
+.. code-block:: console
+
+   gh pr list --state merged --search "merged:>=YYYY-MM-DD" --json number,title,url
+
+Group the entries under the usual headings, keep each pull request number, and
+add an upgrade note for any renamed or removed public API.
+
 The package version is declared in ``pyproject.toml``. A GitHub Release tag
 must match it exactly with a ``v`` prefix; version ``0.1.0`` therefore uses tag
 ``v0.1.0``. The release workflow reruns tests, typing, lint, documentation, and
