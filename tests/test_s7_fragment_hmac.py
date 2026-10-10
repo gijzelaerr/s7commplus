@@ -100,3 +100,45 @@ def test_new_response_requires_a_new_verifier() -> None:
     with pytest.raises(S7IntegrityError):
         FragmentHMACVerifier(KEY).verify(second)
     assert FragmentHMACVerifier(KEY).verify(first) == first[33:]
+
+
+def _feed_forward_chain(key: bytes, payloads: list[bytes]) -> list[bytes]:
+    """Build a feed-forward V3 chain: HMAC(key, previous digest || data)."""
+    out: list[bytes] = []
+    previous = b""
+    for index, data in enumerate(payloads):
+        digest = hmac.new(key, (b"" if index == 0 else previous) + data, hashlib.sha256).digest()
+        out.append(b"\x20" + digest + data)
+        previous = digest
+    return out
+
+
+def test_feed_forward_fragments_are_accepted() -> None:
+    # PLCSIM Advanced chains continuation fragments as HMAC(key, previous digest || data).
+    chunks = _feed_forward_chain(KEY, [b"one", b"two", b"three" * 200])
+    verifier = FragmentHMACVerifier(KEY)
+    for chunk in chunks:
+        assert verifier.verify(chunk) == chunk[33:]
+
+
+def test_feed_forward_mode_is_fixed_within_a_response() -> None:
+    verifier = FragmentHMACVerifier(KEY)
+    first, second = _feed_forward_chain(KEY, [b"one", b"two"])
+    verifier.verify(first)
+    verifier.verify(second)
+    data = b"unexpected independent fragment"
+    with pytest.raises(S7IntegrityError):
+        verifier.verify(b"\x20" + hmac.new(KEY, data, hashlib.sha256).digest() + data)
+    first, second, *_ = fragments()
+    with pytest.raises(S7IntegrityError):
+        verifier.verify(second)
+
+
+def test_corrupted_feed_forward_continuation_is_rejected() -> None:
+    chunks = _feed_forward_chain(KEY, [b"one", b"two"])
+    bad = bytearray(chunks[1])
+    bad[-1] ^= 1
+    verifier = FragmentHMACVerifier(KEY)
+    verifier.verify(chunks[0])
+    with pytest.raises(S7IntegrityError):
+        verifier.verify(bytes(bad))

@@ -15,7 +15,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import _LEGACY_KEY_CACHE, S7CommPlusClient
 from s7commplus.connection import _build_v1_get_var_substreamed_payload, _v1_integrity_tail
-from s7commplus.error import S7AuthenticationError
 from s7commplus.server import S7CommPlusServer
 from s7commplus.v1_session_key import handshake, legitimation
 from s7commplus.v1_session_key.blob_metadata import ENCRYPTED_BLOB_LENGTH_PLCSIM, write_metadata
@@ -300,18 +299,73 @@ async def test_async_client_authenticates_against_family_03(
         await client.disconnect()
 
 
-def test_sync_client_rejects_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
+def test_sync_client_legitimates_with_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
     _, port = plcsim_server
     client = S7CommPlusClient()
-    with pytest.raises(S7AuthenticationError, match="PLCSIM"):
-        client.connect("127.0.0.1", port=port, password="secret")
-    assert not client.connected
+    client.connect("127.0.0.1", port=port, password="secret")
+    try:
+        assert client.connected
+        assert abs(struct.unpack(">f", client.db_read(1, 0, 4))[0] - 23.5) < 0.001
+    finally:
+        client.disconnect()
 
 
 @pytest.mark.asyncio
-async def test_async_client_rejects_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
+async def test_async_client_legitimates_with_a_password_on_plcsim(plcsim_server: tuple[S7CommPlusServer, int]) -> None:
     _, port = plcsim_server
     client = S7CommPlusAsyncClient()
-    with pytest.raises(S7AuthenticationError, match="PLCSIM"):
-        await client.connect("127.0.0.1", port=port, password="secret")
-    assert not client.connected
+    await client.connect("127.0.0.1", port=port, password="secret")
+    try:
+        assert client.connected
+        assert abs(struct.unpack(">f", await client.db_read(1, 0, 4))[0] - 23.5) < 0.001
+    finally:
+        await client.disconnect()
+
+
+# A real PLCSIM Advanced ServerSessionVersion (captured CreateObject response):
+# elements 315-318 carry the emulator values, 319/320 are the PAOM and
+# order-number WStrings.
+_PLCSIM_SSV = bytes.fromhex(
+    "00170000013a"
+    "823b00048800"
+    "823c00048500"
+    "823d000484818640"
+    "823e000484818400"
+    "823f00151a313b364553372053494d2d30313530302d41504c433b53342e31"
+    "8240001508323b373436323838"
+    "00"
+)
+_PLCSIM_SSV_PATCHED = bytes.fromhex(
+    "00170000013a"
+    "823b00048400"
+    "823c00048400"
+    "823d000484818240"
+    "823e000484818240"
+    "823f00151a313b364553372053494d2d30313530302d41504c433b53342e31"
+    "8240001508323b373436323838"
+    "00"
+)
+
+
+def test_plcsim_session_version_patch_rewrites_315_to_318() -> None:
+    from s7commplus.connection import _patch_plcsim_server_session_version
+
+    assert _patch_plcsim_server_session_version(_PLCSIM_SSV) == _PLCSIM_SSV_PATCHED
+
+
+def test_plcsim_session_version_patch_ignores_marker_bytes_in_values() -> None:
+    """The patch walks elements, so marker bytes inside a BLOB value are not rewritten."""
+    from s7commplus.connection import _patch_plcsim_server_session_version
+
+    lookalike = bytes.fromhex("823b00048800")
+    blob_element = bytes.fromhex("822c0014") + bytes([len(lookalike)]) + lookalike  # element 300, BLOB
+    value = bytes.fromhex("00170000013a") + blob_element + bytes.fromhex("823b00048800") + bytes([0x00])
+    expected = bytes.fromhex("00170000013a") + blob_element + bytes.fromhex("823b00048400") + bytes([0x00])
+    assert _patch_plcsim_server_session_version(value) == expected
+
+
+def test_plcsim_session_version_patch_leaves_non_structs_alone() -> None:
+    from s7commplus.connection import _patch_plcsim_server_session_version
+
+    bare_udint = bytes.fromhex("00048400")  # flags, datatype UDINT, value; not a struct
+    assert _patch_plcsim_server_session_version(bare_udint) == bare_udint

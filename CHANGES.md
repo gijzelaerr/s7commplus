@@ -14,6 +14,25 @@ CHANGES
   `version`, parsed from its file name. `zlib_dicts.ZLIB_DICT_IDENTITIES`
   maps each Adler-32 to one and supersedes `ZLIB_DICT_NAMES`, which is kept
   for compatibility (#64).
+* PLCSIM / PLCSIM Advanced (key family 03) **password legitimation**, a manual
+  port of HarpoS7's `SolveLegitimateChallengePlcSim`. The family-03 legacy
+  authentication shipped in 0.2.0 as emulator-tested only and refused a
+  `password`; it is now validated against S7-PLCSIM Advanced V8 (CPU 1511-1 PN,
+  NoAccess FW V2.8 project) with the sync and async clients: connect with a
+  password, browse, symbolic and byte-offset reads and writes, and data
+  subscriptions from access sequences, reaching `protection_level` 1 after
+  `LegitimatedLevel1`. Subscriptions to catalog tags are created and deleted
+  but get no values yet.
+  Byte-offset reads/writes are refused on optimized blocks, as on real
+  hardware; use symbolic access there (#66).
+  A real S7-1200 or S7-1500 is not affected by these family-03 changes, most of
+  which are verified on PLCSIM only: the ServerSessionVersion rewrite, skipping
+  the session activation and SessionKey renewal, the response IntegrityId
+  placement, the legitimation layout and the `write_symbolic`/subscription-delete
+  ObjectQualifier version all apply to key family 03 only, so the other families
+  send the same requests as in 0.2.0. The one shared change, in the V1 fragment
+  HMAC check, only adds a dialect: every response accepted before is accepted as
+  before.
 
 ### Behaviour changes
 
@@ -21,6 +40,37 @@ CHANGES
   by dictionary kind instead of a hard-coded Adler-32, so a new version of a
   dictionary, once added to the package, is picked up without code changes.
   The streams picked for the bundled dictionaries are unchanged (#64).
+
+### Bug fixes and hardening
+
+* A multi-fragment V1 SessionKey response whose continuation digests are
+  chained feed-forward (`HMAC(key, digest_{n-1} ‖ fragment_n)`, as PLCSIM
+  Advanced uses) no longer fails with `Invalid V3 continuation HMAC`. The
+  verifier previously accepted only the finalized-state resume dialect; it now
+  detects the dialect from the second fragment and accepts either (#66).
+* Automatic 25-minute SessionKey renewal is skipped on PLCSIM (key family 03):
+  the simulator resets the connection when a new SecurityKey is written to
+  address 1830, so a renewal would end a long-lived session (#66).
+* PLCSIM Advanced no longer receives the address-323 session activation:
+  S7CommPlus reads worked but the next `CreateObject`/`SetMultiVariables`
+  (writes, subscriptions, deletes) answered with a fatal SystemEvent and a TCP
+  reset. The activation is skipped for key family 03 (#66).
+* On a PLCSIM family-03 legacy session, `SET`/`CREATE`/`DELETE_OBJECT` response
+  payloads keep their body-leading bytes so the per-item error list parses; the
+  response IntegrityId follows the body there (#66).
+* On a PLCSIM family-03 session, `Client.write_symbolic`/`AsyncClient.write_symbolic`
+  and the subscription delete use the session's `object_qualifier_version` like
+  every other data path, instead of the negotiated protocol version. Other PLCs
+  keep the negotiated version these two requests have always used (#66).
+* PLCSIM family-03 sessions rewrite ServerSessionVersion elements 315–318 to the
+  real-PLC values in the session setup. Echoing PLCSIM's own values back was
+  accepted for the setup and reads, but it made the post-auth legitimation fail;
+  the real-PLC values work for both (#66).
+* The V1 legitimation `SET_VAR_SUBSTREAMED` request uses PLCSIM's captured layout
+  (object qualifier key 1, no item-number byte, the IntegrityId before the
+  trailing fill) for key family 03 only. The previous item-number byte made
+  PLCSIM reject the request with a fatal SystemEvent. The other families keep the
+  pre-existing layout byte-for-byte (#66).
 
 ### Testing
 

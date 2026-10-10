@@ -71,13 +71,37 @@ _PUBLIC_KEY_FLAGS_BY_FAMILY: dict[KeyFamily, int] = {
 }
 
 
+#: Length of the encrypted seed field inside the blobs.
+_ENCRYPTED_SEED_LENGTH_BY_FAMILY: dict[KeyFamily, int] = {
+    KeyFamily.S7_1500: 60,
+    KeyFamily.S7_1200: 60,
+    KeyFamily.PLCSIM: 96,
+}
+
+
 def get_blob_length(family: KeyFamily) -> int:
     """Length of the full SecurityKeyEncryptedKey blob for a family."""
     return _BLOB_LENGTH_BY_FAMILY[family]
 
 
+def get_encrypted_seed_length(family: KeyFamily) -> int:
+    """Length of the encrypted seed field for a family (60 real PLCs, 96 PlcSim)."""
+    return _ENCRYPTED_SEED_LENGTH_BY_FAMILY[family]
+
+
 def get_symmetric_key_flags(family: KeyFamily) -> int:
     """``symmetric_key_flags`` field value for a family."""
+    return _SYMMETRIC_KEY_FLAGS_BY_FAMILY[family]
+
+
+def get_symmetric_key_flags_legitimation(family: KeyFamily) -> int:
+    """``symmetric_key_flags`` used by the legitimation blob for a family.
+
+    HarpoS7 writes a constant ``1`` for the real PLCs and the CSI session-key
+    flags for PlcSim.
+    """
+    if family in (KeyFamily.S7_1500, KeyFamily.S7_1200):
+        return 0x1
     return _SYMMETRIC_KEY_FLAGS_BY_FAMILY[family]
 
 
