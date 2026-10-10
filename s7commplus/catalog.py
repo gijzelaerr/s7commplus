@@ -100,8 +100,12 @@ class SymbolicTag:
     def decode_value(self, raw: bytes) -> Any:
         """Decode this tag's raw bytes to a Python value (see :func:`s7commplus.values.decode`).
 
-        Bytes that are not a valid value of the tag's type, and types without a
-        conversion, are returned unchanged so callers never lose PLC data.
+        A catalog tag is always one value: a tag with ``array_dimensions`` is an
+        element of an array (``T.a[0]``) or a member of a struct-array element
+        (``T.s[0].x``), so it is decoded by its own type like any other leaf; the
+        catalog has no tag for a whole array. Bytes that are not a valid value
+        of the tag's type, such as a whole array's bytes, and types without a
+        conversion are returned unchanged so callers never lose PLC data.
         """
         return values.decode(self.softdatatype, raw)
 

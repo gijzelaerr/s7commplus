@@ -262,6 +262,24 @@ def test_symbolic_tag_decodes_array_elements_and_strings() -> None:
     assert _tag("s", T.STRING, string_length=4).decode_value(bytes.fromhex("040268690000")) == "hi"
 
 
+def test_one_element_array_decodes_its_element() -> None:
+    # The only leaf of an Array[0..0] of Int is its element: a catalog tag is
+    # never a whole array, so the element decodes like any INT (0.2.0 returned bytes).
+    element = _tag("T.one[0]", T.INT, dimensions=[(0, 1)])
+    assert element.decode_value(bytes.fromhex("0007")) == 7
+
+
+def test_struct_array_member_decodes_by_its_type() -> None:
+    member = _tag("T.s[1].x", T.REAL, dimensions=[(0, 2)])
+    assert member.decode_value(bytes.fromhex("40200000")) == 2.5
+
+
+def test_bytes_of_more_than_one_element_stay_bytes() -> None:
+    # A whole array's bytes do not fit the element type and are returned unchanged.
+    element = _tag("T.a[0]", T.INT, dimensions=[(0, 2)])
+    assert element.decode_value(bytes.fromhex("00010002")) == bytes.fromhex("00010002")
+
+
 def test_symbolic_tag_encodes_with_its_declared_string_length() -> None:
     assert _tag("s", T.STRING, string_length=4).encode_value("hi") == bytes.fromhex("040268690000")
     assert _tag("w", T.WSTRING, string_length=2).encode_value("ä") == bytes.fromhex("0002000100e40000")
