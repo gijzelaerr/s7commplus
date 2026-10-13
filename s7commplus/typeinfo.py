@@ -528,6 +528,44 @@ def extract_type_info_objects(response: bytes) -> list[PObject]:
     return container.objects if container is not None else []
 
 
+# How many 0xA1 bytes find_object_attribute() tries as the start of the object
+# stream. A few header bytes precede it and may themselves be 0xA1, so the real
+# start is among the first few; the cap bounds the work on a malformed response.
+_MAX_OBJECT_START_CANDIDATES = 8
+
+
+def find_object_attribute(response: bytes, relation_id: int, attribute_id: int) -> bytes | None:
+    """Return one attribute of the object ``relation_id`` in an EXPLORE response.
+
+    Returns ``None`` when the PLC reported an error, the object or attribute is
+    absent, or the response cannot be parsed (nesting too deep to parse included):
+    the caller learns nothing either way.
+    """
+    try:
+        return_value, offset = decode_uint32_vlq(response, 0)
+    except (ValueError, IndexError):
+        return None
+    if return_value != 0:
+        return None
+    # Try the first candidate starts until one holds the object.
+    for _candidate in range(_MAX_OBJECT_START_CANDIDATES):
+        offset = response.find(START_OF_OBJECT, offset)
+        if offset < 0:
+            break
+        try:
+            pending, _ = parse_object_list(response, offset)
+        except (ValueError, IndexError, AssertionError, struct.error, RecursionError):
+            # (RecursionError: parse_object() recurses once per nested 0xA1.)
+            pending = []
+        while pending:
+            obj = pending.pop()
+            if obj.relation_id == relation_id and attribute_id in obj.attributes:
+                return obj.attributes[attribute_id]
+            pending.extend(obj.objects)
+        offset += 1
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 7. Tree model & builder
 # ---------------------------------------------------------------------------
