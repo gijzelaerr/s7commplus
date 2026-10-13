@@ -51,6 +51,37 @@ Batching reduces request overhead and preserves item order:
        ]
    )
 
+``db_read_multi``, ``db_write_multi``, ``read_symbolic_multi``, ``read_tags``
+and ``write_tags`` split a large batch over several requests of at most
+``client.max_items_per_request`` items (default 50; ``0`` sends a batch in one
+request). A CPU 1215C FW V4.2 refuses a read of more than 50 items, whatever its
+size. The requests go out in order and the results come back in item
+order. ``db_read_multi`` returns ``b""`` for an item the PLC could not read,
+including each item of a request the PLC refused as a whole.
+
+They also keep each request frame within ``client.max_request_bytes`` (default
+900; ``0`` disables the check). The frame is counted from the S7CommPlus frame
+header to its trailer: the 14-byte request header, the payload, the IntegrityId
+at its 5-byte maximum and, on a V1 SessionKey session, the 33-byte HMAC. The TLS
+record, COTP and TPKT around it are not counted. A larger request makes the PLC
+drop the connection: on PLCSIM Advanced V8 (CPU 1511, FW V2.9) a read with a
+1034-byte payload (a frame of about 1060 bytes) did, while one with an 834-byte
+payload (about 860 bytes) was answered. Real hardware has not been measured. An
+item too large for one request on its own, such as a long string or byte block,
+raises ``ValueError`` before anything is sent; write it in parts, or raise the
+limit for a PLC that accepts larger requests.
+
+A write split over several requests is not atomic. The PLC writes every item it
+does not refuse, and a refused item does not stop the batch: ``db_write_multi``
+raises :class:`~s7commplus.error.S7WriteError` after the last request, whose
+``item_errors`` maps the 1-based position of each refused item in the whole
+batch to its PLC error. A connection, timeout or protocol failure after the
+first request stops the batch: ``db_write_multi`` raises ``S7WriteError`` from
+that failure, and ``write_tags`` returns its results with that error on every
+tag it could not confirm. The error's ``unknown`` positions may or may not have
+been written; its ``not_sent`` positions were never sent. A failure of the first
+request propagates unchanged, as for a single request.
+
 Controller areas
 ----------------
 
