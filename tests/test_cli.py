@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from s7commplus.catalog import SymbolicTag, TagResult
+from s7commplus.catalog import SymbolCatalog, SymbolicTag, TagResult
 from s7commplus.cli import COMMANDS, browse, build_parser, db_read, db_write, main, read, state, write
 from s7commplus.cli._common import add_command, json_safe, parse_hex
 from s7commplus.client import S7CommPlusClient
@@ -702,7 +702,7 @@ def test_cli_write_the_library_cannot_encode_exits_1(
     # --int gives 2 bytes for a REAL tag. The client raises ValueError while it
     # builds the write request, with the connection open: not a usage error.
     _srv, port = emulator
-    monkeypatch.setattr(S7CommPlusClient, "browse", lambda self: [dict(_BROWSE_ITEM)])
+    monkeypatch.setattr(S7CommPlusClient, "refresh_tag_catalog", lambda self: SymbolCatalog.from_browse([dict(_BROWSE_ITEM)]))
     assert main(["write", "--host", "127.0.0.1", "--port", str(port), "DB1.Motor.Speed", "--int", "1"]) == 1
     assert capsys.readouterr().err.strip() == "error: REAL requires 4 encoded bytes, got 2"
 
