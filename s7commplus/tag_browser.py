@@ -205,9 +205,15 @@ def parse_block_interface(xml_text: str) -> list[Member]:
     ``SubPartIndex`` selects it. Such members are expanded recursively into
     :attr:`Member.fields`. Library types (e.g. ``IEC_TIMER``) are referenced but
     not inlined, so they expand to no fields.
+
+    An instance DB or a UDT-typed DB has no source part of its own: its first
+    ``<Part>`` is ``Kind="Values"``, and its members come from the FB or UDT
+    embedded in that part's ``<SubParts>``.
     """
     root = ET.fromstring(xml_text)
     primary = root.find("Part")  # first top-level Part = the block's own source
+    if primary is not None and primary.get("Kind") == "Values":
+        primary = primary.find("SubParts/Part")
     if primary is None:
         return []
     return _parse_source_part(primary, set())
