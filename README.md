@@ -51,6 +51,15 @@ device_family("6ES7 512-1DK01-0AB0")  # 's7-1500-sp'
 variants, software controllers and PLCSIM; classic S7-300/400 is out of
 scope). `python tools/check_devices_table.py` validates its shape.
 
+Installing the package also installs a `s7commplus` command-line tool:
+
+```console
+s7commplus browse --host 192.168.1.10
+s7commplus read --host 192.168.1.10 DB1.Motor.Speed
+```
+
+See the command-line interface guide in the documentation.
+
 ## Development
 
 Cloning the repository is only necessary for developing or testing
