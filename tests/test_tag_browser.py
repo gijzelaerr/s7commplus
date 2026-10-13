@@ -138,8 +138,9 @@ def test_tags_from_explore_raises_on_corrupt_stream():
     # iter_preset_streams skips undecodable streams; tag_browser must surface them instead.
     # IntfDescTag header followed by an invalid deflate block.
     payload = bytes.fromhex("787d ce9b821b") + b"\xff" * 8
-    with pytest.raises(zlib.error):
+    with pytest.raises(ValueError) as caught:
         tags_from_explore(payload)
+    assert isinstance(caught.value.__cause__, zlib.error)
 
 
 def test_find_preset_stream_matches_kind_across_versions():

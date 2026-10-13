@@ -472,6 +472,18 @@ def encode_pvalue_typed(datatype: DataType, data: bytes) -> bytes:
     return bytes(result)
 
 
+def _pack_decoded(fmt: str, value: int) -> bytes:
+    """Pack a value decoded from a VLQ, refusing one too large for ``fmt``.
+
+    A VLQ can carry more bits than the fixed-width type it stands for, so a
+    malformed PValue would otherwise surface as ``struct.error``.
+    """
+    try:
+        return struct.pack(fmt, value)
+    except struct.error as exc:
+        raise ValueError(f"PValue value {value} does not fit {fmt}") from exc
+
+
 def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     """Decode a PValue from S7CommPlus response to raw bytes.
 
@@ -524,7 +536,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     elif datatype == DataType.UDINT:
         val, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">I", val), consumed
+        return _pack_decoded(">I", val), consumed
     elif datatype == DataType.DWORD:
         # ValueDWord is a fixed 4-byte big-endian value, not VLQ.
         return data[offset + consumed : offset + consumed + 4], consumed + 4
@@ -534,7 +546,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
         val, c = decode_int32_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">i", val), consumed
+        return _pack_decoded(">i", val), consumed
     elif datatype == DataType.REAL:
         return data[offset + consumed : offset + consumed + 4], consumed + 4
     elif datatype == DataType.LREAL:
@@ -542,7 +554,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     elif datatype == DataType.ULINT:
         val, c = decode_uint64_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">Q", val), consumed
+        return _pack_decoded(">Q", val), consumed
     elif datatype == DataType.LWORD:
         # ValueLWord is a fixed 8-byte big-endian value, not VLQ.
         return data[offset + consumed : offset + consumed + 8], consumed + 8
@@ -551,7 +563,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">q", val), consumed
+        return _pack_decoded(">q", val), consumed
     elif datatype == DataType.TIMESTAMP:
         return data[offset + consumed : offset + consumed + 8], consumed + 8
     elif datatype == DataType.TIMESPAN:
@@ -559,13 +571,13 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">q", val), consumed
+        return _pack_decoded(">q", val), consumed
     elif datatype == DataType.RID:
         return data[offset + consumed : offset + consumed + 4], consumed + 4
     elif datatype == DataType.AID:
         val, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">I", val), consumed
+        return _pack_decoded(">I", val), consumed
     elif datatype == DataType.BLOB:
         _blob_root_id, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c

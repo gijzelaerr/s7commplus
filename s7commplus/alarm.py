@@ -492,7 +492,15 @@ def parse_alarm_explore_response(response: bytes, language_ids: Sequence[Languag
 
     Raises:
         S7ReturnValueError: If the ReturnValue is non-zero.
+        ValueError: If the response is truncated or malformed.
     """
+    try:
+        return _parse_alarm_explore_response(response, language_ids)
+    except (struct.error, IndexError) as exc:
+        raise ValueError(f"Alarm browse response is truncated or malformed: {exc}") from exc
+
+
+def _parse_alarm_explore_response(response: bytes, language_ids: Sequence[LanguageId | int] | None) -> list[Alarm]:
     offset = parse_or_raise_for_return_value(response, "Alarm browse")
     if offset + 4 > len(response):
         raise ValueError("Alarm browse response is truncated")
@@ -506,7 +514,18 @@ def parse_alarm_explore_response(response: bytes, language_ids: Sequence[Languag
 
 
 def parse_alarm_notification(frame: bytes, language_ids: Sequence[LanguageId | int] | None = None) -> AlarmNotification:
-    """Parse one complete S7CommPlus notification frame."""
+    """Parse one complete S7CommPlus notification frame.
+
+    Raises:
+        ValueError: If the frame is not a notification, or is truncated or malformed.
+    """
+    try:
+        return _parse_alarm_notification(frame, language_ids)
+    except (struct.error, IndexError) as exc:
+        raise ValueError(f"Alarm notification is truncated or malformed: {exc}") from exc
+
+
+def _parse_alarm_notification(frame: bytes, language_ids: Sequence[LanguageId | int] | None) -> AlarmNotification:
     if len(frame) < 5 or frame[0] != 0x72:
         raise ValueError("Invalid S7CommPlus notification frame")
     data_length = struct.unpack_from(">H", frame, 2)[0]

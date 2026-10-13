@@ -454,7 +454,8 @@ class PObject:
 
 def parse_object(data: bytes, offset: int) -> tuple[PObject, int]:
     """Parse a single PObject starting at a 0xA1 tag, up to its 0xA2 terminator."""
-    assert data[offset] == START_OF_OBJECT
+    if offset >= len(data) or data[offset] != START_OF_OBJECT:
+        raise ValueError(f"Expected a PObject start tag at offset {offset}")
     offset += 1
     (relation_id,) = struct.unpack_from(">I", data, offset)
     offset += 4
@@ -516,7 +517,17 @@ def extract_type_info_objects(response: bytes) -> list[PObject]:
 
     Skips the leading ReturnValue VLQ and any preamble, parses the object stream,
     and returns the children of the type-info container object (or ``[]``).
+
+    Raises:
+        ValueError: If the response is truncated or malformed.
     """
+    try:
+        return _extract_type_info_objects(response)
+    except (struct.error, IndexError) as exc:
+        raise ValueError(f"Type-info response is truncated or malformed: {exc}") from exc
+
+
+def _extract_type_info_objects(response: bytes) -> list[PObject]:
     _return_value, consumed = decode_uint32_vlq(response, 0)
     offset = consumed
     while offset < len(response) and response[offset] != START_OF_OBJECT:

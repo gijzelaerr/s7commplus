@@ -1431,6 +1431,11 @@ def _parse_read_response(response: bytes, expected_count: Optional[int] = None) 
         raise RuntimeError(f"Symbolic multi-read failed: PLC answered {len(values) + len(errors)} of {expected_count} items")
 
     max_item = max(max(values.keys(), default=0), max(errors.keys(), default=0))
+    # Every requested item is answered once, with a value or an error, so item
+    # numbers run 1..N for N answered items. A higher number would make the list
+    # below as long as the number says (up to 2**32 entries from a few bytes).
+    if max_item > len(values) + len(errors):
+        raise ValueError(f"Read response names item {max_item} but answers only {len(values) + len(errors)} items")
     results: list[Optional[bytes]] = []
     for i in range(1, max_item + 1):
         if i in values:
