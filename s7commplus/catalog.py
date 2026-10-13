@@ -7,10 +7,13 @@ from collections.abc import Iterator
 from typing import Any, Optional
 
 from . import values
+from .codec import PValueArray
 from .protocol import DataType
 from .typeinfo import Softdatatype
 
 
+# The scalar PValue type of each softdatatype (``SymbolicTag.datatype``). write_tags()
+# sends it, except for the types in _WRITE_FORMS unless ``legacy_write_forms`` is set.
 _WIRE_TYPES: dict[Softdatatype, DataType] = {
     Softdatatype.BOOL: DataType.BOOL,
     Softdatatype.BBOOL: DataType.BOOL,
@@ -40,6 +43,19 @@ _WIRE_TYPES: dict[Softdatatype, DataType] = {
     Softdatatype.LTIME: DataType.TIMESPAN,
     Softdatatype.LTOD: DataType.ULINT,
     Softdatatype.LDT: DataType.TIMESTAMP,
+}
+
+# The forms write_tags() sends by default for four types. PLCSIM Advanced V8 (CPU 1511,
+# FW V2.9 with TLS and FW V2.8 without) refused their pre-0.3 forms, the _WIRE_TYPES
+# entries, and accepted and read back these: a CHAR as a USINT, a STRING and a WSTRING
+# as USINT and UINT arrays of [max length, length, characters...], and a DATE_AND_TIME
+# as an array of its eight BCD bytes. ``legacy_write_forms`` selects the pre-0.3 forms.
+# Neither has been checked on a hardware PLC.
+_WRITE_FORMS: dict[Softdatatype, DataType | PValueArray] = {
+    Softdatatype.CHAR: DataType.USINT,
+    Softdatatype.STRING: PValueArray(DataType.USINT),
+    Softdatatype.WSTRING: PValueArray(DataType.UINT),
+    Softdatatype.DATEANDTIME: PValueArray(DataType.USINT),
 }
 
 
@@ -121,6 +137,16 @@ class SymbolicTag:
                 unknown or out of range.
         """
         return values.encode(self.softdatatype, value, string_length=self.string_length)
+
+
+def _write_type(tag: SymbolicTag, legacy_forms: bool = False) -> DataType | PValueArray | None:
+    """The PValue type ``write_tags`` sends ``tag`` as (``None`` if unsupported).
+
+    ``legacy_forms`` selects the forms used before 0.3, ``tag.datatype`` for every type.
+    """
+    if not legacy_forms and tag.softdatatype in _WRITE_FORMS:
+        return _WRITE_FORMS[tag.softdatatype]
+    return tag.datatype
 
 
 @dataclass(frozen=True)
