@@ -1424,3 +1424,75 @@ class TestWriteDeleteQualifierVersion:
         (_, delete_payload), _ = client._send_request.call_args_list[1]
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
+
+
+class TestS71200Subscriptions:
+    """A CPU 1215C FW V4.2 accepts a subscription only without the session activation.
+
+    Seen on that CPU with a read-only probe: after the address-323 activation the
+    PLC resets the connection on the subscription's CreateObject (reads keep
+    working); without it the CreateObject is answered, return value first.
+    """
+
+    # return_value 0, one object id (0x70000F91), then the IntegrityId (5) and fill.
+    _CREATE_RESPONSE = bytes([0x00, 0x01]) + bytes.fromhex("8780809f11") + bytes([0x05]) + bytes(4)
+
+    @pytest.mark.parametrize(
+        ("family", "activated"),
+        [("PLCSIM", False), ("S7_1200", False), ("S7_1500", True), (None, True)],
+    )
+    def test_session_activation_by_family(self, family: object, activated: bool) -> None:
+        from s7commplus.connection import _sends_session_activation
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        assert _sends_session_activation(None if family is None else KeyFamily[str(family)]) is activated
+
+    @pytest.mark.parametrize(
+        ("family", "function_code", "follows"),
+        [
+            ("S7_1200", FunctionCode.CREATE_OBJECT, True),
+            ("S7_1200", FunctionCode.SET_MULTI_VARIABLES, False),
+            ("S7_1200", FunctionCode.DELETE_OBJECT, False),
+            ("S7_1500", FunctionCode.CREATE_OBJECT, False),
+            ("PLCSIM", FunctionCode.CREATE_OBJECT, True),
+            ("PLCSIM", FunctionCode.SET_MULTI_VARIABLES, True),
+        ],
+    )
+    def test_integrity_id_position_by_family(self, family: str, function_code: int, follows: bool) -> None:
+        from s7commplus.connection import _integrity_id_follows_body
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        assert _integrity_id_follows_body(KeyFamily[family], function_code) is follows
+
+    def test_create_object_response_keeps_its_return_value(self) -> None:
+        from s7commplus.codec import parse_create_object_session_id
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        conn = TestPlcsimResponseLayout._connection(KeyFamily.S7_1200)
+        payload = conn._response_payload(FunctionCode.CREATE_OBJECT, self._CREATE_RESPONSE)
+        assert payload == self._CREATE_RESPONSE
+        object_ids, _, return_value = parse_create_object_session_id(payload)
+        assert (object_ids, return_value) == ([0x70000F91], 0)
+
+    def test_s7_1500_create_object_response_still_strips_the_leading_id(self) -> None:
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        payload = bytes([0x05]) + self._CREATE_RESPONSE[:-5]  # leading IntegrityId 5
+        conn = TestPlcsimResponseLayout._connection(KeyFamily.S7_1500)
+        assert conn._response_payload(FunctionCode.CREATE_OBJECT, payload) == payload[1:]
+
+    def test_async_create_object_response_keeps_its_return_value(self) -> None:
+        from s7commplus.async_client import S7CommPlusAsyncClient
+        from s7commplus.codec import parse_create_object_session_id
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        client = S7CommPlusAsyncClient()
+        client._session_key = b"k" * 24
+        client._protocol_version = ProtocolVersion.V1
+        client._v1_session_key_family = KeyFamily.S7_1200
+        assert client.legacy_s7_1500
+        payload = client._response_payload(FunctionCode.CREATE_OBJECT, self._CREATE_RESPONSE)
+        assert parse_create_object_session_id(payload)[0] == [0x70000F91]
+        client._v1_session_key_family = KeyFamily.S7_1500
+        leading = bytes([0x05]) + self._CREATE_RESPONSE[:-5]
+        assert client._response_payload(FunctionCode.CREATE_OBJECT, leading) == leading[1:]

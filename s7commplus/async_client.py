@@ -81,6 +81,8 @@ from .connection import (
     _resolve_session_key_fingerprint,
     _session_setup_accepted,
     _set_s7_groups,
+    _integrity_id_follows_body,
+    _sends_session_activation,
     _strip_response_integrity_id,
     _v1_session_key_profile,
     _write_delete_qualifier_version,
@@ -536,10 +538,10 @@ class S7CommPlusAsyncClient:
                 logger.info("V2 IntegrityId tracking enabled")
 
             if self._session_key is not None:
-                if self._v1_session_key_family == KeyFamily.PLCSIM:
-                    logger.info("PLCSIM session: skipping the address-323 session activation")
-                else:
+                if _sends_session_activation(self._v1_session_key_family):
                     await self._session_activate()
+                else:
+                    logger.info("Skipping the address-323 session activation for this key family")
                 if p["password"]:
                     await self._post_auth_legitimation(p["password"])
                 else:
@@ -1678,7 +1680,7 @@ class S7CommPlusAsyncClient:
     def _response_payload(self, function_code: int, payload: bytes) -> bytes:
         """Preserve legacy return values where IntegrityId follows the body."""
         self._last_raw_response_payload = payload
-        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.PLCSIM:
+        if self.legacy_s7_1500 and _integrity_id_follows_body(self._v1_session_key_family, function_code):
             return payload
         return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
 
