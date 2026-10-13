@@ -177,9 +177,9 @@ def test_sync_reads_an_authenticated_response_split_over_several_pdus(fragmentin
         reassembled: list[bytes] = []
         reassemble = connection._recv_reassembled_payload
 
-        def spy(initial_data: bytes = b"") -> bytes:
+        def spy(initial_data: bytes = b"", timeout: float | None = None) -> bytes:
             reassembled.append(initial_data)
-            return reassemble(initial_data)
+            return reassemble(initial_data, timeout)
 
         connection._recv_reassembled_payload = spy  # type: ignore[method-assign]
         assert client.db_read(2, 0, 200) == bytes(range(200))
@@ -198,9 +198,9 @@ async def test_async_reads_an_authenticated_response_split_over_several_pdus(fra
         reassembled: list[bytes] = []
         reassemble = client._recv_reassembled_payload
 
-        async def spy(initial_data: bytes = b"") -> bytes:
+        async def spy(initial_data: bytes = b"", timeout: float | None = None) -> bytes:
             reassembled.append(initial_data)
-            return await reassemble(initial_data)
+            return await reassemble(initial_data, timeout)
 
         client._recv_reassembled_payload = spy  # type: ignore[method-assign]
         assert await client.db_read(2, 0, 200) == bytes(range(200))
