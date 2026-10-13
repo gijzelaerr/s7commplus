@@ -6,8 +6,9 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 import dataclasses
 import logging
 import struct
+import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, Literal, Optional, TypeAlias, TypeVar
 
 from .error import S7ConnectionError, S7ProtocolError, S7SubscriptionError, S7TlsHandshakeError, S7WriteError
@@ -37,6 +38,7 @@ from .codec import (
     skip_typed_value,
 )
 from .catalog import SymbolCatalog, SymbolicTag, TagResult, _write_type
+from .values import assemble, split
 from .connection import (
     FamilyOnlyFingerprintError,
     S7CommPlusConnection,
@@ -291,6 +293,100 @@ def _subscriptions_interrupted(created: list[int], total: int, error: Exception)
     return S7SubscriptionError(f"created {len(created)} of {total} subscriptions, then: {error}", created)
 
 
+# Minimum seconds between two automatic program-change checks (``auto_refresh_tags``).
+# A check costs 1 + N requests (N = data blocks with a recorded modification time),
+# so a tag that keeps failing, or a misspelt name, must not repeat it on every poll.
+_AUTO_REFRESH_MIN_INTERVAL = 10.0
+
+
+def _block_signature(blocks: Sequence[Mapping[str, Any]]) -> list[tuple[str, int, int]]:
+    """The identity of a data-block list, for detecting a program change."""
+    return sorted((str(block.get("name", "")), int(block.get("number", 0)), int(block.get("rid", 0))) for block in blocks)
+
+
+def _type_info_times(root_nodes: Sequence["typeinfo.Node"], type_objects: Sequence["typeinfo.PObject"]) -> dict[int, bytes]:
+    """Map each root's type-info RID to its modification time, where the PLC reports one."""
+    roots = {node.relation_id for node in root_nodes}
+    attribute = Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME
+    return {
+        obj.relation_id: obj.attributes[attribute]
+        for obj in type_objects
+        if obj.relation_id in roots and attribute in obj.attributes
+    }
+
+
+# A typed-value name, whether it is a leaf tag, and its leaf tags in catalog order.
+_ValuePlan: TypeAlias = tuple[str, bool, list[SymbolicTag]]
+
+
+def _value_tags(catalog: SymbolCatalog, name: str) -> tuple[bool, list[SymbolicTag]]:
+    """The leaf tag ``name``, or the leaves of the struct or array ``name`` (``False``)."""
+    try:
+        return True, [catalog.resolve(name)]
+    except KeyError:
+        members = catalog.members(name)
+        if not members:
+            raise
+        return False, members
+
+
+def _value_plans(catalog: SymbolCatalog, names: Iterable[str]) -> list[_ValuePlan]:
+    """Look up the leaf tags of each name; raises ``KeyError`` for a name the catalog lacks."""
+    return [(name, *_value_tags(catalog, name)) for name in names]
+
+
+def _raise_failures(results: Sequence[TagResult], action: str) -> None:
+    failed = [result for result in results if result.error is not None]
+    if failed:
+        names = ", ".join(repr(result.tag.name) for result in failed[:5]) + (", ..." if len(failed) > 5 else "")
+        raise RuntimeError(f"{len(failed)} of {len(results)} {action} failed: {names}") from failed[0].error
+
+
+def _assemble_values(plans: Sequence[_ValuePlan], results: Sequence[TagResult]) -> list[Any]:
+    """Decode read results and rebuild each requested name's value from its leaves."""
+    _raise_failures(results, "reads")
+    decoded = iter((result.tag.name, result.tag.decode_value(result.value or b"")) for result in results)
+    out: list[Any] = []
+    for name, leaf, tags in plans:
+        leaves = [next(decoded) for _ in tags]
+        out.append(leaves[0][1] if leaf else assemble(name, leaves))
+    return out
+
+
+# Types whose raw value write_tags() sends as given under legacy_write_forms, not in the
+# read layout SymbolicTag.encode_value() builds.
+_RAW_AS_GIVEN_UNDER_LEGACY_FORMS = frozenset({typeinfo.Softdatatype.STRING, typeinfo.Softdatatype.WSTRING})
+
+
+def _encode_values(plans: Sequence[_ValuePlan], values: Mapping[str, Any], legacy_forms: bool = False) -> dict[str, bytes]:
+    """Map each planned name's Python value in ``values`` onto its leaf tags' raw bytes.
+
+    With ``legacy_forms`` (``legacy_write_forms``), a STRING or WSTRING leaf raises
+    ``ValueError``: those forms send the raw bytes as given, not the read layout.
+    """
+    encoded: dict[str, bytes] = {}
+    for name, leaf, tags in plans:
+        value = values[name]
+        by_name = {tag.name: tag for tag in tags}
+        leaf_values = {name: value} if leaf else split(name, value, list(by_name))
+        if not leaf_values:
+            raise ValueError(f"Nothing to write for {name!r}")
+        for leaf_name, leaf_value in leaf_values.items():
+            if leaf_name in encoded:
+                raise ValueError(f"{leaf_name!r} is written twice")
+            tag = by_name[leaf_name]
+            if legacy_forms and tag.softdatatype in _RAW_AS_GIVEN_UNDER_LEGACY_FORMS:
+                raise ValueError(
+                    f"{leaf_name!r}: a {tag.softdatatype.name} is not written by value with legacy_write_forms set, "
+                    "which sends the raw bytes as given; use write_tags() or clear legacy_write_forms"
+                )
+            try:
+                encoded[leaf_name] = tag.encode_value(leaf_value)
+            except (TypeError, ValueError) as exc:
+                raise type(exc)(f"{leaf_name!r}: {exc}") from exc
+    return encoded
+
+
 class S7CommPlusClient:
     """S7CommPlus client for S7-1200/1500 PLCs.
 
@@ -348,6 +444,17 @@ class S7CommPlusClient:
         # the class docstring and catalog._WRITE_FORMS). PLCSIM Advanced refused
         # them; no hardware PLC has been checked with either form.
         self.legacy_write_forms: bool = False
+        # What the cached catalog was built from, for refresh_caches_if_program_changed:
+        # the data-block list, and type-info RID -> VariableTypeStructModificationTime
+        # of each data block whose time the PLC reported.
+        self._block_layout_signature: Optional[list[tuple[str, int, int]]] = None
+        self._type_info_times: dict[int, bytes] = {}
+        # Opt-in: an unknown tag name, or a failed item in read_tags(), runs that
+        # check (once per call, at most every _AUTO_REFRESH_MIN_INTERVAL seconds)
+        # and, if the program changed, resolves and reads again. Writes that reached
+        # the PLC are never resent.
+        self.auto_refresh_tags: bool = False
+        self._last_auto_refresh_check: Optional[float] = None
 
     @property
     def connected(self) -> bool:
@@ -493,7 +600,7 @@ class S7CommPlusClient:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
         _check_certificate_pin(tls_cert_fingerprint, tls_first)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
-        self._symbol_catalog = None
+        self._forget_tag_catalog()
         self._connect_params = {
             "host": host,
             "port": port,
@@ -645,7 +752,7 @@ class S7CommPlusClient:
             self._connection.disconnect()
             self._connection = None
         self._connect_params = None
-        self._symbol_catalog = None
+        self._forget_tag_catalog()
 
     def peer_certificate_fingerprint(self) -> Optional[bytes]:
         """SHA-256 of the PLC's TLS certificate, or None without TLS.
@@ -992,12 +1099,73 @@ class S7CommPlusClient:
 
     def refresh_tag_catalog(self) -> SymbolCatalog:
         """Browse the PLC and replace the cached symbolic tag catalog."""
-        self._symbol_catalog = SymbolCatalog.from_browse(self.browse())
+        variables, signature, times = self._browse_layout()
+        self._symbol_catalog = SymbolCatalog.from_browse(variables)
+        self._block_layout_signature, self._type_info_times = signature, times
         return self._symbol_catalog
+
+    def refresh_caches_if_program_changed(self) -> bool:
+        """Refresh the tag catalog when the PLC program changed.
+
+        Named reads and writes send SymbolCRC 0, so the PLC does not verify that a
+        cached address still names the same variable. After a download that changes
+        a block, the cached addresses can point at the wrong variable. This compares
+        the data-block list with the one the catalog was built from and, when that is
+        unchanged, the type-info modification time of every cached data block (one
+        small EXPLORE each), and rebuilds the catalog when either changed. A recorded
+        time that no longer answers counts as a change, since a download may have
+        replaced the type-info object. Without a cached catalog it browses one. It is
+        opt-in: nothing is refreshed implicitly.
+
+        This narrows the window in which a stale address is used; it does not close
+        it. A change confined to a nested UDT or the PLC tag table may not show in the
+        block's own modification time; an instance DB moved to another FB keeps its
+        name, number and RID, and only its old type-info object is checked; a block
+        whose time the PLC does not report is checked by block list only. Call
+        ``refresh_tag_catalog()`` after a known download, and this method before
+        writing after a possible one.
+
+        Returns:
+            ``True`` when the catalog was refreshed.
+
+        Raises:
+            RuntimeError: If not connected.
+        """
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        if _block_signature(self.list_datablocks()) != self._block_layout_signature:
+            logger.info("The PLC data-block list changed; refreshing the tag catalog")
+            self.refresh_tag_catalog()
+            return True
+        for ti_rid, seen in list(self._type_info_times.items()):
+            current = self._read_type_info_time(ti_rid)
+            if current != seen:
+                logger.info("Type info %#x changed or no longer answers; refreshing the tag catalog", ti_rid)
+                self.refresh_tag_catalog()
+                if current is None and self._type_info_times.get(ti_rid) == seen:
+                    # Still there, unchanged: the PLC does not answer the filtered EXPLORE
+                    # for it. Check that block by its list entry only, not rebrowse every time.
+                    del self._type_info_times[ti_rid]
+                return True
+        return False
+
+    def _read_type_info_time(self, ti_rid: int) -> Optional[bytes]:
+        """EXPLORE one type-info object for its modification time (``None`` if not reported)."""
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        payload = _build_explore_request(ti_rid, [Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME])
+        response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+        return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
 
     def invalidate_tag_catalog(self) -> None:
         """Discard cached browse metadata after a PLC layout change."""
+        self._forget_tag_catalog()
+
+    def _forget_tag_catalog(self) -> None:
+        """Drop the cached catalog together with the layout it was built from."""
         self._symbol_catalog = None
+        self._block_layout_signature = None
+        self._type_info_times = {}
 
     def resolve_tag(self, name: str) -> SymbolicTag:
         """Resolve a browsed tag name to its typed symbolic descriptor."""
@@ -1023,18 +1191,58 @@ class S7CommPlusClient:
         is not the value the PLC validates, and real CPUs reject it. Failed
         items are reported, not retried; call :meth:`refresh_tag_catalog` after
         a PLC layout change.
+
+        With ``auto_refresh_tags`` set, an unknown name or a failed item runs
+        :meth:`refresh_caches_if_program_changed` and, when the program did
+        change, resolves and reads the names again, once. The check runs at
+        most once per call, not when this call browsed the catalog itself, and
+        not within 10 seconds of the previous automatic check. A failed item
+        carries no PLC error code, so any failure triggers it; a name still
+        unknown afterwards raises ``KeyError``.
         """
         if not names:
             return []
-        tags = [self.resolve_tag(name) for name in names]
+        tags, may_check = self._resolve_tags(names)
+        results = self._read_resolved_tags(tags)
+        if may_check and any(result.error is not None for result in results) and self._auto_refresh_check():
+            results = self._read_resolved_tags([self.resolve_tag(name) for name in names])
+        return results
+
+    def _resolve_tags(self, names: Sequence[str]) -> tuple[list[SymbolicTag], bool]:
+        """Resolve names; with ``auto_refresh_tags``, an unknown name checks for a program change.
+
+        Also returns whether the caller may still run an automatic check: not
+        after one ran here, and not when resolving browsed the catalog, which is
+        then current.
+        """
+        may_check = bool(self._symbol_catalog)  # resolve_tag() browses a missing or empty catalog
+        try:
+            return [self.resolve_tag(name) for name in names], may_check
+        except KeyError:
+            if not (may_check and self._auto_refresh_check()):
+                raise
+        return [self.resolve_tag(name) for name in names], False
+
+    def _auto_refresh_check(self) -> bool:
+        """Run the automatic program-change check, unless one ran recently; ``True`` if it refreshed."""
+        if not self.auto_refresh_tags:
+            return False
+        now = time.monotonic()
+        last = self._last_auto_refresh_check
+        if last is not None and now - last < _AUTO_REFRESH_MIN_INTERVAL:
+            logger.debug("Skipping the automatic program-change check; the last one ran %.1f s ago", now - last)
+            return False
+        self._last_auto_refresh_check = now
+        return self.refresh_caches_if_program_changed()
+
+    def _read_resolved_tags(self, tags: Sequence[SymbolicTag]) -> list[TagResult]:
         values = self.read_symbolic_multi([(tag.access_area, list(tag.lids), 0) for tag in tags])
-        results = [
+        return [
             TagResult(tag=tag, value=value)
             if value is not None
             else TagResult(tag=tag, error=RuntimeError(f"Symbolic read failed for {tag.name!r}"))
             for tag, value in zip(tags, values)
         ]
-        return results
 
     def write_tag(self, name: str, data: bytes) -> None:
         """Write one symbolic tag by name using its resolved PValue datatype."""
@@ -1059,12 +1267,18 @@ class S7CommPlusClient:
         :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
         characters...]`` and a WSTRING the same as big-endian UINTs, both padded
         with zeros to the declared length (``SymbolicTag.string_length``); a
-        DATE_AND_TIME is its eight BCD bytes. With :attr:`legacy_write_forms`
-        set, CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3
-        forms instead, and a STRING or WSTRING value is sent as given.
+        DATE_AND_TIME is its eight BCD bytes. :meth:`SymbolicTag.encode_value`
+        builds these from Python values. With :attr:`legacy_write_forms` set,
+        CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3 forms
+        instead, and a STRING or WSTRING value is sent as given.
 
         Writes are deliberately never retried: a transport failure can leave
-        the caller unable to know whether the PLC applied the request.
+        the caller unable to know whether the PLC applied the request, and a
+        stale address may already have written another variable. With
+        ``auto_refresh_tags`` set, an unknown name, before anything is sent,
+        runs the program-change check as in :meth:`read_tags`; a write to a
+        stale address does not, so call :meth:`refresh_caches_if_program_changed`
+        before writing after a possible download.
 
         Raises:
             ValueError: A value is too large for one request on its own;
@@ -1074,7 +1288,7 @@ class S7CommPlusClient:
             raise RuntimeError("Not connected")
         if not values:
             return []
-        tags = [self.resolve_tag(name) for name in values]
+        tags, _ = self._resolve_tags(list(values))
         legacy = self.legacy_write_forms
         unsupported = [tag.name for tag in tags if _write_type(tag, legacy) is None]
         if unsupported:
@@ -1102,6 +1316,85 @@ class S7CommPlusClient:
             _record_tag_writes(results, answered, len(chunk), response)
             answered += len(chunk)
         return results
+
+    def read_value(self, name: str) -> Any:
+        """Read a tag, struct or array by name as a Python value.
+
+        A leaf tag gives its decoded value (see :func:`s7commplus.values.decode`).
+        The name of a struct, UDT instance or array gives a ``dict`` or ``list``
+        built from all its leaves, read as one batch (split over several requests
+        like :meth:`read_tags` when it is large); a DTL gives a
+        :class:`datetime.datetime`.
+
+        With ``auto_refresh_tags`` set, a name not in the catalog runs the
+        program-change check of :meth:`read_tags` once (rate-limited, and not
+        when this call browsed the catalog itself) and is looked up again; a
+        failed item does too, inside :meth:`read_tags`. A struct or array is read
+        with the members known when the call started, or after that lookup: if a
+        refresh during the read changes them, the call raises ``KeyError`` for a
+        member that is gone and leaves out one that is new.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            RuntimeError: The PLC reported an error for one of the items.
+        """
+        return self.read_values([name])[0]
+
+    def read_values(self, names: Sequence[str]) -> list[Any]:
+        """Read several tags, structs or arrays as one batch of leaves; see :meth:`read_value`."""
+        plans = self._plan_values(names)
+        results = self.read_tags([tag.name for _, _, tags in plans for tag in tags])
+        return _assemble_values(plans, results)
+
+    def write_value(self, name: str, value: Any) -> None:
+        """Write a Python value to a tag, struct or array by name.
+
+        Accepts what :meth:`read_value` returns. A ``dict`` for a struct may give
+        only some members; a ``list`` for an array must give every element. Every
+        leaf is encoded before anything is sent, then the leaves are written as
+        one batch through :meth:`write_tags`, which splits a large batch over
+        several requests; such a batch is not atomic. Like every write, it is
+        never retried. With ``auto_refresh_tags`` set, a name not in the catalog
+        runs the program-change check once, as for :meth:`read_value`, before
+        anything is encoded or sent.
+
+        Leaves go out in the forms :attr:`legacy_write_forms` selects. With it
+        set, a STRING or WSTRING leaf raises ``ValueError`` before anything is
+        sent, because those forms send the raw bytes as given rather than the
+        layout this method builds; CHAR and DATE_AND_TIME have the same raw bytes
+        in both forms.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            TypeError, ValueError: ``value`` does not fit the PLC type, a leaf
+                is too large for one request, or a STRING or WSTRING leaf is
+                written with :attr:`legacy_write_forms` set; nothing is sent.
+            RuntimeError: The PLC rejected one of the items, or a failure
+                interrupted a split batch; it is raised from the first failed
+                item's error, and the other items may have been written.
+        """
+        self.write_values({name: value})
+
+    def write_values(self, values: Mapping[str, Any]) -> None:
+        """Write several tags, structs or arrays as one batch of leaves; see :meth:`write_value`."""
+        encoded = _encode_values(self._plan_values(list(values)), values, self.legacy_write_forms)
+        _raise_failures(self.write_tags(encoded), "writes")
+
+    def _plan_values(self, names: Sequence[str]) -> list[_ValuePlan]:
+        """Look up each name's leaf tags; with ``auto_refresh_tags``, an unknown name checks once for a program change.
+
+        Only the lookup is retried after the check, never an encoding or a
+        request. As in :meth:`_resolve_tags`, no check runs when this call
+        browsed the catalog, which is then current.
+        """
+        may_check = bool(self._symbol_catalog)  # refresh_tag_catalog() browses a missing or empty catalog
+        catalog = self._symbol_catalog or self.refresh_tag_catalog()
+        try:
+            return _value_plans(catalog, names)
+        except KeyError:
+            if not (may_check and self._auto_refresh_check()):
+                raise
+        return _value_plans(self._symbol_catalog or self.refresh_tag_catalog(), names)
 
     def explore(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> bytes:
         """Browse the PLC object tree.
@@ -1297,6 +1590,10 @@ class S7CommPlusClient:
         Returns:
             List of variable info dicts.
         """
+        return self._browse_layout()[0]
+
+    def _browse_layout(self) -> tuple[list[dict[str, Any]], list[tuple[str, int, int]], dict[int, bytes]]:
+        """:meth:`browse`, also returning the block-list signature and type-info modification times."""
         if self._connection is None:
             raise RuntimeError("Not connected")
 
@@ -1304,7 +1601,8 @@ class S7CommPlusClient:
         # (a LID=1 read — needed for instance DBs whose TI is not their own RID) and seed
         # a root node per DB.
         root_nodes: list[typeinfo.Node] = []
-        for db_info in self.list_datablocks():
+        blocks = self.list_datablocks()
+        for db_info in blocks:
             if db_info.get("number", 0) <= 0 or db_info.get("rid", 0) == 0:
                 continue
             # A symbolic read may prompt a TCP RST on RST-happy firmware; retry once
@@ -1357,7 +1655,7 @@ class S7CommPlusClient:
                     "string_length": v.string_length,
                 }
             )
-        return variables
+        return variables, _block_signature(blocks), _type_info_times(root_nodes, type_objects)
 
     def _read_typeinfo_rid(self, db_rid: int) -> int:
         """Read LID=1 of a DB to get its type-info RID (0 if the DB has no readable value)."""

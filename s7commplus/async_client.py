@@ -9,6 +9,7 @@ import hmac
 import logging
 import ssl
 import struct
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Awaitable, Callable, Literal, Optional, TypeVar
@@ -18,6 +19,14 @@ from .error import S7CertificateError, S7ConnectionError, S7Error, S7IntegrityEr
 from . import typeinfo
 from .blob_decompressor import find_and_decompress
 from .client import (
+    _AUTO_REFRESH_MIN_INTERVAL,
+    _block_signature,
+    _type_info_times,
+    _ValuePlan,
+    _assemble_values,
+    _encode_values,
+    _raise_failures,
+    _value_plans,
     _LEGACY_KEY_CACHE,
     DBWriteItem,
     SymbolicReadItem,
@@ -233,6 +242,17 @@ class S7CommPlusAsyncClient:
         # Send CHAR, STRING, WSTRING and DATE_AND_TIME in their pre-0.3 forms; see
         # S7CommPlusClient.
         self.legacy_write_forms: bool = False
+        # What the cached catalog was built from, for refresh_caches_if_program_changed:
+        # the data-block list, and type-info RID -> VariableTypeStructModificationTime
+        # of each data block whose time the PLC reported.
+        self._block_layout_signature: Optional[list[tuple[str, int, int]]] = None
+        self._type_info_times: dict[int, bytes] = {}
+        # Opt-in: an unknown tag name, or a failed item in read_tags(), runs that
+        # check (once per call, at most every _AUTO_REFRESH_MIN_INTERVAL seconds)
+        # and, if the program changed, resolves and reads again. Writes that reached
+        # the PLC are never resent.
+        self.auto_refresh_tags: bool = False
+        self._last_auto_refresh_check: Optional[float] = None
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
@@ -451,7 +471,7 @@ class S7CommPlusAsyncClient:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
         _check_certificate_pin(tls_cert_fingerprint, tls_first)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
-        self._symbol_catalog = None
+        self._forget_tag_catalog()
         self._connect_params = {
             "host": host,
             "port": port,
@@ -915,7 +935,7 @@ class S7CommPlusAsyncClient:
         self._outgoing_bio = None
         self._oms_secret = None
         self._peer_certificate_fingerprint = None
-        self._symbol_catalog = None
+        self._forget_tag_catalog()
         self._server_session_version = None
         self._session_oms_version = None
         self._session_oms_version_cache_key = None
@@ -1615,12 +1635,71 @@ class S7CommPlusAsyncClient:
 
     async def refresh_tag_catalog(self) -> SymbolCatalog:
         """Browse the PLC and replace the cached symbolic tag catalog."""
-        self._symbol_catalog = SymbolCatalog.from_browse(await self.browse())
+        variables, signature, times = await self._browse_layout()
+        self._symbol_catalog = SymbolCatalog.from_browse(variables)
+        self._block_layout_signature, self._type_info_times = signature, times
         return self._symbol_catalog
+
+    async def refresh_caches_if_program_changed(self) -> bool:
+        """Refresh the tag catalog when the PLC program changed.
+
+        Named reads and writes send SymbolCRC 0, so the PLC does not verify that a
+        cached address still names the same variable. After a download that changes
+        a block, the cached addresses can point at the wrong variable. This compares
+        the data-block list with the one the catalog was built from and, when that is
+        unchanged, the type-info modification time of every cached data block (one
+        small EXPLORE each), and rebuilds the catalog when either changed. A recorded
+        time that no longer answers counts as a change, since a download may have
+        replaced the type-info object. Without a cached catalog it browses one. It is
+        opt-in: nothing is refreshed implicitly.
+
+        This narrows the window in which a stale address is used; it does not close
+        it. A change confined to a nested UDT or the PLC tag table may not show in the
+        block's own modification time; an instance DB moved to another FB keeps its
+        name, number and RID, and only its old type-info object is checked; a block
+        whose time the PLC does not report is checked by block list only. Call
+        ``refresh_tag_catalog()`` after a known download, and this method before
+        writing after a possible one.
+
+        Returns:
+            ``True`` when the catalog was refreshed.
+
+        Raises:
+            S7ConnectionError: If not connected.
+        """
+        if not self._connected:
+            raise S7ConnectionError("Not connected")
+        if _block_signature(await self.list_datablocks()) != self._block_layout_signature:
+            logger.info("The PLC data-block list changed; refreshing the tag catalog")
+            await self.refresh_tag_catalog()
+            return True
+        for ti_rid, seen in list(self._type_info_times.items()):
+            current = await self._read_type_info_time(ti_rid)
+            if current != seen:
+                logger.info("Type info %#x changed or no longer answers; refreshing the tag catalog", ti_rid)
+                await self.refresh_tag_catalog()
+                if current is None and self._type_info_times.get(ti_rid) == seen:
+                    # Still there, unchanged: the PLC does not answer the filtered EXPLORE
+                    # for it. Check that block by its list entry only, not rebrowse every time.
+                    del self._type_info_times[ti_rid]
+                return True
+        return False
+
+    async def _read_type_info_time(self, ti_rid: int) -> Optional[bytes]:
+        """EXPLORE one type-info object for its modification time (``None`` if not reported)."""
+        payload = _build_explore_request(ti_rid, [Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME])
+        response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+        return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
 
     def invalidate_tag_catalog(self) -> None:
         """Discard cached browse metadata after a PLC layout change."""
+        self._forget_tag_catalog()
+
+    def _forget_tag_catalog(self) -> None:
+        """Drop the cached catalog together with the layout it was built from."""
         self._symbol_catalog = None
+        self._block_layout_signature = None
+        self._type_info_times = {}
 
     async def resolve_tag(self, name: str) -> SymbolicTag:
         """Resolve a browsed tag name to its typed symbolic descriptor."""
@@ -1641,18 +1720,58 @@ class S7CommPlusAsyncClient:
         A batch over :attr:`max_items_per_request` names or
         :attr:`max_request_bytes` is split over several requests, as in
         :meth:`read_symbolic_multi`.
+
+        With ``auto_refresh_tags`` set, an unknown name or a failed item runs
+        :meth:`refresh_caches_if_program_changed` and, when the program did
+        change, resolves and reads the names again, once. The check runs at
+        most once per call, not when this call browsed the catalog itself, and
+        not within 10 seconds of the previous automatic check. A failed item
+        carries no PLC error code, so any failure triggers it; a name still
+        unknown afterwards raises ``KeyError``.
         """
         if not names:
             return []
-        tags = [await self.resolve_tag(name) for name in names]
+        tags, may_check = await self._resolve_tags(names)
+        results = await self._read_resolved_tags(tags)
+        if may_check and any(result.error is not None for result in results) and await self._auto_refresh_check():
+            results = await self._read_resolved_tags([await self.resolve_tag(name) for name in names])
+        return results
+
+    async def _resolve_tags(self, names: Sequence[str]) -> tuple[list[SymbolicTag], bool]:
+        """Resolve names; with ``auto_refresh_tags``, an unknown name checks for a program change.
+
+        Also returns whether the caller may still run an automatic check: not
+        after one ran here, and not when resolving browsed the catalog, which is
+        then current.
+        """
+        may_check = bool(self._symbol_catalog)  # resolve_tag() browses a missing or empty catalog
+        try:
+            return [await self.resolve_tag(name) for name in names], may_check
+        except KeyError:
+            if not (may_check and await self._auto_refresh_check()):
+                raise
+        return [await self.resolve_tag(name) for name in names], False
+
+    async def _auto_refresh_check(self) -> bool:
+        """Run the automatic program-change check, unless one ran recently; ``True`` if it refreshed."""
+        if not self.auto_refresh_tags:
+            return False
+        now = time.monotonic()
+        last = self._last_auto_refresh_check
+        if last is not None and now - last < _AUTO_REFRESH_MIN_INTERVAL:
+            logger.debug("Skipping the automatic program-change check; the last one ran %.1f s ago", now - last)
+            return False
+        self._last_auto_refresh_check = now
+        return await self.refresh_caches_if_program_changed()
+
+    async def _read_resolved_tags(self, tags: Sequence[SymbolicTag]) -> list[TagResult]:
         values = await self.read_symbolic_multi([(tag.access_area, list(tag.lids), 0) for tag in tags])
-        results = [
+        return [
             TagResult(tag=tag, value=value)
             if value is not None
             else TagResult(tag=tag, error=RuntimeError(f"Symbolic read failed for {tag.name!r}"))
             for tag, value in zip(tags, values)
         ]
-        return results
 
     async def write_tag(self, name: str, data: bytes) -> None:
         """Write one symbolic tag by name using its resolved PValue datatype."""
@@ -1677,12 +1796,18 @@ class S7CommPlusAsyncClient:
         :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
         characters...]`` and a WSTRING the same as big-endian UINTs, both padded
         with zeros to the declared length (``SymbolicTag.string_length``); a
-        DATE_AND_TIME is its eight BCD bytes. With :attr:`legacy_write_forms`
-        set, CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3
-        forms instead, and a STRING or WSTRING value is sent as given.
+        DATE_AND_TIME is its eight BCD bytes. :meth:`SymbolicTag.encode_value`
+        builds these from Python values. With :attr:`legacy_write_forms` set,
+        CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3 forms
+        instead, and a STRING or WSTRING value is sent as given.
 
         Writes are deliberately never retried: a transport failure can leave
         the caller unable to know whether the PLC applied the request.
+
+        With ``auto_refresh_tags`` set, an unknown name, before anything is sent,
+        runs the program-change check as in :meth:`read_tags`; a write to a stale
+        address does not, so call :meth:`refresh_caches_if_program_changed` before
+        writing after a possible download.
 
         Raises:
             ValueError: A value is too large for one request on its own;
@@ -1692,7 +1817,7 @@ class S7CommPlusAsyncClient:
             raise RuntimeError("Not connected")
         if not values:
             return []
-        tags = [await self.resolve_tag(name) for name in values]
+        tags, _ = await self._resolve_tags(list(values))
         legacy = self.legacy_write_forms
         unsupported = [tag.name for tag in tags if _write_type(tag, legacy) is None]
         if unsupported:
@@ -1719,6 +1844,85 @@ class S7CommPlusAsyncClient:
             _record_tag_writes(results, answered, len(chunk), response)
             answered += len(chunk)
         return results
+
+    async def read_value(self, name: str) -> Any:
+        """Read a tag, struct or array by name as a Python value.
+
+        A leaf tag gives its decoded value (see :func:`s7commplus.values.decode`).
+        The name of a struct, UDT instance or array gives a ``dict`` or ``list``
+        built from all its leaves, read as one batch (split over several requests
+        like :meth:`read_tags` when it is large); a DTL gives a
+        :class:`datetime.datetime`.
+
+        With ``auto_refresh_tags`` set, a name not in the catalog runs the
+        program-change check of :meth:`read_tags` once (rate-limited, and not
+        when this call browsed the catalog itself) and is looked up again; a
+        failed item does too, inside :meth:`read_tags`. A struct or array is read
+        with the members known when the call started, or after that lookup: if a
+        refresh during the read changes them, the call raises ``KeyError`` for a
+        member that is gone and leaves out one that is new.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            RuntimeError: The PLC reported an error for one of the items.
+        """
+        return (await self.read_values([name]))[0]
+
+    async def read_values(self, names: Sequence[str]) -> list[Any]:
+        """Read several tags, structs or arrays as one batch of leaves; see :meth:`read_value`."""
+        plans = await self._plan_values(names)
+        results = await self.read_tags([tag.name for _, _, tags in plans for tag in tags])
+        return _assemble_values(plans, results)
+
+    async def write_value(self, name: str, value: Any) -> None:
+        """Write a Python value to a tag, struct or array by name.
+
+        Accepts what :meth:`read_value` returns. A ``dict`` for a struct may give
+        only some members; a ``list`` for an array must give every element. Every
+        leaf is encoded before anything is sent, then the leaves are written as
+        one batch through :meth:`write_tags`, which splits a large batch over
+        several requests; such a batch is not atomic. Like every write, it is
+        never retried. With ``auto_refresh_tags`` set, a name not in the catalog
+        runs the program-change check once, as for :meth:`read_value`, before
+        anything is encoded or sent.
+
+        Leaves go out in the forms :attr:`legacy_write_forms` selects. With it
+        set, a STRING or WSTRING leaf raises ``ValueError`` before anything is
+        sent, because those forms send the raw bytes as given rather than the
+        layout this method builds; CHAR and DATE_AND_TIME have the same raw bytes
+        in both forms.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            TypeError, ValueError: ``value`` does not fit the PLC type, a leaf
+                is too large for one request, or a STRING or WSTRING leaf is
+                written with :attr:`legacy_write_forms` set; nothing is sent.
+            RuntimeError: The PLC rejected one of the items, or a failure
+                interrupted a split batch; it is raised from the first failed
+                item's error, and the other items may have been written.
+        """
+        await self.write_values({name: value})
+
+    async def write_values(self, values: Mapping[str, Any]) -> None:
+        """Write several tags, structs or arrays as one batch of leaves; see :meth:`write_value`."""
+        encoded = _encode_values(await self._plan_values(list(values)), values, self.legacy_write_forms)
+        _raise_failures(await self.write_tags(encoded), "writes")
+
+    async def _plan_values(self, names: Sequence[str]) -> list[_ValuePlan]:
+        """Look up each name's leaf tags; with ``auto_refresh_tags``, an unknown name checks once for a program change.
+
+        Only the lookup is retried after the check, never an encoding or a
+        request. As in :meth:`_resolve_tags`, no check runs when this call
+        browsed the catalog, which is then current.
+        """
+        may_check = bool(self._symbol_catalog)  # refresh_tag_catalog() browses a missing or empty catalog
+        catalog = self._symbol_catalog or await self.refresh_tag_catalog()
+        try:
+            return _value_plans(catalog, names)
+        except KeyError:
+            if not (may_check and await self._auto_refresh_check()):
+                raise
+        return _value_plans(self._symbol_catalog or await self.refresh_tag_catalog(), names)
 
     async def list_datablocks(self) -> list[dict[str, Any]]:
         """List all datablocks on the PLC via EXPLORE.
@@ -1752,11 +1956,16 @@ class S7CommPlusAsyncClient:
         Returns:
             List of variable info dicts.
         """
+        return (await self._browse_layout())[0]
+
+    async def _browse_layout(self) -> tuple[list[dict[str, Any]], list[tuple[str, int, int]], dict[int, bytes]]:
+        """:meth:`browse`, also returning the block-list signature and type-info modification times."""
         # Phase A: enumerate data blocks. Phase B/C: resolve each DB's type-info RID
         # (a LID=1 read — needed for instance DBs whose TI is not their own RID) and seed
         # a root node per DB.
         root_nodes: list[typeinfo.Node] = []
-        for db_info in await self.list_datablocks():
+        blocks = await self.list_datablocks()
+        for db_info in blocks:
             if db_info.get("number", 0) <= 0 or db_info.get("rid", 0) == 0:
                 continue
             ti_rid = await self._with_reconnect(lambda: self._read_typeinfo_rid(db_info["rid"]))
@@ -1805,7 +2014,7 @@ class S7CommPlusAsyncClient:
                     "string_length": v.string_length,
                 }
             )
-        return variables
+        return variables, _block_signature(blocks), _type_info_times(root_nodes, type_objects)
 
     async def _read_typeinfo_rid(self, db_rid: int) -> int:
         """Read LID=1 of a DB to get its type-info RID (0 if the DB has no readable value)."""
