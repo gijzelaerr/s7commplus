@@ -3,13 +3,18 @@
 Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 """
 
+import dataclasses
+import functools
 import logging
 import struct
+import threading
+import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Optional, TypeAlias, TypeVar
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextvars import ContextVar
+from typing import Any, Concatenate, Literal, Optional, ParamSpec, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError
+from .error import S7ConnectionError, S7ProtocolError, S7SubscriptionError, S7TimeoutError, S7TlsHandshakeError, S7WriteError
 
 from . import typeinfo
 from .alarm import (
@@ -28,17 +33,24 @@ from .codec import (
     encode_item_address,
     encode_object_qualifier,
     encode_pvalue_blob,
+    PValueArray,
+    encode_pvalue_array,
     encode_pvalue_typed,
     parse_create_object_session_id,
     parse_or_raise_for_return_value,
     skip_typed_value,
 )
-from .catalog import SymbolCatalog, SymbolicTag, TagResult
+from .catalog import SymbolCatalog, SymbolicTag, TagResult, _write_type
+from .values import assemble, split
 from .connection import (
     FamilyOnlyFingerprintError,
     S7CommPlusConnection,
     SessionKeyCandidateRejectedError,
     _check_certificate_pin,
+    _check_plaintext_fallback,
+    _check_timeout,
+    _resolve_use_tls,
+    _request_frame_overhead,
 )
 from .protocol import (
     OPERATING_STATE_RUN_OBSERVED,
@@ -70,9 +82,10 @@ logger = logging.getLogger(__name__)
 _LEGACY_KEY_CACHE: dict[tuple[str, int], str] = {}
 
 _T = TypeVar("_T")
+_P = ParamSpec("_P")
 DBWriteItem: TypeAlias = tuple[int, int, bytes, DataType]
 SymbolicReadItem: TypeAlias = tuple[int, list[int]] | tuple[int, list[int], int]
-SymbolicWriteItem: TypeAlias = tuple[int, list[int], bytes, int, DataType]
+SymbolicWriteItem: TypeAlias = tuple[int, list[int], bytes, int, DataType | PValueArray]
 
 
 def _normalize_write_item(item: DBWriteItem) -> tuple[int, int, bytes, DataType]:
@@ -90,10 +103,394 @@ def _normalize_symbolic_read_item(item: SymbolicReadItem) -> tuple[int, list[int
     return access_area, lids, symbol_crc
 
 
+def _chunks(items: Sequence[_T], size: int) -> Iterator[list[_T]]:
+    """Yield ``items`` in batches of at most ``size``; ``size <= 0`` means no split."""
+    if size <= 0:
+        yield list(items)
+        return
+    for start in range(0, len(items), size):
+        yield list(items[start : start + size])
+
+
+def _request_chunks(
+    items: Sequence[_T],
+    max_items: int,
+    max_request_bytes: int,
+    overhead: int,
+    build_payload: Callable[[list[_T]], bytes],
+) -> list[tuple[list[_T], bytes]]:
+    """Split ``items``, in order, into requests and build each payload.
+
+    A request holds at most ``max_items`` items (``<= 0``: no cap) and, unless
+    ``max_request_bytes <= 0``, its frame -- the payload plus ``overhead`` bytes
+    of framing (:func:`~s7commplus.connection._request_frame_overhead`) -- stays
+    within ``max_request_bytes``. All payloads are built before the caller sends
+    the first, so an item that cannot be encoded, or that is too large for a
+    request on its own, raises before anything reaches the PLC.
+
+    Linear in the number of items: each item is encoded alone once to learn its
+    size, and each request is built once, or again in the rare case that its
+    variable-length counts outgrow the estimate.
+
+    Raises:
+        ValueError: One item alone makes a frame over ``max_request_bytes``.
+    """
+    if not items:
+        return []
+    if max_request_bytes <= 0:
+        return [(chunk, build_payload(chunk)) for chunk in _chunks(items, max_items)]
+    budget = max_request_bytes - overhead
+    single = [len(build_payload([item])) for item in items]
+    # A payload is a fixed part plus one encoding per item, so two one-item
+    # payloads count the fixed part twice. The estimate leaves out the bytes a
+    # growing VLQ count adds; the built payload is checked and trimmed instead.
+    fixed = single[0] + single[1] - len(build_payload([items[0], items[1]])) if len(items) > 1 else 0
+    cap = max_items if max_items > 0 else len(items)
+    requests: list[tuple[list[_T], bytes]] = []
+    start = 0
+    while start < len(items):
+        end = start + 1
+        estimate = single[start]
+        while end < len(items) and end - start < cap and estimate + single[end] - fixed <= budget:
+            estimate += single[end] - fixed
+            end += 1
+        chunk = list(items[start:end])
+        payload = build_payload(chunk)
+        while len(payload) > budget and len(chunk) > 1:
+            chunk.pop()
+            payload = build_payload(chunk)
+        if len(payload) > budget:
+            raise ValueError(
+                f"item {start + 1} alone needs a {len(payload) + overhead}-byte request, over "
+                f"max_request_bytes={max_request_bytes}; split the value or raise max_request_bytes"
+            )
+        requests.append((chunk, payload))
+        start += len(chunk)
+    return requests
+
+
+def _db_read_values(response: bytes, count: int) -> list[bytes]:
+    """Return one value per item of a GetMultiVariables answer for ``count`` DB regions.
+
+    An item the PLC could not read is ``b""``, and so is every item of a request
+    it refused as a whole. An answer that does not account for each item exactly
+    once raises, so a value can never land on another item.
+    """
+    parsed = _parse_read_response(response, expected_count=count)
+    if not parsed:  # refused as a whole; the parser logged the return value
+        parsed = [None] * count
+    if len(parsed) != count:
+        raise RuntimeError(f"Multi-read failed: PLC returned {len(parsed)} of {count} items")
+    return [value if value is not None else b"" for value in parsed]
+
+
+def _write_item_errors(response: bytes, count: int) -> dict[int, int]:
+    """Return the PLC error of each refused item in a SetMultiVariables answer, numbered from 1.
+
+    A request refused as a whole (non-zero return value) refuses each of its
+    ``count`` items with that value. An answer naming an item outside
+    ``1..count``, or one item twice, raises ``RuntimeError``.
+    """
+    return_value, _ = decode_uint64_vlq(response, 0)
+    if return_value != 0:
+        return dict.fromkeys(range(1, count + 1), return_value)
+    return _parse_write_response_errors(response, expected_count=count)
+
+
+def _write_refused(item_errors: dict[int, int]) -> S7WriteError:
+    """The error for a batch in which the PLC refused ``item_errors``, keyed by batch position."""
+    listed = ", ".join(f"item {position}: error {code}" for position, code in list(item_errors.items())[:10])
+    more = f" and {len(item_errors) - 10} more" if len(item_errors) > 10 else ""
+    return S7WriteError(f"Write failed: {listed}{more}", item_errors)
+
+
+def _write_interrupted(item_errors: dict[int, int], answered: int, count: int, total: int, error: Exception) -> S7WriteError:
+    """The error for a batch of ``total`` items that ``error`` stopped after ``answered`` items.
+
+    The ``count`` items of the request in flight may or may not have been
+    written; the ones after it were never sent.
+    """
+    unknown = range(answered + 1, answered + count + 1)
+    not_sent = range(answered + count + 1, total + 1)
+    message = (
+        f"Write interrupted after {answered} of {total} items were answered: "
+        f"items {unknown.start}-{unknown.stop - 1} may or may not have been written"
+    )
+    if not_sent:
+        message += f" and items {not_sent.start}-{total} were not sent"
+    interrupted = S7WriteError(f"{message} ({error})", item_errors, unknown=unknown, not_sent=not_sent)
+    interrupted.__cause__ = error
+    return interrupted
+
+
+def _record_tag_writes(results: list[TagResult], start: int, count: int, response: bytes) -> None:
+    """Set the outcome of ``results[start:start + count]`` from one SetMultiVariables answer."""
+    try:
+        errors = _parse_write_response_errors(response, expected_count=count)
+    except RuntimeError as error:
+        for index in range(start, start + count):
+            results[index] = TagResult(tag=results[index].tag, error=error)
+        return
+    for number, code in errors.items():
+        tag = results[start + number - 1].tag
+        results[start + number - 1] = TagResult(
+            tag=tag, error=RuntimeError(f"Symbolic write failed for {tag.name!r}: PLC error {code}")
+        )
+
+
+def _interrupt_tag_writes(results: list[TagResult], start: int, count: int, error: Exception) -> None:
+    """Mark every tag from ``start`` on as unconfirmed after ``error`` stopped the batch."""
+    interrupted = _write_interrupted({}, start, count, len(results), error)
+    for index in range(start, len(results)):
+        results[index] = TagResult(tag=results[index].tag, error=interrupted)
+
+
+def _normalize_subscription_items(items: Sequence[SubscriptionItem | SymbolicTag | str]) -> list[SubscriptionItem]:
+    return [
+        SubscriptionItem.from_access_sequence(item)
+        if isinstance(item, str)
+        else SubscriptionItem.from_tag(item)
+        if isinstance(item, SymbolicTag)
+        else item
+        for item in items
+    ]
+
+
+def _check_subscription_size(payload: bytes, max_request_bytes: int, overhead: int) -> None:
+    """Refuse a subscription CreateObject the PLC would answer by dropping the connection."""
+    frame = len(payload) + overhead
+    if max_request_bytes > 0 and frame > max_request_bytes:
+        raise ValueError(
+            f"subscription request is {frame} bytes, over max_request_bytes={max_request_bytes}; "
+            "use create_subscriptions() to spread the items over several subscriptions"
+        )
+
+
+def _subscription_groups(
+    items: Sequence[SubscriptionItem],
+    max_request_bytes: int,
+    overhead: int,
+    build_payload: Callable[[list[SubscriptionItem]], bytes],
+) -> list[list[SubscriptionItem]]:
+    """Split subscription items, in order, into groups whose CreateObject fits ``max_request_bytes``.
+
+    Items without an explicit ``reference_id`` get their 1-based position in
+    ``items``, so reference ids stay unique across all the groups instead of
+    restarting at 1 in each subscription.
+
+    Raises:
+        ValueError: Two items share a reference id, or one item alone does not
+            fit a request.
+    """
+    numbered = [
+        item if item.reference_id else dataclasses.replace(item, reference_id=index) for index, item in enumerate(items, 1)
+    ]
+    used: set[int] = set()
+    for item in numbered:
+        if item.reference_id in used:
+            raise ValueError(f"duplicate subscription reference_id {item.reference_id}")
+        used.add(item.reference_id)
+    return [group for group, _ in _request_chunks(numbered, 0, max_request_bytes, overhead, build_payload)]
+
+
+def _subscriptions_interrupted(created: list[int], total: int, error: Exception) -> S7SubscriptionError:
+    """The error for ``create_subscriptions`` stopped by ``error`` after creating ``created``."""
+    return S7SubscriptionError(f"created {len(created)} of {total} subscriptions, then: {error}", created)
+
+
+# Minimum seconds between two automatic program-change checks (``auto_refresh_tags``).
+# A check costs 1 + N requests (N = data blocks with a recorded modification time),
+# so a tag that keeps failing, or a misspelt name, must not repeat it on every poll.
+_AUTO_REFRESH_MIN_INTERVAL = 10.0
+
+
+def _block_signature(blocks: Sequence[Mapping[str, Any]]) -> list[tuple[str, int, int]]:
+    """The identity of a data-block list, for detecting a program change."""
+    return sorted((str(block.get("name", "")), int(block.get("number", 0)), int(block.get("rid", 0))) for block in blocks)
+
+
+def _type_info_times(root_nodes: Sequence["typeinfo.Node"], type_objects: Sequence["typeinfo.PObject"]) -> dict[int, bytes]:
+    """Map each root's type-info RID to its modification time, where the PLC reports one."""
+    roots = {node.relation_id for node in root_nodes}
+    attribute = Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME
+    return {
+        obj.relation_id: obj.attributes[attribute]
+        for obj in type_objects
+        if obj.relation_id in roots and attribute in obj.attributes
+    }
+
+
+# A typed-value name, whether it is a leaf tag, and its leaf tags in catalog order.
+_ValuePlan: TypeAlias = tuple[str, bool, list[SymbolicTag]]
+
+
+def _value_tags(catalog: SymbolCatalog, name: str) -> tuple[bool, list[SymbolicTag]]:
+    """The leaf tag ``name``, or the leaves of the struct or array ``name`` (``False``)."""
+    try:
+        return True, [catalog.resolve(name)]
+    except KeyError:
+        members = catalog.members(name)
+        if not members:
+            raise
+        return False, members
+
+
+def _value_plans(catalog: SymbolCatalog, names: Iterable[str]) -> list[_ValuePlan]:
+    """Look up the leaf tags of each name; raises ``KeyError`` for a name the catalog lacks."""
+    return [(name, *_value_tags(catalog, name)) for name in names]
+
+
+def _raise_failures(results: Sequence[TagResult], action: str) -> None:
+    failed = [result for result in results if result.error is not None]
+    if failed:
+        names = ", ".join(repr(result.tag.name) for result in failed[:5]) + (", ..." if len(failed) > 5 else "")
+        raise RuntimeError(f"{len(failed)} of {len(results)} {action} failed: {names}") from failed[0].error
+
+
+def _assemble_values(plans: Sequence[_ValuePlan], results: Sequence[TagResult]) -> list[Any]:
+    """Decode read results and rebuild each requested name's value from its leaves."""
+    _raise_failures(results, "reads")
+    decoded = iter((result.tag.name, result.tag.decode_value(result.value or b"")) for result in results)
+    out: list[Any] = []
+    for name, leaf, tags in plans:
+        leaves = [next(decoded) for _ in tags]
+        out.append(leaves[0][1] if leaf else assemble(name, leaves))
+    return out
+
+
+# Types whose raw value write_tags() sends as given under legacy_write_forms, not in the
+# read layout SymbolicTag.encode_value() builds.
+_RAW_AS_GIVEN_UNDER_LEGACY_FORMS = frozenset({typeinfo.Softdatatype.STRING, typeinfo.Softdatatype.WSTRING})
+
+
+def _encode_values(plans: Sequence[_ValuePlan], values: Mapping[str, Any], legacy_forms: bool = False) -> dict[str, bytes]:
+    """Map each planned name's Python value in ``values`` onto its leaf tags' raw bytes.
+
+    With ``legacy_forms`` (``legacy_write_forms``), a STRING or WSTRING leaf raises
+    ``ValueError``: those forms send the raw bytes as given, not the read layout.
+    """
+    encoded: dict[str, bytes] = {}
+    for name, leaf, tags in plans:
+        value = values[name]
+        by_name = {tag.name: tag for tag in tags}
+        leaf_values = {name: value} if leaf else split(name, value, list(by_name))
+        if not leaf_values:
+            raise ValueError(f"Nothing to write for {name!r}")
+        for leaf_name, leaf_value in leaf_values.items():
+            if leaf_name in encoded:
+                raise ValueError(f"{leaf_name!r} is written twice")
+            tag = by_name[leaf_name]
+            if legacy_forms and tag.softdatatype in _RAW_AS_GIVEN_UNDER_LEGACY_FORMS:
+                raise ValueError(
+                    f"{leaf_name!r}: a {tag.softdatatype.name} is not written by value with legacy_write_forms set, "
+                    "which sends the raw bytes as given; use write_tags() or clear legacy_write_forms"
+                )
+            try:
+                encoded[leaf_name] = tag.encode_value(leaf_value)
+            except (TypeError, ValueError) as exc:
+                raise type(exc)(f"{leaf_name!r}: {exc}") from exc
+    return encoded
+
+
+# Seconds an automatic reconnect waits after the previous automatic attempt
+# ended, so that a PLC that is down, or a request that fails on every fresh
+# session, is not flooded with connection attempts.
+_AUTO_RECONNECT_MIN_INTERVAL = 1.0
+
+# Clients (by id) with an auto-reconnecting read in progress in this thread or
+# task. A wrapped read called from another (read_tag -> read_tags ->
+# read_symbolic_multi) leaves a dropped connection to the outermost call, so
+# one operation reconnects at most once. Tasks and threads have their own
+# context, so concurrent callers do not see each other's calls as nested.
+_AUTO_RECONNECT_ACTIVE: ContextVar[frozenset[int]] = ContextVar("s7commplus_auto_reconnect_active", default=frozenset())
+
+_AUTO_RECONNECT_STAND_DOWN = (
+    "Connection lost while data or alarm subscriptions depend on the session; auto-reconnect does not "
+    "rebuild it silently. Call reconnect(), then resubscribe() (or forget_lost_subscriptions()) and "
+    "create alarm subscriptions again."
+)
+
+# Attribute set to True on every method that _retry_on_dropped_connection (or
+# its async counterpart) wraps, so the retried set can be read off the classes.
+_AUTO_RECONNECT_MARKER = "_retries_on_dropped_connection"
+
+
+def _retry_on_dropped_connection(
+    method: Callable[Concatenate["S7CommPlusClient", _P], _T],
+) -> Callable[Concatenate["S7CommPlusClient", _P], _T]:
+    """Retry a read once on a fresh session when auto-reconnect is on.
+
+    Auto-reconnect retries exactly the methods that carry this decorator, or
+    its counterpart in ``async_client``, which follows the same policy:
+
+    - Reads only. Each rebuilds its request, which embeds the session id and
+      sequence number, so the retry wraps the operation rather than the raw
+      send. Writes are never decorated: a lost write may have been applied,
+      so it is never replayed.
+    - Only while ``auto_reconnect`` is on, and only after an
+      ``S7ConnectionError``; a timeout reaches the caller.
+    - Only the outermost decorated call handles a drop (see
+      ``_AUTO_RECONNECT_ACTIVE``), so one operation reconnects and runs again
+      at most once.
+    - ``_recover_dropped_connection`` decides whether to reconnect: it
+      serializes reconnects, stands down while subscriptions depend on the
+      session, and declines within ``_auto_reconnect_min_interval`` of the
+      last automatic attempt.
+
+    The wrapper keeps the method's name, docstring and signature, and sets
+    ``_AUTO_RECONNECT_MARKER``.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: "S7CommPlusClient", /, *args: _P.args, **kwargs: _P.kwargs) -> _T:
+        active = _AUTO_RECONNECT_ACTIVE.get()
+        if not self._auto_reconnect or id(self) in active:
+            return method(self, *args, **kwargs)
+        token = _AUTO_RECONNECT_ACTIVE.set(active | {id(self)})
+        try:
+            generation = self._generation
+            try:
+                return method(self, *args, **kwargs)
+            except S7ConnectionError as exc:
+                if not self._recover_dropped_connection(generation, exc):
+                    raise
+            logger.info("Retrying %s() on the new session", method.__name__)
+            return method(self, *args, **kwargs)
+        finally:
+            _AUTO_RECONNECT_ACTIVE.reset(token)
+
+    setattr(wrapper, _AUTO_RECONNECT_MARKER, True)
+    return wrapper
+
+
 class S7CommPlusClient:
     """S7CommPlus client for S7-1200/1500 PLCs.
 
     Use ``from s7commplus import Client`` to instantiate.
+
+    Attributes:
+        max_items_per_request: Most items one multi-item read or write request
+            carries (default 50; ``0`` sends a batch in one request). A larger
+            batch is split over several requests, in order. A CPU 1215C FW V4.2
+            refuses a read of more than 50 items; S7-1500 hardware has not been
+            measured.
+        max_request_bytes: Largest request frame a multi-item read or write,
+            or a subscription, sends (default 900; ``0`` disables the check).
+            The frame runs from the S7CommPlus frame header to its trailer and
+            includes the 14-byte request header, the IntegrityId at its 5-byte
+            maximum and, after SessionKey authentication, the 33-byte HMAC; the
+            TLS record, COTP and TPKT around it are not counted. A larger batch
+            is split; an item too large for one request raises ``ValueError``
+            before anything is sent.
+        legacy_write_forms: Send CHAR, STRING, WSTRING and DATE_AND_TIME from
+            :meth:`write_tags` in the forms used before 0.3 (default ``False``):
+            a CHAR as a BYTE, a STRING or WSTRING as an S7STRING or WSTRING
+            PValue of the value's bytes as given, and a DATE_AND_TIME as a
+            TIMESTAMP of its eight BCD bytes. By default a CHAR goes out as a
+            USINT and the other three as USINT, UINT and USINT arrays of the
+            layout :meth:`read_tags` returns. PLCSIM Advanced V8 (CPU 1511, FW
+            V2.9 with TLS and FW V2.8 without) refused the old forms and accepts
+            the default ones; neither has been checked on a hardware PLC.
     """
 
     def __init__(self) -> None:
@@ -107,10 +504,54 @@ class S7CommPlusClient:
         self._alarm_subscription_ids: set[int] = set()
         self._alarm_notification_frames: deque[bytes] = deque(maxlen=100)
         self._symbol_catalog: Optional[SymbolCatalog] = None
+        # Most items one multi-item read or write request carries; a larger batch
+        # is split over several requests, in order, and 0 sends it in one. A CPU
+        # 1215C FW V4.2 (non-TLS V1 SessionKey session) answers a read of 50 items
+        # and refuses one of 51 or more with return value 0xA027A6000054FFFC,
+        # whatever the request size; PLCSIM Advanced V8 (CPU 1511) is limited by
+        # the request size instead. S7-1500 hardware has not been measured.
+        self.max_items_per_request = 50
+        # Largest request frame (see the class docstring). On PLCSIM Advanced V8
+        # (CPU 1511, FW V2.9, TLS) a read with an 834-byte payload, a frame of
+        # about 860 bytes, was answered; one with a 1034-byte payload, about 1060
+        # bytes, made the PLC drop the connection. Unverified on hardware.
+        self.max_request_bytes = 900
+        # Send CHAR, STRING, WSTRING and DATE_AND_TIME in their pre-0.3 forms (see
+        # the class docstring and catalog._WRITE_FORMS). PLCSIM Advanced refused
+        # them; no hardware PLC has been checked with either form.
+        self.legacy_write_forms: bool = False
+        # What the cached catalog was built from, for refresh_caches_if_program_changed:
+        # the data-block list, and type-info RID -> VariableTypeStructModificationTime
+        # of each data block whose time the PLC reported.
+        self._block_layout_signature: Optional[list[tuple[str, int, int]]] = None
+        self._type_info_times: dict[int, bytes] = {}
+        # Opt-in: an unknown tag name, or a failed item in read_tags(), runs that
+        # check (once per call, at most every _AUTO_REFRESH_MIN_INTERVAL seconds)
+        # and, if the program changed, resolves and reads again. Writes that reached
+        # the PLC are never resent.
+        self.auto_refresh_tags: bool = False
+        self._last_auto_refresh_check: Optional[float] = None
+        # Sessions rebuilt by a reconnect. Reconnects are serialized so that one
+        # never tears down the session another has just built.
+        self._generation = 0
+        self._reconnect_lock = threading.Lock()
+        # Opt-in: a read that finds the connection dropped reconnects and retries once.
+        self._auto_reconnect = False
+        self._auto_reconnect_min_interval = _AUTO_RECONNECT_MIN_INTERVAL
+        self._last_auto_reconnect = float("-inf")
 
     @property
     def connected(self) -> bool:
         return self._connection is not None and self._connection.connected
+
+    def _frame_overhead(self) -> int:
+        """Bytes this session's request frames add to a payload."""
+        assert self._connection is not None
+        return _request_frame_overhead(self._connection._with_integrity_id, self._connection._session_key is not None)
+
+    def _plan_requests(self, items: Sequence[_T], build_payload: Callable[[list[_T]], bytes]) -> list[tuple[list[_T], bytes]]:
+        """Split a batch into the requests it needs, in order, with their payloads."""
+        return _request_chunks(items, self.max_items_per_request, self.max_request_bytes, self._frame_overhead(), build_payload)
 
     @property
     def protocol_version(self) -> int:
@@ -182,13 +623,33 @@ class S7CommPlusClient:
             return None
         return self._connection.session_oms_version
 
+    @property
+    def connection_generation(self) -> int:
+        """Count of reconnects the client has performed; a change means the session was rebuilt."""
+        return self._generation
+
+    @property
+    def auto_reconnect(self) -> bool:
+        """Whether a read that finds the connection dropped reconnects and runs once more.
+
+        Set by ``connect(auto_reconnect=...)``; a change made later outlasts
+        reconnects. Writes are never retried. Neither is a read that timed out:
+        ``S7TimeoutError`` is not an ``S7ConnectionError``. When the timeout
+        ended the session, the next call finds it dropped and reconnects.
+        """
+        return self._auto_reconnect
+
+    @auto_reconnect.setter
+    def auto_reconnect(self, enabled: bool) -> None:
+        self._auto_reconnect = enabled
+
     def connect(
         self,
         host: str,
         port: int = 102,
         rack: int = 0,
         slot: int = 1,
-        use_tls: bool = False,
+        use_tls: bool | Literal["auto"] = False,
         tls_cert: Optional[str] = None,
         tls_key: Optional[str] = None,
         tls_ca: Optional[str] = None,
@@ -197,8 +658,13 @@ class S7CommPlusClient:
         legacy_session_key_refresh_interval: Optional[float] = 25 * 60.0,
         *,
         tls_cert_fingerprint: Optional[str] = None,
+        timeout: float = 5.0,
+        request_timeout: Optional[float] = None,
+        explore_timeout: Optional[float] = 30.0,
+        notification_timeout: Optional[float] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
+        auto_reconnect: bool = False,
     ) -> None:
         """Connect to an S7-1200/1500 PLC using S7CommPlus.
 
@@ -207,7 +673,10 @@ class S7CommPlusClient:
             port: TCP port (default 102)
             rack: PLC rack number (unused, kept for API symmetry)
             slot: PLC slot number (unused, kept for API symmetry)
-            use_tls: Whether to activate TLS (required for V2)
+            use_tls: Whether to activate TLS (required for V2). ``"auto"``
+                tries TLS first and continues without it only when the TLS
+                handshake does not complete and no pin, CA, client certificate
+                or password is given; see :ref:`automatic-tls`.
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
@@ -221,6 +690,21 @@ class S7CommPlusClient:
                 fresh sessions when a legacy PLC omits its key id.
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals, or ``None`` to disable them.
+            timeout: Seconds for the TCP connect and the COTP, InitSSL, TLS
+                and CreateObject handshake together.
+            request_timeout: Seconds to wait for each reply once the handshake
+                is done (and for each further part of a multi-part reply), or
+                ``None`` to use ``timeout``. A reply that does not arrive in
+                time raises ``S7TimeoutError`` and closes the session, as its
+                state is then unknown; ``connected`` turns ``False``.
+            explore_timeout: The same bound for the reply to an EXPLORE (sent
+                by :meth:`browse`, :meth:`list_datablocks`, :meth:`explore`,
+                :meth:`get_cpu_state` and :meth:`read_alarms`, among others),
+                whose answer can be large; 30 s by default, or ``None`` to use
+                the request timeout.
+            notification_timeout: Seconds a notification receiver waits by
+                default (subscriptions and alarms), or ``None`` to use the
+                request timeout.
             legacy_s7_1500: Override the non-TLS V1 SessionKey profile (structured
                 browse, V2 object qualifier, trailing IntegrityId, chained fragment
                 HMAC). ``None`` (default) selects it automatically for every V1
@@ -234,16 +718,25 @@ class S7CommPlusClient:
                 engineering-style operations differently per role is not
                 verified against a PLC, so try ``"es"`` if the default is
                 refused.
+            auto_reconnect: When a read finds the connection dropped, reconnect
+                and run it once more (see :attr:`auto_reconnect`). Writes are
+                never retried. Off by default.
         """
-        if legacy_s7_1500 and use_tls:
+        tls_first, auto_tls = _resolve_use_tls(use_tls)
+        if legacy_s7_1500 and tls_first:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
-        _check_certificate_pin(tls_cert_fingerprint, use_tls)  # validate early
+        _check_certificate_pin(tls_cert_fingerprint, tls_first)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
-        self._symbol_catalog = None
+        _check_timeout("timeout", timeout, optional=False)
+        _check_timeout("request_timeout", request_timeout)
+        _check_timeout("explore_timeout", explore_timeout)
+        _check_timeout("notification_timeout", notification_timeout)
+        self._forget_tag_catalog()
         self._connect_params = {
             "host": host,
             "port": port,
-            "use_tls": use_tls,
+            "use_tls": tls_first,
+            "auto_tls": auto_tls,
             "tls_cert": tls_cert,
             "tls_key": tls_key,
             "tls_ca": tls_ca,
@@ -251,15 +744,39 @@ class S7CommPlusClient:
             "password": password,
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
+            "timeout": timeout,
+            "request_timeout": request_timeout,
+            "explore_timeout": explore_timeout,
+            "notification_timeout": notification_timeout,
             "legacy_s7_1500": legacy_s7_1500,
             "connection_type": connection_type,
         }
+        self._auto_reconnect = auto_reconnect
         self._open_connection()
 
     def _open_connection(self) -> None:
-        """(Re)open the connection using the stored ``connect()`` arguments."""
+        """(Re)open the connection using the stored ``connect()`` arguments.
+
+        With ``use_tls="auto"`` every (re)connect tries TLS first, so a
+        fallback to plaintext never outlives the connection it was made for.
+        """
         if self._connect_params is None:
             raise RuntimeError("Not connected")
+        p = self._connect_params
+        if not p["auto_tls"]:
+            self._open_connection_with_key_fallback()
+            return
+        p["use_tls"] = True
+        try:
+            self._open_connection_with_key_fallback()
+        except S7TlsHandshakeError as exc:
+            _check_plaintext_fallback(p, exc)
+            p["use_tls"] = False
+            self._open_connection_with_key_fallback()
+
+    def _open_connection_with_key_fallback(self) -> None:
+        """Open the connection, trying bundled same-family keys when the PLC withholds its key id."""
+        assert self._connect_params is not None
         p = self._connect_params
         cache_key = (p["host"], p["port"])
         cached = _LEGACY_KEY_CACHE.get(cache_key) if p["allow_legacy_key_fallback"] else None
@@ -296,6 +813,10 @@ class S7CommPlusClient:
             connection_type=p["connection_type"],
         )
         self._connection.connect(
+            timeout=p["timeout"],
+            request_timeout=p["request_timeout"],
+            explore_timeout=p["explore_timeout"],
+            notification_timeout=p["notification_timeout"],
             use_tls=p["use_tls"],
             tls_cert=p["tls_cert"],
             tls_key=p["tls_key"],
@@ -339,6 +860,15 @@ class S7CommPlusClient:
         symbolic ``GetMultiVariables`` read per connection, so multi-step flows
         such as :meth:`browse` need a fresh session to continue.
         """
+        with self._reconnect_lock:
+            self._rebuild_session()
+
+    def _rebuild_session(self) -> None:
+        """Replace the session using the stored parameters; the caller holds the reconnect lock.
+
+        A failed attempt keeps the parameters, so a later reconnect can still
+        succeed once the PLC is reachable again.
+        """
         self._subscriptions.clear()
         self._alarm_subscription_ids.clear()
         self._alarm_notification_frames.clear()
@@ -348,6 +878,25 @@ class S7CommPlusClient:
             except Exception:
                 pass
         self._open_connection()
+        self._generation += 1
+
+    def reconnect(self) -> None:
+        """Re-establish the connection with the parameters from the last connect().
+
+        The new session is legitimated with the password given to ``connect()``.
+        Data subscriptions that were live are remembered so :meth:`resubscribe`
+        can recreate them; alarm subscriptions must be created again, and
+        notifications from the gap are not replayed. A failed attempt keeps the
+        parameters, so ``reconnect()`` can be repeated once the PLC is back.
+
+        Raises:
+            RuntimeError: ``connect()`` was never called, or ``disconnect()``
+                cleared its parameters.
+        """
+        if self._connect_params is None:
+            raise RuntimeError("Not connected")
+        logger.info("Reconnecting to the PLC")
+        self._reconnect()
 
     def _with_reconnect(self, op: Callable[[], "_T"]) -> "_T":
         """Run ``op``; if the socket was RST by the PLC, reconnect once and retry.
@@ -359,8 +908,36 @@ class S7CommPlusClient:
             return op()
         except S7ConnectionError as exc:
             logger.info("Connection dropped by PLC (%s); reconnecting and retrying", exc)
-            self._reconnect()
+            try:
+                self._reconnect()
+            finally:
+                # Counts as an automatic attempt, so an auto-reconnecting browse()
+                # does not try again at once when this one failed.
+                self._last_auto_reconnect = time.monotonic()
             return op()
+
+    def _recover_dropped_connection(self, generation: int, exc: S7ConnectionError) -> bool:
+        """Prepare the retry of an auto-reconnecting read that found the connection dropped.
+
+        ``generation`` is the session the read started on. Returns ``False``
+        to hand the original error to the caller instead of retrying.
+        """
+        with self._reconnect_lock:
+            if self._generation != generation:
+                return True  # another call already rebuilt the session; retry on it
+            if self._connect_params is None:
+                return False
+            if self._subscriptions.subscription_ids or self._subscriptions.pending_restore or self._alarm_subscription_ids:
+                raise S7ConnectionError(_AUTO_RECONNECT_STAND_DOWN) from exc
+            if time.monotonic() - self._last_auto_reconnect < self._auto_reconnect_min_interval:
+                logger.debug("Connection lost (%s); the last automatic reconnect ended too recently to try again", exc)
+                return False
+            logger.info("Connection lost (%s); reconnecting", exc)
+            try:
+                self._rebuild_session()
+            finally:
+                self._last_auto_reconnect = time.monotonic()
+            return True
 
     def disconnect(self) -> None:
         """Disconnect from PLC."""
@@ -371,7 +948,7 @@ class S7CommPlusClient:
             self._connection.disconnect()
             self._connection = None
         self._connect_params = None
-        self._symbol_catalog = None
+        self._forget_tag_catalog()
 
     def peer_certificate_fingerprint(self) -> Optional[bytes]:
         """SHA-256 of the PLC's TLS certificate, or None without TLS.
@@ -383,6 +960,7 @@ class S7CommPlusClient:
             return None
         return self._connection.peer_certificate_fingerprint()
 
+    @_retry_on_dropped_connection
     def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block.
 
@@ -433,12 +1011,28 @@ class S7CommPlusClient:
         self.db_write_multi([(db_number, start, data, datatype)])
 
     def db_write_multi(self, items: list[DBWriteItem]) -> None:
-        """Write multiple data block regions in a single request.
+        """Write multiple data block regions.
+
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic. The PLC writes every item it does not refuse, and a
+        refused item does not stop the batch.
 
         Args:
             items: ``(db_number, start_offset, data, datatype)`` tuples.
                 The datatype must match the target PLC variable. BLOB is not
                 a generic replacement for scalar datatypes.
+
+        Raises:
+            S7WriteError: After the last request, if the PLC refused any item;
+                ``item_errors`` is keyed by position in ``items``. Also when a
+                connection, timeout or protocol failure interrupts a split batch
+                after its first request (the failure is the ``__cause__``):
+                ``unknown`` and ``not_sent`` then name the items that may or may
+                not have been written and the ones never sent. A failure of the
+                first request propagates unchanged, as for a single request.
+            ValueError: An item is too large for one request on its own;
+                nothing is sent.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -451,9 +1045,24 @@ class S7CommPlusClient:
                 self._db_write_substreamed(db_number, start, data, datatype)
             return
 
-        payload = _build_write_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
-        _parse_write_response(response)
+        def build_write(chunk: list[DBWriteItem]) -> bytes:
+            assert self._connection is not None
+            return _build_write_payload(chunk, self._connection.object_qualifier_version)
+
+        item_errors: dict[int, int] = {}
+        answered = 0
+        for chunk, payload in self._plan_requests(items, build_write):
+            try:
+                response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+                errors = _write_item_errors(response, len(chunk))
+            except Exception as error:
+                if answered == 0:
+                    raise
+                raise _write_interrupted(item_errors, answered, len(chunk), len(items), error) from error
+            item_errors.update((answered + number, code) for number, code in errors.items())
+            answered += len(chunk)
+        if item_errors:
+            raise _write_refused(item_errors)
 
     def write_multi(self, items: list[DBWriteItem]) -> None:
         """Alias for :meth:`db_write_multi`."""
@@ -472,14 +1081,24 @@ class S7CommPlusClient:
         )
         self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload)
 
+    @_retry_on_dropped_connection
     def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
-        """Read multiple data block regions in a single request.
+        """Read multiple data block regions.
+
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        and the values are merged.
 
         Args:
             items: List of (db_number, start_offset, size) tuples
 
         Returns:
-            List of raw bytes for each item
+            One value per item, in item order. An item the PLC could not read,
+            including every item of a request it refused as a whole, is ``b""``.
+
+        Raises:
+            RuntimeError: If an answer does not account for each of its items
+                exactly once.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -487,11 +1106,17 @@ class S7CommPlusClient:
         if self._connection.requires_substreamed:
             return [self._db_read_substreamed(db, start, size) for db, start, size in items]
 
-        payload = _build_read_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
-        parsed = _parse_read_response(response)
-        return [r if r is not None else b"" for r in parsed]
+        def build_read(chunk: list[tuple[int, int, int]]) -> bytes:
+            assert self._connection is not None
+            return _build_read_payload(chunk, self._connection.object_qualifier_version)
 
+        results: list[bytes] = []
+        for chunk, payload in self._plan_requests(items, build_read):
+            response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            results.extend(_db_read_values(response, len(chunk)))
+        return results
+
+    @_retry_on_dropped_connection
     def read_area(self, area_rid: int, start: int, size: int) -> bytes:
         """Read raw bytes from a controller memory area (M, I, Q, counters, timers).
 
@@ -553,6 +1178,7 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
 
+    @_retry_on_dropped_connection
     def read_symbolic(self, access_area: int, lids: list[int], symbol_crc: int = 0) -> bytes:
         """Read a variable using S7CommPlus symbolic (LID-based) access.
 
@@ -597,10 +1223,15 @@ class S7CommPlusClient:
             raise RuntimeError("Symbolic read failed")
         return results[0]
 
+    @_retry_on_dropped_connection
     def read_symbolic_multi(self, items: Sequence[SymbolicReadItem]) -> list[Optional[bytes]]:
         """Read multiple variables using S7CommPlus symbolic (LID-based) access.
 
         .. warning:: This method is **experimental** and may change.
+
+        A batch over :attr:`max_items_per_request` items or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        and the values are merged.
 
         Args:
             items: ``(access_area, lids)`` tuples, or three-tuples adding a
@@ -617,11 +1248,17 @@ class S7CommPlusClient:
         if not items:
             return []
 
-        payload = _build_multi_symbolic_read_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
-        results = _parse_read_response(response, expected_count=len(items))
-        if len(results) != len(items):
-            raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(results)} of {len(items)} items")
+        def build_read(chunk: list[SymbolicReadItem]) -> bytes:
+            assert self._connection is not None
+            return _build_multi_symbolic_read_payload(chunk, self._connection.object_qualifier_version)
+
+        results: list[Optional[bytes]] = []
+        for chunk, payload in self._plan_requests(items, build_read):
+            response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            parsed = _parse_read_response(response, expected_count=len(chunk))
+            if len(parsed) != len(chunk):
+                raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
+            results.extend(parsed)
         return results
 
     def write_symbolic(
@@ -663,18 +1300,80 @@ class S7CommPlusClient:
 
     def refresh_tag_catalog(self) -> SymbolCatalog:
         """Browse the PLC and replace the cached symbolic tag catalog."""
-        self._symbol_catalog = SymbolCatalog.from_browse(self.browse())
+        variables, signature, times = self._browse_layout()
+        self._symbol_catalog = SymbolCatalog.from_browse(variables)
+        self._block_layout_signature, self._type_info_times = signature, times
         return self._symbol_catalog
+
+    def refresh_caches_if_program_changed(self) -> bool:
+        """Refresh the tag catalog when the PLC program changed.
+
+        Named reads and writes send SymbolCRC 0, so the PLC does not verify that a
+        cached address still names the same variable. After a download that changes
+        a block, the cached addresses can point at the wrong variable. This compares
+        the data-block list with the one the catalog was built from and, when that is
+        unchanged, the type-info modification time of every cached data block (one
+        small EXPLORE each), and rebuilds the catalog when either changed. A recorded
+        time that no longer answers counts as a change, since a download may have
+        replaced the type-info object. Without a cached catalog it browses one. It is
+        opt-in: nothing is refreshed implicitly.
+
+        This narrows the window in which a stale address is used; it does not close
+        it. A change confined to a nested UDT or the PLC tag table may not show in the
+        block's own modification time; an instance DB moved to another FB keeps its
+        name, number and RID, and only its old type-info object is checked; a block
+        whose time the PLC does not report is checked by block list only. Call
+        ``refresh_tag_catalog()`` after a known download, and this method before
+        writing after a possible one.
+
+        Returns:
+            ``True`` when the catalog was refreshed.
+
+        Raises:
+            RuntimeError: If not connected.
+        """
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        if _block_signature(self.list_datablocks()) != self._block_layout_signature:
+            logger.info("The PLC data-block list changed; refreshing the tag catalog")
+            self.refresh_tag_catalog()
+            return True
+        for ti_rid, seen in list(self._type_info_times.items()):
+            current = self._read_type_info_time(ti_rid)
+            if current != seen:
+                logger.info("Type info %#x changed or no longer answers; refreshing the tag catalog", ti_rid)
+                self.refresh_tag_catalog()
+                if current is None and self._type_info_times.get(ti_rid) == seen:
+                    # Still there, unchanged: the PLC does not answer the filtered EXPLORE
+                    # for it. Check that block by its list entry only, not rebrowse every time.
+                    del self._type_info_times[ti_rid]
+                return True
+        return False
+
+    def _read_type_info_time(self, ti_rid: int) -> Optional[bytes]:
+        """EXPLORE one type-info object for its modification time (``None`` if not reported)."""
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        payload = _build_explore_request(ti_rid, [Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME])
+        response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+        return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
 
     def invalidate_tag_catalog(self) -> None:
         """Discard cached browse metadata after a PLC layout change."""
+        self._forget_tag_catalog()
+
+    def _forget_tag_catalog(self) -> None:
+        """Drop the cached catalog together with the layout it was built from."""
         self._symbol_catalog = None
+        self._block_layout_signature = None
+        self._type_info_times = {}
 
     def resolve_tag(self, name: str) -> SymbolicTag:
         """Resolve a browsed tag name to its typed symbolic descriptor."""
         catalog = self._symbol_catalog or self.refresh_tag_catalog()
         return catalog.resolve(name)
 
+    @_retry_on_dropped_connection
     def read_tag(self, name: str) -> bytes:
         """Read one symbolic tag by name."""
         result = self.read_tags([name])[0]
@@ -683,25 +1382,70 @@ class S7CommPlusClient:
         assert result.value is not None
         return result.value
 
+    @_retry_on_dropped_connection
     def read_tags(self, names: Sequence[str]) -> list[TagResult]:
-        """Read names in one request and return a success/error for every item.
+        """Read names and return a success/error for every item.
+
+        A batch over :attr:`max_items_per_request` names or
+        :attr:`max_request_bytes` is split over several requests, as in
+        :meth:`read_symbolic_multi`.
 
         Requests carry SymbolCRC 0 (no layout check): the browsed per-entry CRC
         is not the value the PLC validates, and real CPUs reject it. Failed
         items are reported, not retried; call :meth:`refresh_tag_catalog` after
         a PLC layout change.
+
+        With ``auto_refresh_tags`` set, an unknown name or a failed item runs
+        :meth:`refresh_caches_if_program_changed` and, when the program did
+        change, resolves and reads the names again, once. The check runs at
+        most once per call, not when this call browsed the catalog itself, and
+        not within 10 seconds of the previous automatic check. A failed item
+        carries no PLC error code, so any failure triggers it; a name still
+        unknown afterwards raises ``KeyError``.
         """
         if not names:
             return []
-        tags = [self.resolve_tag(name) for name in names]
+        tags, may_check = self._resolve_tags(names)
+        results = self._read_resolved_tags(tags)
+        if may_check and any(result.error is not None for result in results) and self._auto_refresh_check():
+            results = self._read_resolved_tags([self.resolve_tag(name) for name in names])
+        return results
+
+    def _resolve_tags(self, names: Sequence[str]) -> tuple[list[SymbolicTag], bool]:
+        """Resolve names; with ``auto_refresh_tags``, an unknown name checks for a program change.
+
+        Also returns whether the caller may still run an automatic check: not
+        after one ran here, and not when resolving browsed the catalog, which is
+        then current.
+        """
+        may_check = bool(self._symbol_catalog)  # resolve_tag() browses a missing or empty catalog
+        try:
+            return [self.resolve_tag(name) for name in names], may_check
+        except KeyError:
+            if not (may_check and self._auto_refresh_check()):
+                raise
+        return [self.resolve_tag(name) for name in names], False
+
+    def _auto_refresh_check(self) -> bool:
+        """Run the automatic program-change check, unless one ran recently; ``True`` if it refreshed."""
+        if not self.auto_refresh_tags:
+            return False
+        now = time.monotonic()
+        last = self._last_auto_refresh_check
+        if last is not None and now - last < _AUTO_REFRESH_MIN_INTERVAL:
+            logger.debug("Skipping the automatic program-change check; the last one ran %.1f s ago", now - last)
+            return False
+        self._last_auto_refresh_check = now
+        return self.refresh_caches_if_program_changed()
+
+    def _read_resolved_tags(self, tags: Sequence[SymbolicTag]) -> list[TagResult]:
         values = self.read_symbolic_multi([(tag.access_area, list(tag.lids), 0) for tag in tags])
-        results = [
+        return [
             TagResult(tag=tag, value=value)
             if value is not None
             else TagResult(tag=tag, error=RuntimeError(f"Symbolic read failed for {tag.name!r}"))
             for tag, value in zip(tags, values)
         ]
-        return results
 
     def write_tag(self, name: str, data: bytes) -> None:
         """Write one symbolic tag by name using its resolved PValue datatype."""
@@ -710,36 +1454,150 @@ class S7CommPlusClient:
             raise result.error
 
     def write_tags(self, values: Mapping[str, bytes]) -> list[TagResult]:
-        """Write names in one request and return a success/error per item.
+        """Write names and return a success/error per item.
+
+        A batch over :attr:`max_items_per_request` names or
+        :attr:`max_request_bytes` is split over several requests, sent in order,
+        so it is not atomic; a tag the PLC refuses does not stop the batch. If a
+        connection, timeout or protocol failure interrupts the batch after its
+        first request, the tags written so far keep their results and every
+        later tag gets one :class:`~s7commplus.error.S7WriteError`, raised from
+        that failure, whose ``unknown`` positions may or may not have been
+        written and whose ``not_sent`` positions were never sent. A failure of
+        the first request propagates unchanged, as for a single request.
+
+        Each value is the tag's raw big-endian bytes in the layout
+        :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
+        characters...]`` and a WSTRING the same as big-endian UINTs, both padded
+        with zeros to the declared length (``SymbolicTag.string_length``); a
+        DATE_AND_TIME is its eight BCD bytes. :meth:`SymbolicTag.encode_value`
+        builds these from Python values. With :attr:`legacy_write_forms` set,
+        CHAR, STRING, WSTRING and DATE_AND_TIME go out in their pre-0.3 forms
+        instead, and a STRING or WSTRING value is sent as given.
 
         Writes are deliberately never retried: a transport failure can leave
-        the caller unable to know whether the PLC applied the request.
+        the caller unable to know whether the PLC applied the request, and a
+        stale address may already have written another variable. With
+        ``auto_refresh_tags`` set, an unknown name, before anything is sent,
+        runs the program-change check as in :meth:`read_tags`; a write to a
+        stale address does not, so call :meth:`refresh_caches_if_program_changed`
+        before writing after a possible download.
+
+        Raises:
+            ValueError: A value is too large for one request on its own;
+                nothing is sent.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
         if not values:
             return []
-        tags = [self.resolve_tag(name) for name in values]
-        unsupported = [tag.name for tag in tags if tag.datatype is None]
+        tags, _ = self._resolve_tags(list(values))
+        legacy = self.legacy_write_forms
+        unsupported = [tag.name for tag in tags if _write_type(tag, legacy) is None]
         if unsupported:
             raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
         items: list[SymbolicWriteItem] = [
-            (tag.access_area, list(tag.lids), data, 0, tag.datatype)
+            (tag.access_area, list(tag.lids), data, 0, write_type)
             for tag, data in zip(tags, values.values())
-            if tag.datatype is not None
+            if (write_type := _write_type(tag, legacy)) is not None
         ]
-        payload = _build_multi_symbolic_write_payload(items, self._connection.object_qualifier_version)
-        response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+
+        def build_write(chunk: list[SymbolicWriteItem]) -> bytes:
+            assert self._connection is not None
+            return _build_multi_symbolic_write_payload(chunk, self._connection.object_qualifier_version)
+
+        results: list[TagResult] = [TagResult(tag=tag) for tag in tags]
+        answered = 0
+        for chunk, payload in self._plan_requests(items, build_write):
+            try:
+                response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+            except Exception as error:
+                if answered == 0:
+                    raise
+                _interrupt_tag_writes(results, answered, len(chunk), error)
+                break
+            _record_tag_writes(results, answered, len(chunk), response)
+            answered += len(chunk)
+        return results
+
+    def read_value(self, name: str) -> Any:
+        """Read a tag, struct or array by name as a Python value.
+
+        A leaf tag gives its decoded value (see :func:`s7commplus.values.decode`).
+        The name of a struct, UDT instance or array gives a ``dict`` or ``list``
+        built from all its leaves, read as one batch (split over several requests
+        like :meth:`read_tags` when it is large); a DTL gives a
+        :class:`datetime.datetime`.
+
+        With ``auto_refresh_tags`` set, a name not in the catalog runs the
+        program-change check of :meth:`read_tags` once (rate-limited, and not
+        when this call browsed the catalog itself) and is looked up again; a
+        failed item does too, inside :meth:`read_tags`. A struct or array is read
+        with the members known when the call started, or after that lookup: if a
+        refresh during the read changes them, the call raises ``KeyError`` for a
+        member that is gone and leaves out one that is new.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            RuntimeError: The PLC reported an error for one of the items.
+        """
+        return self.read_values([name])[0]
+
+    def read_values(self, names: Sequence[str]) -> list[Any]:
+        """Read several tags, structs or arrays as one batch of leaves; see :meth:`read_value`."""
+        plans = self._plan_values(names)
+        results = self.read_tags([tag.name for _, _, tags in plans for tag in tags])
+        return _assemble_values(plans, results)
+
+    def write_value(self, name: str, value: Any) -> None:
+        """Write a Python value to a tag, struct or array by name.
+
+        Accepts what :meth:`read_value` returns. A ``dict`` for a struct may give
+        only some members; a ``list`` for an array must give every element. Every
+        leaf is encoded before anything is sent, then the leaves are written as
+        one batch through :meth:`write_tags`, which splits a large batch over
+        several requests; such a batch is not atomic. Like every write, it is
+        never retried. With ``auto_refresh_tags`` set, a name not in the catalog
+        runs the program-change check once, as for :meth:`read_value`, before
+        anything is encoded or sent.
+
+        Leaves go out in the forms :attr:`legacy_write_forms` selects. With it
+        set, a STRING or WSTRING leaf raises ``ValueError`` before anything is
+        sent, because those forms send the raw bytes as given rather than the
+        layout this method builds; CHAR and DATE_AND_TIME have the same raw bytes
+        in both forms.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            TypeError, ValueError: ``value`` does not fit the PLC type, a leaf
+                is too large for one request, or a STRING or WSTRING leaf is
+                written with :attr:`legacy_write_forms` set; nothing is sent.
+            RuntimeError: The PLC rejected one of the items, or a failure
+                interrupted a split batch; it is raised from the first failed
+                item's error, and the other items may have been written.
+        """
+        self.write_values({name: value})
+
+    def write_values(self, values: Mapping[str, Any]) -> None:
+        """Write several tags, structs or arrays as one batch of leaves; see :meth:`write_value`."""
+        encoded = _encode_values(self._plan_values(list(values)), values, self.legacy_write_forms)
+        _raise_failures(self.write_tags(encoded), "writes")
+
+    def _plan_values(self, names: Sequence[str]) -> list[_ValuePlan]:
+        """Look up each name's leaf tags; with ``auto_refresh_tags``, an unknown name checks once for a program change.
+
+        Only the lookup is retried after the check, never an encoding or a
+        request. As in :meth:`_resolve_tags`, no check runs when this call
+        browsed the catalog, which is then current.
+        """
+        may_check = bool(self._symbol_catalog)  # refresh_tag_catalog() browses a missing or empty catalog
+        catalog = self._symbol_catalog or self.refresh_tag_catalog()
         try:
-            errors = _parse_write_response_errors(response, expected_count=len(tags))
-        except RuntimeError as error:
-            return [TagResult(tag=tag, error=error) for tag in tags]
-        return [
-            TagResult(tag=tag, error=RuntimeError(f"Symbolic write failed for {tag.name!r}: PLC error {errors[index]}"))
-            if index in errors
-            else TagResult(tag=tag)
-            for index, tag in enumerate(tags, 1)
-        ]
+            return _value_plans(catalog, names)
+        except KeyError:
+            if not (may_check and self._auto_refresh_check()):
+                raise
+        return _value_plans(self._symbol_catalog or self.refresh_tag_catalog(), names)
 
     def explore(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> bytes:
         """Browse the PLC object tree.
@@ -813,6 +1671,7 @@ class S7CommPlusClient:
             "on a real PLC (https://github.com/gijzelaerr/s7commplus/issues/8)"
         )
 
+    @_retry_on_dropped_connection
     def get_cpu_state(self) -> str:
         """Get PLC CPU operating state via S7CommPlus.
 
@@ -920,6 +1779,7 @@ class S7CommPlusClient:
         parse_or_raise_for_return_value(response, "Data block list")
         return _parse_explore_datablocks(response)
 
+    @_retry_on_dropped_connection
     def browse(self) -> list[dict[str, Any]]:
         """Browse the full per-tag symbol tree via EXPLORE + the type-info container.
 
@@ -935,6 +1795,10 @@ class S7CommPlusClient:
         Returns:
             List of variable info dicts.
         """
+        return self._browse_layout()[0]
+
+    def _browse_layout(self) -> tuple[list[dict[str, Any]], list[tuple[str, int, int]], dict[int, bytes]]:
+        """:meth:`browse`, also returning the block-list signature and type-info modification times."""
         if self._connection is None:
             raise RuntimeError("Not connected")
 
@@ -942,7 +1806,8 @@ class S7CommPlusClient:
         # (a LID=1 read — needed for instance DBs whose TI is not their own RID) and seed
         # a root node per DB.
         root_nodes: list[typeinfo.Node] = []
-        for db_info in self.list_datablocks():
+        blocks = self.list_datablocks()
+        for db_info in blocks:
             if db_info.get("number", 0) <= 0 or db_info.get("rid", 0) == 0:
                 continue
             # A symbolic read may prompt a TCP RST on RST-happy firmware; retry once
@@ -995,7 +1860,7 @@ class S7CommPlusClient:
                     "string_length": v.string_length,
                 }
             )
-        return variables
+        return variables, _block_signature(blocks), _type_info_times(root_nodes, type_objects)
 
     def _read_typeinfo_rid(self, db_rid: int) -> int:
         """Read LID=1 of a DB to get its type-info RID (0 if the DB has no readable value)."""
@@ -1045,6 +1910,10 @@ class S7CommPlusClient:
 
         Returns:
             Subscription object ID assigned by the PLC.
+
+        Raises:
+            ValueError: The request would exceed :attr:`max_request_bytes`; use
+                :meth:`create_subscriptions` for that many items.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -1053,14 +1922,7 @@ class S7CommPlusClient:
 
         if not 0 <= credit_step <= 255:
             raise ValueError("credit_step must be between 0 and 255")
-        normalized = [
-            SubscriptionItem.from_access_sequence(item)
-            if isinstance(item, str)
-            else SubscriptionItem.from_tag(item)
-            if isinstance(item, SymbolicTag)
-            else item
-            for item in items
-        ]
+        normalized = _normalize_subscription_items(items)
         change_counter = self._subscription_change_counter
         payload, integrity_tail = build_subscription_request(
             self._connection.subscription_container_id,
@@ -1070,6 +1932,7 @@ class S7CommPlusClient:
             change_counter=change_counter,
             relation_id=self._subscription_relation_id,
         )
+        _check_subscription_size(payload, self.max_request_bytes, self._frame_overhead())
         response = self._connection.send_request(
             FunctionCode.CREATE_OBJECT,
             payload,
@@ -1093,6 +1956,66 @@ class S7CommPlusClient:
         )
         logger.info(f"Subscription created, id={subscription_id:#x}")
         return subscription_id
+
+    def create_subscriptions(
+        self,
+        items: Sequence[SubscriptionItem | SymbolicTag | str],
+        cycle_ms: int = 100,
+        credit_limit: int = 10,
+        credit_step: int = 5,
+        queue_size: int = 100,
+    ) -> list[int]:
+        """Create as many data change subscriptions as ``items`` needs.
+
+        .. warning:: This method is **experimental** and may change.
+
+        One subscription request must fit :attr:`max_request_bytes`, which at
+        the default holds about 40 to 46 items with a one-level LID path, fewer
+        with longer paths. This splits ``items``, in order, into groups that fit
+        and creates one subscription per group with the same settings.
+        Reference ids stay unique across the groups: an item without an
+        explicit ``reference_id`` gets its 1-based position in ``items``.
+
+        :meth:`delete_subscription` deletes the session's whole subscription
+        container, so it removes these subscriptions together with every other
+        data and alarm subscription of the session.
+
+        Returns:
+            The subscription object IDs, one per group, in item order.
+
+        Raises:
+            ValueError: Two items share a reference id, or one item alone is
+                too large for a request; nothing is sent.
+            S7SubscriptionError: Creating a subscription after the first one
+                failed. Its ``created`` lists the subscriptions already created,
+                which stay active, and its ``__cause__`` is the failure. If the
+                first one fails, that error propagates unchanged.
+        """
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        if not items:
+            raise ValueError("a subscription requires at least one item")
+        container_id = self._connection.subscription_container_id
+
+        def build(group: list[SubscriptionItem]) -> bytes:
+            # The default change counter and relation id encode at least as long
+            # as the ones create_subscription() sends.
+            return build_subscription_request(container_id, group, cycle_ms=cycle_ms, credit_limit=credit_limit)[0]
+
+        groups = _subscription_groups(_normalize_subscription_items(items), self.max_request_bytes, self._frame_overhead(), build)
+        created: list[int] = []
+        for group in groups:
+            try:
+                created.append(
+                    self.create_subscription(
+                        group, cycle_ms=cycle_ms, credit_limit=credit_limit, credit_step=credit_step, queue_size=queue_size
+                    )
+                )
+            except Exception as error:
+                if not created:
+                    raise
+                raise _subscriptions_interrupted(created, len(groups), error) from error
+        return created
 
     def resubscribe(self) -> SubscriptionRestoreResult:
         """Recreate the data subscriptions lost with the previous session.
@@ -1132,16 +2055,27 @@ class S7CommPlusClient:
         """Stop remembering the subscriptions lost with the previous session."""
         self._subscriptions.forget_pending_restore()
 
-    def receive_subscription_notification(self, subscription_id: int | None = None) -> SubscriptionNotification:
-        """Block until one routed data notification is available."""
+    def receive_subscription_notification(
+        self, subscription_id: int | None = None, timeout: Optional[float] = None
+    ) -> SubscriptionNotification:
+        """Block until one routed data notification is available.
+
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
+        """
+        _check_timeout("timeout", timeout)
         if self._connection is None:
             raise RuntimeError("Not connected")
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         if subscription_id is not None:
             queued = self._subscriptions.pop(subscription_id)
             if queued is not None:
                 return queued
         while True:
-            frame = self._connection.receive_notification()
+            frame = self._next_notification_frame(deadline, wait)
             frame_subscription_id = notification_subscription_id(frame)
             if frame_subscription_id in self._alarm_subscription_ids:
                 self._alarm_notification_frames.append(frame)
@@ -1185,12 +2119,17 @@ class S7CommPlusClient:
         )
 
     def delete_subscription(self, subscription_id: int) -> None:
-        """Delete a data change subscription.
+        """Delete the session's data change subscriptions.
 
         .. warning:: This method is **experimental** and may change.
 
+        Like the reference driver, this deletes the session's subscription
+        container rather than the one subscription, so every data and alarm
+        subscription of the session goes, not only ``subscription_id``.
+
         Args:
-            subscription_id: ID returned by :meth:`create_subscription`.
+            subscription_id: ID returned by :meth:`create_subscription`, used
+                for logging.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
@@ -1248,7 +2187,11 @@ class S7CommPlusClient:
         return subscription_id
 
     def delete_alarm_subscription(self, subscription_id: int) -> None:
-        """Delete an alarm subscription created by this client."""
+        """Delete an alarm subscription created by this client.
+
+        Like :meth:`delete_subscription`, this deletes the session's whole
+        subscription container, data subscriptions included.
+        """
         if self._connection is None:
             raise RuntimeError("Not connected")
         if self._connection.subscription_container_id == 0:
@@ -1264,18 +2207,27 @@ class S7CommPlusClient:
         self._connection._notification_frames.clear()
         logger.info(f"Alarm subscription {subscription_id:#x} deleted")
 
-    def receive_alarm_notification(self, language_ids: Optional[list[LanguageId | int]] = None) -> AlarmNotification:
+    def receive_alarm_notification(
+        self, language_ids: Optional[list[LanguageId | int]] = None, timeout: Optional[float] = None
+    ) -> AlarmNotification:
         """Block until the PLC sends one alarm notification.
 
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
         Data notifications encountered first are routed to their bounded queues.
         """
+        _check_timeout("timeout", timeout)
         if self._connection is None:
             raise RuntimeError("Not connected")
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         while True:
             frame = (
                 self._alarm_notification_frames.popleft()
                 if self._alarm_notification_frames
-                else self._connection.receive_notification()
+                else self._next_notification_frame(deadline, wait)
             )
             frame_subscription_id = notification_subscription_id(frame)
             if self._subscriptions.contains(frame_subscription_id):
@@ -1285,6 +2237,25 @@ class S7CommPlusClient:
                     self._connection.send_subscription_credit(frame_subscription_id, credit_update)
                 continue
             return parse_alarm_notification(frame, language_ids)
+
+    def _notification_wait(self, timeout: Optional[float]) -> float:
+        """Seconds a notification wait may take: per call, else notification_timeout, else the request timeout."""
+        if timeout is not None:
+            return timeout
+        p = self._connect_params or {}
+        for key in ("notification_timeout", "request_timeout", "timeout"):
+            if p.get(key) is not None:
+                return float(p[key])
+        return 5.0
+
+    def _next_notification_frame(self, deadline: float, wait: float) -> bytes:
+        """Receive one notification frame by ``deadline`` (``time.monotonic()``), else raise S7TimeoutError."""
+        assert self._connection is not None
+        left = deadline - time.monotonic()
+        if left <= 0:
+            # Nothing of a next frame was read, so the session stays usable.
+            raise S7TimeoutError(f"No notification from the PLC within {wait}s")
+        return self._connection.receive_notification(left)
 
     def read_alarms(self, language_ids: Optional[list[LanguageId | int]] = None) -> list[Alarm]:
         """Return the PLC's current active alarm state.
@@ -1700,7 +2671,10 @@ def _build_multi_symbolic_write_payload(items: Sequence[SymbolicWriteItem], prot
         payload += address
     for index, (_access_area, _lids, data, _symbol_crc, datatype) in enumerate(items, 1):
         payload += encode_uint32_vlq(index)
-        payload += encode_pvalue_typed(datatype, data)
+        if isinstance(datatype, PValueArray):
+            payload += encode_pvalue_array(datatype.element, data)
+        else:
+            payload += encode_pvalue_typed(datatype, data)
     payload += bytes([0x00])
     payload += encode_object_qualifier(protocol_version=protocol_version)
     payload += struct.pack(">I", 0)

@@ -199,6 +199,39 @@ anything is sent, so a pinned certificate is never used on a plaintext
 connection. The pin is checked right after the TLS handshake, before the session
 is created or a password is sent.
 
+.. _automatic-tls:
+
+Automatic TLS selection
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``use_tls="auto"`` tries TLS first and continues without it only when the TLS
+handshake itself does not complete, which is what a PLC without TLS (V1, or a
+project with TLS switched off) does. It never continues in the clear when:
+
+- a ``tls_cert_fingerprint``, ``tls_ca`` or client certificate is given, or a
+  ``password``: these say the caller expects TLS, so the failed handshake is
+  raised as :class:`~s7commplus.error.S7TlsHandshakeError`;
+- anything fails *after* the handshake completed (a refused password, a
+  rejected session): that error is raised as usual.
+
+Each fallback is logged as a warning, and every reconnect tries TLS first
+again, so a fallback holds only for the connection it was made for. Other
+strings than ``"auto"`` are refused with ``ValueError``.
+
+.. warning::
+
+   ``use_tls="auto"`` with none of ``tls_cert_fingerprint``, ``tls_ca``, a
+   client certificate or ``password`` set is **not secure against an active
+   attacker**: anyone on the network path who resets the TLS handshake makes the
+   client continue in plaintext. It protects against passive eavesdropping only.
+   Use ``use_tls=True`` (with ``tls_cert_fingerprint`` or ``tls_ca``) wherever
+   that matters.
+
+A failed handshake raises :class:`~s7commplus.error.S7TlsHandshakeError` for
+``use_tls=True`` too, with the ``ssl`` or socket error as its ``__cause__``; a
+certificate that fails ``tls_ca`` verification raises
+:class:`~s7commplus.error.S7CertificateError`.
+
 Password authentication
 -----------------------
 
@@ -239,6 +272,132 @@ PLCSIM Advanced V8.0 only.
 
 Never log passwords, session keys, challenges, private keys, or decrypted
 authentication material.
+
+Reconnecting
+------------
+
+After a dropped connection, ``reconnect()`` builds a new session with the
+parameters of the last ``connect()``:
+
+.. code-block:: python
+
+   client.reconnect()
+
+The new session is legitimated with the password given to ``connect()``; on the
+asyncio client, a successful ``authenticate()`` replaces that password and adds
+its username, while a refused one changes nothing. ``connection_generation``
+counts the reconnects, so a caller can tell that the session was rebuilt. A
+failed attempt keeps the parameters, so ``reconnect()`` can be called again
+once the PLC is back. Data subscriptions lost with the old session are restored
+with ``resubscribe()`` (see :doc:`subscriptions-alarms`); alarm subscriptions
+must be created again.
+
+Automatic reconnect
+~~~~~~~~~~~~~~~~~~~
+
+With ``auto_reconnect=True`` on ``connect()`` (or ``client.auto_reconnect =
+True`` later), a read that finds the connection dropped reconnects and runs
+once more on the new session:
+
+.. code-block:: python
+
+   client.connect("192.168.1.10", auto_reconnect=True)
+
+Only these reads are retried: ``db_read``, ``db_read_multi``, ``read_area``,
+``read_symbolic``, ``read_symbolic_multi``, ``read_tag``, ``read_tags``,
+``browse`` (and through it ``refresh_tag_catalog`` and ``resolve_tag``) and
+``get_cpu_state``. Other operations, such as ``explore``, ``list_datablocks``
+and ``read_alarms``, are not. **Writes are never retried**: when a request is
+lost, it is unknown whether the PLC applied it, so the error reaches the caller.
+
+Any ``S7ConnectionError`` from one of these reads counts as a dropped
+connection, including "Not connected" after the client ended a broken session
+itself. A read called from another (``read_tag`` calls ``read_tags``) leaves the
+drop to the outermost call, so one call reconnects at most once and runs again
+at most once; the error of that second run reaches the caller.
+
+A timeout is not a dropped connection: :class:`~s7commplus.error.S7TimeoutError`
+is not an ``S7ConnectionError``, so a read that timed out is not retried and the
+timeout reaches the caller. When the timeout ended the session, as a receive
+timeout of the synchronous client does, the next call finds "Not connected" and
+reconnects.
+
+Auto-reconnect stands down, raising ``S7ConnectionError``, while data or alarm
+subscriptions are live, or while data subscriptions lost with an earlier session
+await ``resubscribe()``: a silent new session would end them unnoticed. Call
+``reconnect()``, then ``resubscribe()`` (or ``forget_lost_subscriptions()``) and
+create alarm subscriptions again.
+
+After an automatic attempt ends, successful or not, the next one waits at least
+one second; a read that finds the connection dropped within that second raises
+its error without reconnecting. ``browse()``'s own reconnect between its steps,
+for firmware that resets the connection after a symbolic read, counts as such an
+attempt. A PLC that is down, or a request that fails on every new session, is
+therefore not flooded with connection attempts. When several asyncio tasks find
+the same connection dropped, the first reconnects and the others retry on its
+session.
+
+Timeouts
+--------
+
+``connect()`` takes four timeouts in seconds, by keyword:
+
+``timeout`` (default 5)
+   bounds the TCP connect and the COTP, InitSSL, TLS and CreateObject
+   handshake together.
+``request_timeout`` (default: ``timeout``)
+   bounds the wait for each reply once the handshake is done, and for each
+   further part of a multi-part reply. Raise it for a PLC that is slow on long
+   answers.
+``explore_timeout`` (default 30; ``None``: the request timeout)
+   does the same for the reply to an EXPLORE, which ``browse()``,
+   ``list_datablocks()``, ``explore()``, ``get_cpu_state()`` and
+   ``read_alarms()`` send, among others. These replies can be large: on a CPU
+   1215C (FW V4.2, 54 data blocks, 6802 variables) the type-info EXPLORE of
+   ``browse()``, about 111 KB in 111 parts, took 5.9 to 7.0 s in total, where
+   a GetMultiVariables took at most 0.52 s. The value is used as given, also
+   when ``request_timeout`` is longer.
+``notification_timeout`` (default: the request timeout)
+   bounds a wait for subscription data or alarms.
+
+.. code-block:: python
+
+   client.connect("192.168.1.10", timeout=5.0, request_timeout=15.0, explore_timeout=60.0)
+
+``receive_subscription_notification()`` and ``receive_alarm_notification()``
+also take a per-call ``timeout`` that overrides ``notification_timeout``. The
+wait bounds the whole call: notifications for other subscriptions that arrive
+meanwhile are queued for them and do not extend it. When it runs out, both
+clients raise ``S7TimeoutError``. PLCSIM Advanced (V8.0, CPU 1511, FW V2.9;
+not checked on hardware) sends a notification every subscription cycle even
+when no value changed, so an active subscription with a cycle shorter than the
+wait does not run into it. Raise ``notification_timeout`` for longer cycles,
+or for alarms, which arrive only when one changes:
+
+.. code-block:: python
+
+   await client.connect("192.168.1.10", notification_timeout=3600.0)
+
+A timeout that is zero, negative or not finite raises ``ValueError``. The
+asyncio client bounds every network wait the same way, including a send that
+the PLC does not accept within the request timeout, and both clients enable
+TCP keepalive, so a silent PLC raises ``S7TimeoutError`` instead of hanging.
+
+What a timeout leaves of the session depends on where it struck:
+
+* A request whose reply does not arrive in time leaves the session in an
+  unknown state, so the client closes it (without a DeleteSession exchange)
+  and raises ``S7TimeoutError``. It is then handled like a connection the PLC
+  dropped: ``connected`` reports ``False``, the next request raises
+  ``S7ConnectionError("Not connected")``, and the connect parameters and the
+  subscription bookkeeping are kept, so reconnect to go on.
+* A read that stops part-way through a frame, or between the parts of a
+  multi-part reply, closes the session the same way, whatever it was waiting
+  for, because the unread rest would otherwise be taken for the next message.
+  In the asyncio client this includes a read cancelled from outside, for
+  example by ``asyncio.wait_for()`` around a call.
+* A notification wait that runs out before any byte of the next frame arrived
+  is clean: the session stays usable.
 
 Troubleshooting
 ---------------
