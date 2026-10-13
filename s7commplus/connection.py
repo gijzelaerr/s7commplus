@@ -48,7 +48,7 @@ import struct
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from types import TracebackType
 from typing import Any, Optional, Type
 
@@ -62,7 +62,7 @@ from .codec import (
     encode_object_qualifier,
     parse_create_object_attributes,
 )
-from .error import S7AuthenticationError, S7CertificateError, S7ConnectionError
+from .error import S7AuthenticationError, S7CertificateError, S7ConnectionError, S7Error, S7TlsHandshakeError
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -1056,6 +1056,18 @@ def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_versio
     return object_qualifier_version if family == KeyFamily.PLCSIM else protocol_version
 
 
+def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
+    """Bytes a request frame adds to its payload, for sizing requests.
+
+    The 4-byte frame header and 4-byte trailer, the 14-byte request header, the
+    IntegrityId at its longest (a 5-byte VLQ) when the session sends one, and
+    the V3 HMAC (a length byte and a 32-byte digest) after SessionKey
+    authentication. TLS records, COTP and TPKT wrap the frame and are not
+    counted.
+    """
+    return 4 + 14 + (5 if with_integrity_id else 0) + (1 + 32 if session_key_active else 0) + 4
+
+
 def _v1_session_key_profile(override: Optional[bool], session_key: Optional[bytes], protocol_version: int) -> bool:
     """Whether the non-TLS V1 SessionKey request profile applies.
 
@@ -1119,6 +1131,50 @@ def _check_certificate_pin(tls_cert_fingerprint: Optional[str], use_tls: bool) -
     if not use_tls:
         raise ValueError("tls_cert_fingerprint requires use_tls=True: a pinned certificate must never be used in the clear")
     return expected
+
+
+def _resolve_use_tls(use_tls: "bool | str") -> tuple[bool, bool]:
+    """Split ``connect(use_tls=...)`` into (try TLS first, automatic mode).
+
+    Accepts ``True``, ``False`` or ``"auto"``. Any other string is refused: a
+    truthy ``"false"`` or ``"off"`` must not quietly turn TLS on.
+    """
+    if isinstance(use_tls, str):
+        if use_tls != "auto":
+            raise ValueError(f"use_tls must be True, False or 'auto', not {use_tls!r}")
+        return True, True
+    return bool(use_tls), False
+
+
+def _plaintext_fallback_refusal(params: Mapping[str, Any]) -> Optional[str]:
+    """Why ``use_tls="auto"`` must not continue without TLS, or None when it may.
+
+    Any TLS setting the caller supplied, or a password, means the caller
+    expects TLS, so a failed handshake is an error rather than a reason to
+    talk to the PLC in the clear.
+    """
+    if params.get("tls_cert_fingerprint") is not None:
+        return "a certificate is pinned (tls_cert_fingerprint)"
+    if params.get("tls_ca") is not None:
+        return "a CA certificate is configured (tls_ca)"
+    if params.get("tls_cert") is not None or params.get("tls_key") is not None:
+        return "a client certificate is configured (tls_cert/tls_key)"
+    if params.get("password") is not None:
+        return "a password is given"
+    return None
+
+
+def _check_plaintext_fallback(params: Mapping[str, Any], exc: S7TlsHandshakeError) -> None:
+    """Allow ``use_tls="auto"`` to retry without TLS after ``exc``, or raise why not."""
+    reason = _plaintext_fallback_refusal(params)
+    if reason is not None:
+        raise S7TlsHandshakeError(f"{exc}; use_tls='auto' does not fall back to plaintext because {reason}") from exc
+    logger.warning(
+        "TLS handshake with %s:%s did not complete (%s); continuing without TLS (use_tls='auto')",
+        params.get("host"),
+        params.get("port"),
+        exc,
+    )
 
 
 def _verify_pinned_certificate(ssl_object: ssl.SSLObject, expected: Optional[bytes]) -> Optional[bytes]:
@@ -2729,7 +2785,12 @@ class S7CommPlusConnection:
             )
 
             # TLS handshake — records tunnel through COTP frames
-            self._do_tls_handshake()
+            try:
+                self._do_tls_handshake()
+            except ssl.SSLCertVerificationError as exc:
+                raise S7CertificateError(f"PLC TLS certificate failed verification: {exc.verify_message}") from exc
+            except (ssl.SSLError, OSError, S7Error) as exc:
+                raise S7TlsHandshakeError(f"TLS handshake with the PLC did not complete: {exc}") from exc
             self._tls_active = True
 
             # Pin the PLC certificate before any application data is trusted.
