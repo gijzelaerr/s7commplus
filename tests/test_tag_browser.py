@@ -5,6 +5,10 @@ S7-1200 G2 (FW V4.1) M area (``IntfDescTag`` dict, Adler-32 ``0xce9b821b``).
 The block-interface fixture is a real EXPLORE blob for an optimized DB
 (``Data_block_1``) from the same PLC, exercising the ``DebugInfo_IntfDesc``
 dict (Adler-32 ``0x66052b13``) and the RID -> SoftDataType mapping.
+The instance-DB fixtures are real EXPLORE blobs from a live S7-1500 (FW V2.9)
+whose interface sits under a ``Values`` part: ``LGF_SinusCI_DB`` (an FB instance),
+``SLI_plcDB_rcvData_BRCV`` (a DB of a UDT) and ``IEC_Timer_S1_DB`` (an instance
+of a library FB, which is referenced, not embedded).
 """
 
 import base64
@@ -99,6 +103,115 @@ _DB_UDT_INTERFACE_BLOB = base64.b64decode(
     "AKOTZUAUAKKiogAAAAA="
 )
 
+# Live S7-1500 (FW V2.9) EXPLORE response for instance DB "LGF_SinusCI_DB" (DB7),
+# filtered to attribute 2544, from the zlib header onward. Its first <Part> is
+# Kind="Values"; the members come from the embedded LGF_SinusCI FB.
+_SINUS_INSTANCE_DB_INTERFACE_BLOB = base64.b64decode(
+    "eH1mBSsTpVhbT+M4FP4rVefZ1PdLtVTiujvS7FYaqnngBTmJMyCxUAFF/Pw9ji91kgaWmQdEEud8"
+    "Oba/7zvH/dgZ9dgY+xuy6lWg2SLUoLh3oT6EPT+en379cbH89uflDRjN7vns68356cJSy4hsJWq0"
+    "ZYgTLlHVcIs4VqziuDKKGphE55vH85shxKIyurZWtMgJWiGuGUaVahWS1rmaNFRaSueZwT69bF9l"
+    "ot0Mw1dAmIFNEvRi30oqq/AoWw8X8PL3M1gIrrkwgiiR6Rrr3i/nnHD+gYUT0Th9k+feXujxPJAB"
+    "Y0Pj0PG8+MKBZg1yxMQgghEmG6yWVC05PlJCCKzF9YGeLwZgg6jcELJkeknxkZGcMEavC5f/vwHr"
+    "v6+2Xmvl+1QgLCGpDcGQzpKRI6WpYOR62At8BN6tQadq/GYYxlTRU9irziPO3T3k2Zz5feraqaAC"
+    "QiiwfQM9RbhnmEPEY+PugbcU32AcvCFaZlxxblTuRvzO47fTS3wptOJBVt/cw08vLi+MzRNUIlDS"
+    "rN6ByVGphHXcIVuZFnEBW6GbmqHWSGalxZVUBoL+unv20p45TzdJW8U4sqw1iLfUgjbqCtW4bh3V"
+    "QhMDOQKlF+lLq71n+yZiWH6JsVI3IDEnLUiMGowMYxYppSxvnHSNovOiqvtJRJ/1S0uTzXx92O5e"
+    "hsaOPYmadXex6MWxFLfevRwIJJOBfP/B9TiOTsaJFHflC0A9DGSTgTIFbty/22EYnwzTKQwE6tvl"
+    "UaqiHxo709nru1zMxOs4N2TbKlR///4ehwqYAdz1Q/e4lEfCxAxW3VniwfsMTMfTLp9qQ144vu/Z"
+    "BP8yuw6aaEeLVEgLF+1SZ5JK/yfovhwsy4ieRUqupNWGIasbh7h1QH1RSdS24JSs4ZXg+EsDXuEU"
+    "qQeCPKGUkxPDkqmdu21Q5EigeTphL/scylyAgwZ0ervGxb4hF2dd7GrXSxDYtdeOmAM+qoQVmq1J"
+    "IEYTkphAylSDg9Pd4ygnJhOU5AlKHoZSWV3bW+garm7v2unEjIxonEwkZhIa1Mb79ekA6SRrjlCd"
+    "ElOjlHAC8d3bKJtsFISnyXmwQlCZ9wRnxWQ6rP54nD2GNV7Ea79I6dpPMV2TiBtuTBExVtAikWev"
+    "jkV3DC+lEZxvqA0ek5QCiptSWBbS6EV8XhtU1oTZ2g60waS40Fhe/J42ZN6nV9/gTbKGyKwMvT98"
+    "QJnzFGIj8yUJ1T09PT5N777JKjEj1BExZa5a4Mwvu+chbHZ1ihMxPUMGsGIEm4va865KZ4SrD75A"
+    "M23JxHK8R+S8d4mXEpe8LBjbTSXfUP45xvZb+FBCh8ylMStCMNQuwb1eMnV7IZ+nLieWNND2HGi/"
+    "QMnD9oueE2XIOfskg3nJiu+2+dDbaUkKPcFgUaJ2S+WGPN47dDZ7yiagR32CT7tX3kmvvMuyawhr"
+    "NVylSIqCOdEPP02PPk3WT3c/7+CYlE58kSeEJKJgIzBjhJXlP7z8Kwzh3BFal5scf4r8zR/oAkrx"
+    "Ax184sdsCwYQ6p48opoRHewgDMCEbrsm9rXrl3AxxIqh8jkvntPiuSih5BfcR5Pl6FE5og98XJH3"
+    "wFTImqZRLXujrB8Lo6QYlSPMuG4HKLPYd4rTT/qbsPoPObOuu6IAAAAA"
+)
+
+# Live S7-1500 (FW V2.9) EXPLORE response for DB "SLI_plcDB_rcvData_BRCV", declared
+# of the UDT "BRCV_User", filtered to attribute 2544, from the zlib header onward.
+# Its first <Part> is Kind="Values"; the members come from the embedded DataTypeSource.
+_UDT_DB_INTERFACE_BLOB = base64.b64decode(
+    "eH1mBSsTnVfbahsxEP0V43dldRndTOwHOy0JpASSkIe+LHvRloJbByctoV/fGWm19npzKQVjS0I6"
+    "Gs3MOTP+WBndVBjHAVmNKtCsSDWoj12qDynmy/n66uHT4u76qnzcNhfrct/8JvvL9e3moeg86FYI"
+    "x7RxLQOoA6t0i1+4zJ0S0FUdPibq53JeRig6WKLi7wtplHGhtUxLBwxakKySTWBKiVDZ1lRCwHzI"
+    "YzJyELFjc8kcSod0DTI0pZVH4lQvxzltXFwaNEjifHO7QQ9qbbUVoNyQt30B/E+jk2JSdxdenuVy"
+    "nrKAMoP6NCxzacnFtX43ejpf8krbhtZyKZng+LkXesHVQrkzLZX1Br6+0v19dGBQoX89cPPl7pHc"
+    "PNqvGTdxP18AX0g481qC9HH/qC34CD26IBKcv3gR/bLBaEW5uAhbNLTdbFJQd23YYpJKXpLvYlVN"
+    "+th7Gbwlf/S0kcCpYelrglRyaEso8njZZwP6AkTi13X4+Y1YRgy532NJQkrNml+odmCVbmQlGA/4"
+    "avBdxSrrLGuc4XVX18Abg4cuvz8Rx2d4FyABlFItE513DDqvmfONZl1Xt6q23CiNtxajM0YLMAEC"
+    "47WpGcjGsIqDYSpgzuHI152PZ4ps3eog+NSBnNZu3dayc6FhQemKgeXAXFtz1qHt0DbcG2PmRy0B"
+    "PbwXaQqGhixSkVVhX4pehwex09HZN3Q0aTPlfzFG0RMU/iYMdnU9jp7gmIxDzeT+FGKdISjICcJM"
+    "IGyGuEU93v04xXAZw0DGsBMMlzEuA8pQuQ7V8ymOyDh+eI6b4PiMgz1cKMXlnzetEWJ4kj+FMXwE"
+    "o9+DgfwqyScwYmwNfw/H5ldJMcGRY3Pew5E0TDgy4vTd/+xpRN/diL4D2yPRT2m8Ot/NduSmBBgn"
+    "8Zo84YehOt4j4TAxR2NvDmMhj4CESVBFbzSOiIH4MzCyiP/szotD3cor4+K8+g=="
+)
+
+# Live S7-1500 (FW V2.9) EXPLORE response for instance DB "IEC_Timer_S1_DB",
+# filtered to attribute 2544, from the zlib header onward. Its Values part holds
+# only a reference to the library FB IEC_TIMER, not its source.
+_LIBRARY_INSTANCE_DB_INTERFACE_BLOB = base64.b64decode(
+    "eH1mBSsTjZWxDoMgEIZfpWG/IoLnYcTB1sGhS5t0JQL6AH3/oShGYzu0K8PdR374v9/NSN/FeAyk"
+    "ORjoxJOD1uySH1LmhrX9s6v67mLnAn/Zh7DXlsthLFShFfhAOSgSCBGVYJwylDhpP+Qq3mIpTsPs"
+    "PqO/dXceic/EHVIQZUCQk/egFBKQoAGcxECq1Dpzjm3PeGbcOizRxn+zesqwf4btBNVCsBabYds5"
+    "m7fwfQ1fzFx/CKF5"
+)
+
+# Live S7-1500 (FW V2.9) EXPLORE response for DB "Nested_DB_Three_Levels", filtered
+# to attributes 2544 and 2546, from the zlib header onward. Its inline Structs nest
+# three levels deep; each one's members sit in a Kind="Structure" part whose
+# ParentId is the member's ID path (e.g. "52:52:52" for Branch1.Branch11.Branch111).
+# It also holds an Array of Struct, a UDT inside a Struct and a member name full of
+# special characters, and its member IDs do not follow declaration order.
+_NESTED_STRUCT_DB_INTERFACE_BLOB = base64.b64decode(
+    "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"
+)
+
 
 def test_parse_ident_container_addresses():
     xml = (
@@ -169,11 +282,20 @@ def test_parse_block_interface_types():
         "</Root></Payload></Part></BlockInterface>"
     )
     assert parse_block_interface(xml) == [
-        Member("flag", "Bool", 9, 0, 0x02000001),
-        Member("speed", "Int", 12, 16, 0x02000005),
-        Member("gain", "Real", 14, 32, 0x02000008),
-        Member("timer", "0x0300ABCD", 20, 48, 0x0300ABCD),
+        Member("flag", "Bool", 9, 0, 0x02000001, id=51),
+        Member("speed", "Int", 12, 16, 0x02000005, id=53),
+        Member("gain", "Real", 14, 32, 0x02000008, id=54),
+        Member("timer", "0x0300ABCD", 20, 48, 0x0300ABCD, id=60),
     ]
+
+
+def test_parse_block_interface_member_without_id_defaults_to_zero():
+    xml = (
+        "<BlockInterface><Part><Payload><Root>"
+        '<Member Name="flag" RID="0x02000001" StdO="0" LID="9" />'
+        "</Root></Payload></Part></BlockInterface>"
+    )
+    assert parse_block_interface(xml) == [Member("flag", "Bool", 9, 0, 0x02000001, id=0)]
 
 
 def test_parse_block_interface_fb_sections():
@@ -200,10 +322,10 @@ def test_parse_block_interface_fb_sections():
         "</SubParts></Part></BlockInterface>"
     )
     assert parse_block_interface(xml) == [
-        Member("puls_start_stop", "Bool", 9, 0, 0x02000001, "Input"),
-        Member("num_step", "Int", 19, 0, 0x02000005, "Static"),
-        Member("timers", "Array[0..5] of IEC_TIMER", 20, 16, 0x0201001F, "Static"),
-        Member("echo", "Array[0..2] of Bool", 21, 784, 0x02010001, "Static"),
+        Member("puls_start_stop", "Bool", 9, 0, 0x02000001, "Input", id=51),
+        Member("num_step", "Int", 19, 0, 0x02000005, "Static", id=61),
+        Member("timers", "Array[0..5] of IEC_TIMER", 20, 16, 0x0201001F, "Static", id=62),
+        Member("echo", "Array[0..2] of Bool", 21, 784, 0x02010001, "Static", id=63),
     ]
 
 
@@ -225,7 +347,7 @@ def test_parse_block_interface_udt_member_expands_fields():
         "</Part></BlockInterface>"
     )
     assert parse_block_interface(xml) == [
-        Member("flag", "Bool", 9, 0, 0x02000001, ""),
+        Member("flag", "Bool", 9, 0, 0x02000001, "", id=51),
         Member(
             "valve",
             '"MyUdt"',
@@ -234,9 +356,10 @@ def test_parse_block_interface_udt_member_expands_fields():
             0x91000001,
             "",
             fields=[
-                Member("open_cmd", "Bool", 1, 0, 0x02000001, ""),
-                Member("level", "Int", 2, 16, 0x02000005, ""),
+                Member("open_cmd", "Bool", 1, 0, 0x02000001, "", id=60),
+                Member("level", "Int", 2, 16, 0x02000005, "", id=61),
             ],
+            id=52,
         ),
     ]
 
@@ -276,6 +399,134 @@ def test_block_interface_from_live_g2_db():
         ("temperatura_motore", "Int"),
         ("tensione_misurata", "Real"),
         ("corrente_misurata", "Real"),
+    ]
+
+
+def test_block_interface_from_live_s7_1500_instance_db():
+    members = block_interface_from_explore(_SINUS_INSTANCE_DB_INTERFACE_BLOB)
+    assert [(m.name, m.section, m.lid) for m in members] == [
+        ("amplitude", "Input", 14),
+        ("offset", "Input", 15),
+        ("periode", "Input", 16),
+        ("phaseShift", "Input", 41),
+        ("callOB", "Input", 17),
+        ("reset", "Input", 28),
+        ("value", "Output", 18),
+        ("error", "Output", 19),
+        ("status", "Output", 32),
+        ("subFunctionStatus", "Output", 21),
+        ("statRad", "Static", 22),
+        ("statCounter", "Static", 23),
+    ]
+
+
+def test_block_interface_from_live_s7_1500_udt_db():
+    members = block_interface_from_explore(_UDT_DB_INTERFACE_BLOB)
+    assert [(m.name, m.data_type, m.lid) for m in members] == [
+        ("Counter_1", "Int", 14),
+        ("Counter_10", "Int", 15),
+        ("Timer", "Time", 16),
+        ("Random", "Real", 17),
+        ("Heart_Beat", "Bool", 18),
+        ("Sine_1Hz", "Real", 19),
+        ("Sine_5Hz", "Real", 20),
+        ("Sine_10Hz", "Real", 21),
+        ("Sine_50Hz", "Real", 22),
+    ]
+
+
+def test_block_interface_from_live_s7_1500_library_instance_db_is_empty():
+    # The Values part only references the library FB, so there is no source to parse.
+    assert block_interface_from_explore(_LIBRARY_INSTANCE_DB_INTERFACE_BLOB) == []
+
+
+def test_parse_block_interface_values_part_without_source_is_empty():
+    assert parse_block_interface('<BlockInterface><Part Kind="Values"><Payload /></Part></BlockInterface>') == []
+    assert parse_block_interface('<BlockInterface><Part Kind="Values"><Payload /><SubParts /></Part></BlockInterface>') == []
+
+
+def test_block_interface_from_live_s7_1500_nested_struct_db():
+    # An inline Struct member points via `SubPartIndex` at a Kind="Structure" part
+    # in the same <SubParts> list as its parent, also when the parent is itself a
+    # Structure part.
+    def leaf(name: str, offset: int = 0) -> Member:
+        return Member(name, "Bool", 9, offset, 0x02000001, id=51)
+
+    def branch(name: str, lid: int, offset: int, rid: int, member_id: int, fields: list[Member]) -> Member:
+        return Member(name, "Struct", lid, offset, rid, fields=fields, id=member_id)
+
+    assert block_interface_from_explore(_NESTED_STRUCT_DB_INTERFACE_BLOB) == [
+        Member(
+            "Array of struct",
+            "Array[0..1] of Struct",
+            20,
+            0,
+            0x9A080000,
+            fields=[Member("Array of bool", "Array[0..1] of Bool", 16, 0, 0x02010001, id=51)],
+            id=58,
+        ),
+        branch(
+            "Special struct",
+            22,
+            32,
+            0x92090000,
+            59,
+            [
+                Member(
+                    "UDT",
+                    '"BRCV_User"',
+                    14,
+                    0,
+                    0x9100000C,
+                    fields=[
+                        Member("Counter_1", "Int", 14, 0, 0x02000005, id=54),
+                        Member("Counter_10", "Int", 15, 16, 0x02000005, id=55),
+                        Member("Timer", "Time", 16, 32, 0x0200000B, id=56),
+                        Member("Random", "Real", 17, 64, 0x02000008, id=57),
+                        Member("Heart_Beat", "Bool", 18, 96, 0x02000001, id=58),
+                        Member("Sine_1Hz", "Real", 19, 112, 0x02000008, id=59),
+                        Member("Sine_5Hz", "Real", 20, 144, 0x02000008, id=60),
+                        Member("Sine_10Hz", "Real", 21, 176, 0x02000008, id=61),
+                        Member("Sine_50Hz", "Real", 22, 208, 0x02000008, id=62),
+                    ],
+                    id=51,
+                ),
+                # The PLC stores this name already mojibake'd (UTF-8 "¬ß" for "§" etc.); it is asserted as sent.
+                Member("Special_!¬ß$%&/()=?`¬¥\\+~*'#_-:.,<>|@^¬∞‚Ç¨¬µ{[]}", "SoftType#149", 18, 240, 0x02000095, id=52),
+            ],
+        ),
+        leaf("Leaf1", 288),
+        branch(
+            "Branch1",
+            11,
+            304,
+            0x92010000,
+            52,
+            [
+                leaf("Leaf11"),
+                branch(
+                    "Branch11",
+                    11,
+                    16,
+                    0x92040000,
+                    52,
+                    [leaf("Leaf111"), branch("Branch111", 11, 16, 0x92070000, 52, [leaf("Leaf1111")])],
+                ),
+                branch("Branch12", 12, 48, 0x92050000, 53, [leaf("Leaf121")]),
+            ],
+        ),
+        branch(
+            "Branch2",
+            12,
+            368,
+            0x92020000,
+            53,
+            [
+                leaf("Leaf21"),
+                branch("Branch21", 11, 16, 0x92030000, 52, [leaf("Leaf211")]),
+                branch("Branch22", 12, 32, 0x92060000, 53, [leaf("Leaf221")]),
+            ],
+        ),
     ]
 
 

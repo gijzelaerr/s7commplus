@@ -168,20 +168,26 @@ class Member:
     rid: int  # raw type RID
     section: str = ""  # Input/Output/InOut/Static/Temp/Constant (FB/OB); "" for a DB
     fields: list[Member] = field(default_factory=list)  # sub-members for a UDT/Struct type
+    id: int = 0  # interface ID, unique among its siblings
 
 
-def _member_type(member: ET.Element) -> str:
+def _member_type(member: ET.Element, target: ET.Element | None) -> str:
     """Resolve a ``<Member>``'s data type to a readable name.
 
-    Complex members (arrays, UDTs, strings, structs) already carry a ready-made
+    Complex members (arrays, UDTs, strings) already carry a ready-made
     ``Type`` attribute (e.g. ``Array[0..5] of IEC_TIMER``). Scalar elementary
     members carry only a RID of the form ``0x0200_00XX`` whose low byte is a
     Siemens SoftDataType id. (Arrays use ``0x0201_00XX``, hence the explicit
     ``Type``; the raw RID stays available on :attr:`Member.rid`.)
+
+    An inline Struct carries neither a ``Type`` nor an elementary RID; its
+    ``SubPartIndex`` points at a ``Kind="Structure"`` part instead.
     """
     explicit = member.get("Type")
     if explicit:
         return explicit
+    if target is not None and target.get("Kind") == "Structure":
+        return "Struct"
     try:
         rid = int(member.get("RID", "0") or "0", 16)
     except ValueError:
@@ -200,20 +206,26 @@ def parse_block_interface(xml_text: str) -> list[Member]:
     are returned in declaration order, each tagged with its section
     (Input/Output/... for FB/OB; empty for DB/UDT).
 
-    When a member is of a UDT (or other structured type), the interface embeds
+    When a member is of a UDT, an FB or an inline Struct, the interface embeds
     that type's definition under the primary part's ``<SubParts>``; the member's
     ``SubPartIndex`` selects it. Such members are expanded recursively into
     :attr:`Member.fields`. Library types (e.g. ``IEC_TIMER``) are referenced but
     not inlined, so they expand to no fields.
+
+    An instance DB or a UDT-typed DB has no source part of its own: its first
+    ``<Part>`` is ``Kind="Values"``, and its members come from the FB or UDT
+    embedded in that part's ``<SubParts>``.
     """
     root = ET.fromstring(xml_text)
     primary = root.find("Part")  # first top-level Part = the block's own source
+    if primary is not None and primary.get("Kind") == "Values":
+        primary = primary.find("SubParts/Part")
     if primary is None:
         return []
-    return _parse_source_part(primary, set())
+    return _parse_source_part(primary, "", set())
 
 
-def _parse_source_part(part: ET.Element, seen: set[int]) -> list[Member]:
+def _parse_source_part(part: ET.Element, section: str, seen: set[int]) -> list[Member]:
     """Parse one source ``<Part>`` (DBSource/BlockSource/DataTypeSource).
 
     ``seen`` carries the identities of the ``<Part>`` elements already being
@@ -223,45 +235,61 @@ def _parse_source_part(part: ET.Element, seen: set[int]) -> list[Member]:
     sub_el = part.find("SubParts")
     subparts = list(sub_el) if sub_el is not None else []  # index-addressable
 
-    members: list[Member] = []
     # Flat DB/UDT: variables are direct <Member> children of <Payload><Root>.
-    root_el = part.find("./Payload/Root")
-    if root_el is not None:
-        for m in root_el.findall("Member"):
-            if m.get("RID") is not None:
-                members.append(_build_member(m, "", subparts, seen))
+    # A UDT's fields inherit the section of the member typed with it, like a Struct's fields do.
+    members = _build_members(part.findall("./Payload/Root"), section, subparts, seen)
     # FB/OB: variables live in the <Part Kind="*Section"> entries of <SubParts>.
     for sp in subparts:
         kind = sp.get("Kind", "")
         if not kind.endswith("Section"):
             continue
-        section = kind[: -len("Section")]
-        for m in sp.findall("./Payload/Member/Member"):
-            if m.get("RID") is not None:
-                members.append(_build_member(m, section, subparts, seen))
+        members += _build_members(sp.findall("./Payload/Member"), kind[: -len("Section")], subparts, seen)
     return members
+
+
+def _build_members(containers: list[ET.Element], section: str, subparts: list[ET.Element], seen: set[int]) -> list[Member]:
+    """Build the RID-carrying ``<Member>`` children of `containers`; section headers have no RID."""
+    return [
+        _build_member(m, section, subparts, seen) for c in containers for m in c.findall("Member") if m.get("RID") is not None
+    ]
 
 
 def _build_member(m: ET.Element, section: str, subparts: list[ET.Element], seen: set[int]) -> Member:
     """Build a :class:`Member`, expanding a structured type via ``SubPartIndex``."""
-    member = Member(
+    target = _subpart(m, subparts, seen)
+    return Member(
         name=m.get("Name", ""),
-        data_type=_member_type(m),
+        data_type=_member_type(m, target),
         lid=int(m.get("LID", "0")),
         offset=int(m.get("StdO", "0")),
         rid=int(m.get("RID", "0") or "0", 16),
         section=section,
+        fields=_member_fields(target, section, subparts, seen),
+        id=int(m.get("ID", "0")),
     )
-    spi = m.get("SubPartIndex")
-    if spi is not None:
-        idx = int(spi)
-        # Only an inlined type definition (a *Source part) carries sub-members;
-        # a *Section index or a library reference expands to nothing.
-        if 0 <= idx < len(subparts) and subparts[idx].get("Kind", "").endswith("Source"):
-            target = subparts[idx]
-            if id(target) not in seen:
-                member.fields = _parse_source_part(target, seen | {id(target)})
-    return member
+
+
+def _subpart(m: ET.Element, subparts: list[ET.Element], seen: set[int]) -> ET.Element | None:
+    """Return the part a member's ``SubPartIndex`` selects, or None if absent, out of range or already on the path."""
+    idx = int(m.get("SubPartIndex", "-1"))
+    if not 0 <= idx < len(subparts) or id(subparts[idx]) in seen:
+        return None
+    return subparts[idx]
+
+
+def _member_fields(target: ET.Element | None, section: str, subparts: list[ET.Element], seen: set[int]) -> list[Member]:
+    """Expand a member's ``SubPartIndex`` target into its sub-members."""
+    if target is None:
+        return []
+    kind = target.get("Kind", "")
+    # An inlined type definition (a *Source part) has its own SubParts; an inline
+    # Struct's nested Structure parts sit in the same list as its own part.
+    # A *Section index or a library reference expands to nothing.
+    if kind.endswith("Source"):
+        return _parse_source_part(target, section, seen | {id(target)})
+    if kind == "Structure":
+        return _build_members(target.findall("./Payload/Member"), section, subparts, seen | {id(target)})
+    return []
 
 
 def block_interface_from_explore(explore_payload: bytes) -> list[Member]:
