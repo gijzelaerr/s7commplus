@@ -151,6 +151,8 @@ class PLCAdapter(Protocol):
 
     def cpu_state(self) -> str: ...
 
+    def request_operating_state(self, state: int) -> Any: ...
+
     def protection_level(self) -> int | None: ...
 
     def create_subscription(self, access_sequences: Sequence[str]) -> int: ...
@@ -179,6 +181,7 @@ class PLCAdapter(Protocol):
 PENDING_FEATURES = {
     "reconnect": "reconnect() (gijzelaerr/s7commplus#99)",
     "certificate_pinning": "tls_cert_fingerprint (gijzelaerr/s7commplus#97)",
+    "operating_state_control": "request_operating_state() (gijzelaerr/s7commplus#8)",
 }
 
 
@@ -189,6 +192,8 @@ def _client_supports(client: Any, feature: str) -> bool:
         return "tls_cert_fingerprint" in inspect.signature(client.connect).parameters and callable(
             getattr(client, "peer_certificate_fingerprint", None)
         )
+    if feature == "operating_state_control":
+        return callable(getattr(client, "request_operating_state", None))
     raise ValueError(f"unknown feature {feature!r}")
 
 
@@ -262,6 +267,9 @@ class S7CommPlusAdapter:
 
     def cpu_state(self) -> str:
         return self.client.get_cpu_state()
+
+    def request_operating_state(self, state: int) -> Any:
+        return self.client.request_operating_state(state)
 
     def protection_level(self) -> int | None:
         return self.client.protection_level
@@ -361,6 +369,9 @@ class AsyncS7CommPlusAdapter:
 
     def cpu_state(self) -> str:
         return self._run(self.client.get_cpu_state)
+
+    def request_operating_state(self, state: int) -> Any:
+        return self._run(lambda: self.client.request_operating_state(state))
 
     def protection_level(self) -> int | None:
         return self.client.protection_level

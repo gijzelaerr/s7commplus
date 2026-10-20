@@ -476,6 +476,32 @@ def _build_set_variable_payload(in_object_id: int, address: int, value: bytes) -
     return payload
 
 
+def _build_set_operating_state_payload(in_object_id: int, state: int) -> bytes:
+    """Build the SetVariable body that writes CPUexecUnit.OperatingStateREQ (0x877).
+
+    Reuses the plain SetVariable layout (:func:`_build_set_variable_payload`),
+    targeting the CPUexecUnit object. The operating-state request value is
+    carried as a USINT PValue, the same ``[flags][USINT][VLQ value]`` shape TIA
+    Portal uses for the address-323 session activation.
+
+    .. warning::
+
+        The request layout, the USINT datatype of ``OperatingStateREQ`` and the
+        :class:`~s7commplus.protocol.OperatingStateRequest` values are **not
+        verified against a real PLC**; see
+        https://github.com/gijzelaerr/s7commplus/issues/8.
+
+    Args:
+        in_object_id: RID of the CPUexecUnit object (``Ids.NATIVE_THE_CPU_EXEC_UNIT_RID``).
+        state: Target operating state (an ``OperatingStateRequest`` value).
+
+    Returns:
+        Encoded SetVariable payload, ready for ``send_request(integrity_tail=4)``.
+    """
+    value = bytes([0x00, DataType.USINT]) + encode_uint32_vlq(state)
+    return _build_set_variable_payload(in_object_id, Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ, value)
+
+
 def _check_set_variable_response(payload: bytes) -> None:
     """Raise when a SetVariable response reports a refused legitimation.
 

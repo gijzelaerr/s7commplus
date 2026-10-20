@@ -40,6 +40,7 @@ from .connection import (
     FamilyOnlyFingerprintError,
     S7CommPlusConnection,
     SessionKeyCandidateRejectedError,
+    _build_set_operating_state_payload,
     _check_certificate_pin,
     _check_plaintext_fallback,
     _resolve_use_tls,
@@ -78,6 +79,31 @@ _T = TypeVar("_T")
 DBWriteItem: TypeAlias = tuple[int, int, bytes, DataType]
 SymbolicReadItem: TypeAlias = tuple[int, list[int]] | tuple[int, list[int], int]
 SymbolicWriteItem: TypeAlias = tuple[int, list[int], bytes, int, DataType]
+
+
+@dataclasses.dataclass(frozen=True)
+class OperatingStateChange:
+    """Outcome of an experimental, unverified operating-state request (see issue #8).
+
+    The fields are raw evidence captured straight off the wire, so a hardware
+    run of the acceptance suite can record exactly what was sent and received.
+
+    Attributes:
+        state: The ``OperatingStateRequest`` value that was sent.
+        request: The SetVariable request body (without transport/integrity framing).
+        response: The raw response payload, starting with the ReturnValue.
+        return_value: The 64-bit ReturnValue the PLC answered with (0 on success).
+    """
+
+    state: int
+    request: bytes
+    response: bytes
+    return_value: int
+
+    @property
+    def ok(self) -> bool:
+        """Whether the PLC reported success (a zero ReturnValue)."""
+        return self.return_value == 0
 
 
 def _normalize_write_item(item: DBWriteItem) -> tuple[int, int, bytes, DataType]:
@@ -1307,6 +1333,42 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, "CPU state read")
         return _parse_cpu_state(response)
+
+    def request_operating_state(self, state: int) -> OperatingStateChange:
+        """Send an operating-state (RUN/STOP) request and return the raw exchange.
+
+        .. warning::
+
+            **Experimental and unverified.** The request layout, the datatype of
+            ``OperatingStateREQ`` (0x877) and the
+            :class:`~s7commplus.protocol.OperatingStateRequest` values it carries
+            have **not** been confirmed against a real PLC; the derivation and
+            validation of this write path is issue
+            `#8 <https://github.com/gijzelaerr/s7commplus/issues/8>`_. Use only
+            against a dedicated, non-production, non-safety-critical controller.
+
+        Unlike most methods, this one does **not** raise on a non-zero
+        ReturnValue: it returns the request bytes, response bytes and ReturnValue
+        verbatim so a caller can record exactly what the PLC did. It also makes
+        no claim that the state actually changed — read it back with
+        :meth:`get_cpu_state` to confirm.
+
+        Args:
+            state: Target operating state, an ``OperatingStateRequest`` value
+                (``STOP=1``, ``RESET_RETENTIVE=2``, ``RUN=3``, ``RUN_REDUNDANT=4``).
+
+        Returns:
+            An :class:`OperatingStateChange` with the sent and received bytes.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+        """
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        payload = _build_set_operating_state_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, int(state))
+        response = self._connection.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
+        return_value, _ = decode_uint64_vlq(response, 0)
+        return OperatingStateChange(state=int(state), request=payload, response=response, return_value=return_value)
 
     def upload_block(self, block_type: int, block_number: int) -> bytes:
         """Upload (read) a program block from the PLC.
