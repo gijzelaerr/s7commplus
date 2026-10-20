@@ -13,6 +13,8 @@ Clients
    :undoc-members:
 
 .. autoclass:: s7commplus.ProgramObject
+
+.. autoclass:: s7commplus.OperatingStateChange
    :members:
 
 Symbolic tags
@@ -109,6 +111,9 @@ Return values
 .. autoclass:: s7commplus.protocol.ErrorSource
    :members:
    :undoc-members:
+
+.. autoclass:: s7commplus.protocol.OperatingStateRequest
+   :members:
 
 Exceptions
 ----------

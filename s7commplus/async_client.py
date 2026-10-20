@@ -27,6 +27,7 @@ from .error import (
 )
 
 from . import typeinfo
+from .vlq import decode_uint64_vlq
 from ._session_core import SessionCore
 from ._session_core import _Incoming, _ReplyWait
 from .blob_decompressor import find_and_decompress
@@ -45,6 +46,7 @@ from .client import (
     _value_plans,
     _LEGACY_KEY_CACHE,
     DBWriteItem,
+    OperatingStateChange,
     SymbolicReadItem,
     SymbolicWriteItem,
     _build_area_read_payload,
@@ -91,6 +93,7 @@ from .connection import (
     SessionKeyAuthenticationDependencyError,
     SessionKeyCandidateRejectedError,
     _alarm_texts_and_domain_filter,
+    _build_set_operating_state_payload,
     _check_set_variable_response,
     _check_timeout,
     _check_v1_legitimation_response,
@@ -1298,6 +1301,36 @@ class S7CommPlusAsyncClient(SessionCore):
         response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, "CPU state read")
         return _parse_cpu_state(response)
+
+    async def request_operating_state(self, state: int) -> OperatingStateChange:
+        """Send an operating-state (RUN/STOP) request and return the raw exchange.
+
+        .. warning::
+
+            **Experimental and unverified.** The request layout, the datatype of
+            ``OperatingStateREQ`` (0x877) and the
+            :class:`~s7commplus.protocol.OperatingStateRequest` values it carries
+            have **not** been confirmed against a real PLC; the derivation and
+            validation of this write path is issue
+            `#8 <https://github.com/gijzelaerr/s7commplus/issues/8>`_. Use only
+            against a dedicated, non-production, non-safety-critical controller.
+
+        Mirrors :meth:`s7commplus.Client.request_operating_state`: it does **not**
+        raise on a non-zero ReturnValue, and makes no claim that the state
+        actually changed — read it back with :meth:`get_cpu_state` to confirm.
+
+        Args:
+            state: Target operating state, an ``OperatingStateRequest`` value
+                (``STOP=1``, ``RESET_RETENTIVE=2``, ``RUN=3``, ``RUN_REDUNDANT=4``).
+
+        Returns:
+            An :class:`~s7commplus.client.OperatingStateChange` with the sent and
+            received bytes.
+        """
+        payload = _build_set_operating_state_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, int(state))
+        response = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
+        return_value, _ = decode_uint64_vlq(response, 0)
+        return OperatingStateChange(state=int(state), request=payload, response=response, return_value=return_value)
 
     async def upload_block(self, block_type: int, block_number: int) -> bytes:
         """Upload (read) a program block from the PLC. Not implemented yet.

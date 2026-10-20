@@ -64,6 +64,7 @@ from ._tls import (
     _verify_pinned_certificate as _verify_pinned_certificate,
 )
 from ._handshake import (
+    _build_set_operating_state_payload as _build_set_operating_state_payload,
     _build_session_activate_payload as _build_session_activate_payload,
     _renews_session_key as _renews_session_key,
     _LEGITIMATION_ACCEPTED as _LEGITIMATION_ACCEPTED,

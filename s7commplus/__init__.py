@@ -26,7 +26,7 @@ from .blob_decompressor import (
 )
 from .block_interface import BlockInterface, BlockInterfaceError, Member, block_interface_from_explore, resolve_id_path
 from .catalog import ArrayDimension, SymbolCatalog, SymbolicTag, TagResult
-from .client import DBWriteItem, ProgramObject, SymbolicReadItem
+from .client import DBWriteItem, OperatingStateChange, ProgramObject, SymbolicReadItem
 from .client import S7CommPlusClient as Client
 from .connection import S7CommPlusConnection
 from .devices import DEVICE_NAMES, device_family, device_name
@@ -77,6 +77,7 @@ __all__ = [
     "ExploreDataBlock",
     "LanguageId",
     "Member",
+    "OperatingStateChange",
     "PresetIdentity",
     "PresetStream",
     "ProgramObject",
