@@ -7,8 +7,9 @@ CHANGES
 PLCSIM Advanced is now validated for the V1 SessionKey (key family 03) and TLS
 sessions, including password legitimation. Tag values convert to and from Python
 types, large batches are split to fit the PLC's request limits, and TLS gains
-certificate pinning and an automatic mode. A `s7commplus` command-line tool is
-new. Where an entry was verified only on PLCSIM or on a single CPU, it says so.
+certificate pinning and an automatic mode. Clients can reconnect, optionally
+retrying reads automatically, and every reply now has a configurable deadline.
+A `s7commplus` command-line tool is new. Where an entry was verified only on PLCSIM or on a single CPU, it says so.
 
 ### Upgrading from 0.2.0
 
@@ -18,6 +19,22 @@ Most applications need no changes. Check the following if you use them:
   handshake: catch `S7ConnectionError` instead (the original error is the
   `__cause__`). `use_tls` accepts only `True`, `False` or `"auto"`; any other
   string (such as `"false"`) raises `ValueError` instead of turning TLS on (#98).
+* `AsyncClient` raises `S7ConnectionError` when the PLC closes or resets the
+  connection during a request, instead of letting `asyncio.IncompleteReadError`
+  or an `OSError` such as `ConnectionResetError` escape: catch
+  `S7ConnectionError` where you caught those (#122).
+* Every reply now has a deadline: 5 s by default for a request
+  (`request_timeout`) and 30 s for an EXPLORE (`explore_timeout`). Missing it
+  raises `S7TimeoutError` and closes the session; call `connect()` again before
+  the next request (a 0.2.0 sync session was unusable at that point too). For a
+  slower PLC pass a larger `request_timeout` or `explore_timeout` to `connect()`;
+  `explore_timeout=None` gives EXPLOREs the request timeout (#123).
+* An async notification wait without a `timeout` no longer waits forever: it
+  ends after `notification_timeout`, else the request timeout, and raises
+  `S7TimeoutError` instead of `asyncio.TimeoutError`, so catch `S7TimeoutError`.
+  Pass a larger `notification_timeout` to `connect()` for long cycles or alarm
+  waits. A per-call `timeout` that is zero, negative or not finite raises
+  `ValueError` (#123).
 * `explore()`, `explore_xml()`, `get_cpu_state()`, `list_datablocks()`,
   `browse()`, `refresh_tag_catalog()` and `read_alarms()` raise
   `S7ReturnValueError` when the PLC answers with an error ReturnValue. Code that
@@ -148,6 +165,46 @@ Most applications need no changes. Check the following if you use them:
   exit status is 0 on success, 1 when the operation fails, including any
   `ValueError` the library raises once connected, and 2 for a usage error found
   before connecting or an unknown tag (#103).
+* `Client.reconnect()` and `AsyncClient.reconnect()` build a new session with the
+  parameters of the last `connect()` and legitimate it with the same password; on
+  `AsyncClient`, a successful `authenticate()` replaces that password and adds its
+  username, while a refused one changes nothing. `connection_generation` counts
+  the reconnects. A failed attempt keeps the parameters, so it can be repeated
+  once the PLC is back. Data subscriptions lost with the old session stay
+  restorable with `resubscribe()`; alarm subscriptions must be created again.
+  Reconnects are serialized, and while one runs, other `AsyncClient` tasks' requests
+  fail with "Not connected" instead of interleaving with its handshake (#122).
+* Opt-in automatic reconnect for reads: with `connect(..., auto_reconnect=True)`
+  (keyword-only) or the `auto_reconnect` property, a read that finds the connection
+  dropped reconnects and runs once more on the new session. Only `db_read`,
+  `db_read_multi`, `read_area`, `read_symbolic`, `read_symbolic_multi`, `read_tag`,
+  `read_tags`, `browse` and `get_cpu_state` are retried; writes never are, because
+  it is unknown whether the PLC applied a lost write. A read that timed out is
+  not retried either (`S7TimeoutError` is not an `S7ConnectionError`); when the
+  timeout ended the session, the next call reconnects. A read called from another
+  reconnects only through the outermost call. It stands down, raising
+  `S7ConnectionError`, while data or alarm subscriptions are live or lost data
+  subscriptions await `resubscribe()`. After an automatic attempt the next one
+  waits at least one second, and `AsyncClient` tasks that find the same
+  connection dropped share one reconnect. Off by default (#122).
+* `Client.connect()` and `AsyncClient.connect()` take the keyword-only
+  `timeout` (the TCP connect and the COTP, InitSSL, TLS and CreateObject
+  handshake together; 5 s by default, as before), `request_timeout` (the
+  wait for each reply, and for each further part of a multi-part reply;
+  default `timeout`) and `explore_timeout` (the same for the reply to an
+  EXPLORE; default 30 s, `None` for the request timeout).
+  `S7CommPlusConnection.connect()` takes `request_timeout` and
+  `explore_timeout` by keyword. A timeout that is zero, negative or not finite
+  raises `ValueError`. The async client now bounds the connect, the
+  handshake, every reply and every send, so a silent PLC raises
+  `S7TimeoutError` instead of hanging an `await`, and it tunes TCP keepalive
+  like the sync client (#123).
+* `connect()` on both clients also takes the keyword-only
+  `notification_timeout`, the default wait of the notification receivers
+  (default: the request timeout); `S7CommPlusConnection.connect()` takes it by
+  keyword. The sync `receive_subscription_notification()` and
+  `receive_alarm_notification()` gain the per-call `timeout` the async ones
+  have, and `S7CommPlusConnection.receive_notification()` takes one too (#123).
 * New exceptions in `s7commplus.error`: `S7ReturnValueError` (#110),
   `S7CertificateError` (#97), `S7TlsHandshakeError` (#98), and
   `S7SubscriptionError` and `S7WriteError` (#100).
@@ -202,6 +259,40 @@ Most applications need no changes. Check the following if you use them:
 * `create_subscription()` raises `ValueError` instead of sending a request over
   `max_request_bytes`, which the PLC would answer by dropping the connection; at
   the default that is about 40 to 46 items with a one-level LID path (#100).
+* `AsyncClient` raises `S7ConnectionError` when the PLC closes or resets the
+  connection during a request, as `Client` already did, instead of letting
+  `asyncio.IncompleteReadError` or an `OSError` such as `ConnectionResetError`
+  escape. It also ends the session (`connected` turns false), so the next request
+  fails at once with "Not connected", and `AsyncClient.browse()` now reconnects on
+  firmware that resets the connection after a symbolic read, as `Client.browse()`
+  does (#122).
+* Every reply now has a deadline, and missing it closes the session.
+  Once connected, each reply, and each further part of a multi-part reply,
+  must arrive within 5 s by default (`request_timeout`), or within 30 s by
+  default (`explore_timeout`) for the reply to an EXPLORE, which `browse()`,
+  `list_datablocks()`, `explore()`, `get_cpu_state()` and `read_alarms()`
+  send, among others. A reply that misses its deadline raises
+  `S7TimeoutError` and closes the session (see the timeout fix under Bug
+  fixes and hardening). Before, the async client waited for a reply without
+  limit, and the sync client gave every socket read the connect timeout (5 s
+  by default), EXPLORE replies included. EXPLORE gets the longer default
+  because its replies can be large: on a CPU 1215C (FW V4.2, non-TLS V1
+  SessionKey session, 54 data blocks, 6802 variables) the type-info EXPLORE
+  that `browse()` sends, about 111 KB in 111 parts, took 5.9 to 7.0 s in
+  total over three runs, the other EXPLOREs about 1 s, and a
+  GetMultiVariables at most 0.52 s (#123).
+* An async notification wait (`receive_subscription_notification()`,
+  `receive_alarm_notification()`, `AsyncSubscriptionQueue.get()`) without a
+  `timeout` used to wait forever; it now ends after `notification_timeout`,
+  else the request timeout (5 s by default), as in the sync client. In both
+  clients a notification wait now bounds the whole call rather than each
+  frame, so notifications for other subscriptions no longer extend it.
+  PLCSIM Advanced (V8.0, CPU 1511, FW V2.9; not checked on hardware) sends a
+  notification every subscription cycle even without changes, so an active
+  subscription with a short cycle does not run into the default. An expired
+  async notification wait raises `S7TimeoutError` instead of
+  `asyncio.TimeoutError`, and a per-call `timeout` that is zero, negative or
+  not finite now raises `ValueError`, as the connect timeouts do (#123).
 
 ### Bug fixes and hardening
 
@@ -299,6 +390,23 @@ Most applications need no changes. Check the following if you use them:
   copied and deep-copied, so they cross process boundaries intact (#111).
 * On Windows, `S7CommPlusServer.start()` raises `OSError` when the port is
   already in use, instead of sharing it with the other listener (#113).
+* A timeout no longer leaves a dead session behind that still reports
+  `connected`. A request whose reply does not arrive within the request
+  timeout (for an EXPLORE, the EXPLORE timeout), and any read that stops
+  part-way through a frame or a multi-part reply (in the async client also
+  one cancelled from outside), close the session without a DeleteSession
+  exchange and raise `S7TimeoutError`. The session is then handled like one
+  the PLC dropped: `connected` reports `False`, the next request raises
+  `S7ConnectionError("Not connected")`, and the connect parameters and the
+  subscription bookkeeping are kept. Before, the sync client marked only its
+  socket dead, so `connected` stayed `True` while every later request failed
+  with "Not connected", and an async wait that ended between a frame's header
+  and its body left the stream out of step. A notification wait that runs out
+  before any byte of the next frame arrived leaves the session usable, in the
+  sync client too (#123).
+* A failed reconnect inside `AsyncClient.browse()` no longer discards the
+  `connect()` parameters, which made every later request fail with "Not
+  connected" until `connect()` was called again (#122).
 
 ### Documentation
 
