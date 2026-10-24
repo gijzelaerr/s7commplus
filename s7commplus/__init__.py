@@ -18,7 +18,7 @@ from .async_client import S7CommPlusAsyncClient as AsyncClient
 from .alarm import Alarm, AlarmNotification, AlarmText, LanguageId
 from .blob_decompressor import PresetStream, decompress_blob, find_and_decompress, iter_preset_headers, iter_preset_streams
 from .catalog import ArrayDimension, SymbolCatalog, SymbolicTag, TagResult
-from .client import DBWriteItem, SymbolicReadItem
+from .client import DBWriteItem, OperatingStateChange, SymbolicReadItem
 from .client import S7CommPlusClient as Client
 from .connection import S7CommPlusConnection
 from .devices import DEVICE_NAMES, device_family, device_name
@@ -53,6 +53,7 @@ __all__ = [
     "ExploreDataBlock",
     "LanguageId",
     "Member",
+    "OperatingStateChange",
     "PresetIdentity",
     "PresetStream",
     "S7CommPlusConnection",

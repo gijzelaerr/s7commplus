@@ -17,7 +17,35 @@ Hard process termination or power loss cannot run cleanup, so inspect the
 scratch DB before reuse after either event.
 
 Administrative actions require ``--allow-admin`` and must never target an
-in-service PLC. No administrative scenarios are included in the initial suite.
+in-service PLC.
+
+.. danger::
+
+   The one administrative scenario, ``Stop and restart the CPU and record the
+   exchange`` (``tests/features/real_plc/administrative.feature``), **halts the
+   CPU**: it sends a STOP operating-state request, waits until the controller
+   reports STOP, then sends RUN. The RUN/STOP request layout is **not verified
+   on hardware** (`issue #8 <https://github.com/gijzelaerr/s7commplus/issues/8>`_)
+   — running this scenario *is* the evidence that settles it. A stopped CPU
+   drops its outputs: this can trip machinery, spoil a process, or create a
+   hazard. Run it only on a **dedicated, bench-top, non-production,
+   non-safety-critical** controller that is physically disconnected from any
+   plant, process, or person, and only when you can tolerate the CPU stopping
+   and have a way to restart it by hand if the RUN request does not take.
+
+The scenario records the request bytes, response bytes and ReturnValues for
+both the STOP and the RUN request in the sanitized JSON report (under ``plc``,
+keyed by client), so the report alone is the capture issue #8 asked for. It is
+also tagged ``@pending`` because ``Client.request_operating_state`` /
+``AsyncClient.request_operating_state`` are new, so a checkout without them
+skips it. Enable both gates to run it::
+
+   python tools/run_real_plc_acceptance.py \
+     --plc-ip YOUR_PRIVATE_ADDRESS \
+     --tester @YOUR_HANDLE \
+     --plc-family S7-1500 --plc-model "CPU 1511-1 PN" \
+     --plc-firmware V2.9 --plc-security-mode "S7CommPlus V2 with TLS" \
+     --plc-use-tls --allow-admin --include-pending
 
 PLC preparation
 ---------------

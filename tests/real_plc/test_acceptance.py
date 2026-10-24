@@ -277,6 +277,74 @@ def cpu_state_matches(scenario_state: dict[str, Any], plc_config: PLCConfig) -> 
         assert scenario_state["cpu_state"] == plc_config.expected_cpu_state
 
 
+# --- Operating-state control (administrative, unverified: issue #8) ---------
+
+# A real CPU takes a moment to reach the requested state after acknowledging the
+# request; poll get_cpu_state() rather than assume the change is instantaneous.
+OPERATING_STATE_TIMEOUT = 20.0
+
+
+@given("I record the starting CPU operating state")
+def record_starting_cpu_state(plc_adapter: PLCAdapter, scenario_state: dict[str, Any], request: pytest.FixtureRequest) -> None:
+    scenario_state["starting_cpu_state"] = plc_adapter.cpu_state()
+    _record(request, {f"operating_state_start_{plc_adapter.client_kind}": scenario_state["starting_cpu_state"]})
+
+
+def _request_state_and_poll(plc_adapter: PLCAdapter, requested: str, target: str, scenario_state: dict[str, Any]) -> None:
+    from s7commplus.protocol import OperatingStateRequest
+
+    change = plc_adapter.request_operating_state(OperatingStateRequest[requested])
+    scenario_state["last_change"] = change
+    scenario_state["last_requested"] = requested
+    deadline = time.monotonic() + OPERATING_STATE_TIMEOUT
+    state = plc_adapter.cpu_state()
+    while state != target and time.monotonic() < deadline:
+        time.sleep(0.2)
+        state = plc_adapter.cpu_state()
+    scenario_state["polled_state"] = state
+
+
+@when("I request the STOP operating state and poll until the CPU stops")
+def request_stop(plc_adapter: PLCAdapter, scenario_state: dict[str, Any]) -> None:
+    _request_state_and_poll(plc_adapter, "STOP", "STOP", scenario_state)
+
+
+@when("I request the RUN operating state and poll until the CPU runs")
+def request_run(plc_adapter: PLCAdapter, scenario_state: dict[str, Any]) -> None:
+    _request_state_and_poll(plc_adapter, "RUN", "RUN", scenario_state)
+
+
+def _record_operating_state_exchange(
+    plc_adapter: PLCAdapter, scenario_state: dict[str, Any], request: pytest.FixtureRequest, target: str
+) -> None:
+    change = scenario_state["last_change"]
+    kind = plc_adapter.client_kind
+    requested = scenario_state["last_requested"]
+    _record(
+        request,
+        {
+            f"operating_state_{requested}_request_{kind}": bytes(change.request).hex(),
+            f"operating_state_{requested}_response_{kind}": bytes(change.response).hex(),
+            f"operating_state_{requested}_return_value_{kind}": int(change.return_value),
+            f"operating_state_{requested}_reached_{kind}": scenario_state["polled_state"],
+        },
+    )
+    assert scenario_state["polled_state"] == target, (
+        f"CPU did not reach {target} within {OPERATING_STATE_TIMEOUT}s; "
+        f"ReturnValue=0x{int(change.return_value):X}, state={scenario_state['polled_state']}"
+    )
+
+
+@then("the CPU operating state is STOP and the exchange is recorded")
+def stopped_and_recorded(plc_adapter: PLCAdapter, scenario_state: dict[str, Any], request: pytest.FixtureRequest) -> None:
+    _record_operating_state_exchange(plc_adapter, scenario_state, request, "STOP")
+
+
+@then("the CPU operating state is RUN and the exchange is recorded")
+def running_and_recorded(plc_adapter: PLCAdapter, scenario_state: dict[str, Any], request: pytest.FixtureRequest) -> None:
+    _record_operating_state_exchange(plc_adapter, scenario_state, request, "RUN")
+
+
 # --- Symbols ---------------------------------------------------------------
 
 

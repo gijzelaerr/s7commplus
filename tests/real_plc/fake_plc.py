@@ -21,7 +21,9 @@ from typing import Any, Optional
 import pytest
 
 from s7commplus.catalog import SymbolicTag, TagResult
+from s7commplus.client import OperatingStateChange
 from s7commplus.error import S7AuthenticationError, S7ConnectionError
+from s7commplus.protocol import OperatingStateRequest
 from s7commplus.subscription import SubscriptionNotification
 from tests.real_plc import support
 
@@ -94,6 +96,7 @@ class FakeClient:
         self._subscriptions: dict[int, str] = {}
         self._sequence = 0
         self._last_connect: dict[str, Any] = {}
+        self._cpu_state = "RUN"
 
     def connect(
         self,
@@ -178,7 +181,14 @@ class FakeClient:
 
     def get_cpu_state(self) -> str:
         self._require_connection()
-        return "RUN"
+        return self._cpu_state
+
+    def request_operating_state(self, state: int) -> OperatingStateChange:
+        self._require_connection()
+        request = _PLC.object_id().to_bytes(4, "big") + bytes([int(state)])
+        if int(state) in (OperatingStateRequest.STOP, OperatingStateRequest.RUN, OperatingStateRequest.RUN_REDUNDANT):
+            self._cpu_state = "STOP" if int(state) == OperatingStateRequest.STOP else "RUN"
+        return OperatingStateChange(state=int(state), request=request, response=b"\x00", return_value=0)
 
     def create_subscription(self, items: Sequence[str]) -> int:
         self._require_connection()
@@ -241,6 +251,7 @@ _ASYNC_METHODS = (
     "read_tags",
     "write_tag",
     "get_cpu_state",
+    "request_operating_state",
     "create_subscription",
     "receive_subscription_notification",
     "delete_subscription",

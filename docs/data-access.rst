@@ -214,3 +214,14 @@ controller and authorization boundary before using them.
 ``set_plc_operating_state`` raises ``NotImplementedError`` and sends nothing.
 The RUN/STOP request has not been validated on a real PLC yet; see
 `issue #8 <https://github.com/gijzelaerr/s7commplus/issues/8>`_.
+
+``request_operating_state`` is the experimental, opt-in counterpart that
+*does* send a RUN/STOP request (a SetVariable of ``OperatingStateREQ`` on the
+CPUexecUnit object) and returns an :class:`~s7commplus.OperatingStateChange`
+with the request bytes, response bytes and ReturnValue. Its wire layout is
+still **unverified on hardware** (issue #8): it may not change the state, and
+it does not raise on a non-zero ReturnValue — read the state back with
+``get_cpu_state`` to confirm. A STOP request halts the CPU, so use it only on a
+dedicated, non-production, non-safety-critical controller. See
+:doc:`real-plc-testing` for the gated acceptance scenario that drives and
+records it.
