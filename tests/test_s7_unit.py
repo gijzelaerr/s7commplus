@@ -46,6 +46,7 @@ from s7commplus.vlq import (
     encode_uint64_vlq,
     encode_int32_vlq,
     decode_uint32_vlq,
+    decode_uint64_vlq,
 )
 
 
@@ -403,6 +404,63 @@ class TestParseReadResponse:
         response = b"\x2a\x00\x00\x04\x00\x00\x00\x00"
         results = _parse_read_response(response)
         assert results == [b"\x2a"]
+
+    # GetMultiVariables replies from an S7-1500 (CPU 1512SP-1 PN, FW V2.9, TLS), captured
+    # by @bvanelli for #120 (after the 14-byte response header). DB1 is 37 bytes; DB9999
+    # does not exist. The PLC sent ReturnValue 0x20278000009A0013 with each one (#129);
+    # the tests replace it with 0 to reach the item lists.
+    CAPTURED = {
+        # (1,0,2), (9999,0,2), (1,4,4): the missing DB is in both lists
+        "missing DB in the middle": (
+            "9089f0808082b480130100140002000a020000030014000442f6e6660002c08895b080e6a5fff4000a00000000",
+            [b"\x00\n", None, b"B\xf6\xe6f"],
+        ),
+        # (1,0,2), (1,1000,4), (1,4,4): an offset past the end is only in the error list
+        "offset past the end": (
+            "9089f0808082b480130100140002000a030014000442f6e6660002c181d1d0808ba3ffc3000c00000000",
+            [b"\x00\n", None, b"B\xf6\xe6f"],
+        ),
+        # (9999,0,2), (1,1000,4)
+        "only failing items": (
+            "9089f0808082b480130100000001c08895b080e6a5fff402c181d1d0808ba3ffc3000e00000000",
+            [None, None],
+        ),
+        # (9999,0,2), (1,0,2)
+        "failing item first": (
+            "9089f0808082b480130100000200140002000a0001c08895b080e6a5fff4001000000000",
+            [None, b"\x00\n"],
+        ),
+    }
+
+    @staticmethod
+    def _with_return_value_zero(hex_reply: str) -> bytes:
+        reply = bytes.fromhex(hex_reply)
+        _, consumed = decode_uint64_vlq(reply, 0)
+        return encode_uint64_vlq(0) + reply[consumed:]
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_gives_one_result_per_item(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = self._with_return_value_zero(hex_reply)
+        assert _parse_read_response(reply) == expected
+        assert _parse_read_response(reply, expected_count=len(expected)) == expected
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_with_the_wrong_item_count_is_refused(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        with pytest.raises(RuntimeError, match="Symbolic multi-read failed"):
+            _parse_read_response(self._with_return_value_zero(hex_reply), expected_count=len(expected) + 1)
+
+    def test_an_item_with_a_value_and_an_error_is_refused(self) -> None:
+        response = self._build_response(items=[b"\x01\x02"], errors=[(1, 0xDEAD)])
+        with pytest.raises(RuntimeError, match="duplicate item 1"):
+            _parse_read_response(response, expected_count=1)
+        assert _parse_read_response(response) == [None]  # without a count, the error wins
+
+    def test_an_item_with_two_errors_is_refused(self) -> None:
+        response = self._build_response(errors=[(1, 0xDEAD), (1, 0xBEEF)])
+        with pytest.raises(RuntimeError, match="duplicate item 1"):
+            _parse_read_response(response, expected_count=1)
 
 
 class TestParseWriteResponse:
