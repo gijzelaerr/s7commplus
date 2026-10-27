@@ -19,6 +19,7 @@ from hypothesis import strategies as st
 
 from s7commplus import alarm, blob_decompressor, codec, subscription, tag_browser, typeinfo
 from s7commplus.client import (
+    _parse_program_objects,
     _parse_cpu_state,
     _parse_explore_datablocks,
     _parse_read_response,
@@ -56,6 +57,7 @@ PARSERS: list[tuple[str, Callable[[bytes], Any], tuple[type[BaseException], ...]
     ("decompress_blob", blob_decompressor.decompress_blob, (zlib.error,)),
     ("_parse_cpu_state", _parse_cpu_state, ()),
     ("_parse_explore_datablocks", _parse_explore_datablocks, ()),
+    ("_parse_program_objects", _parse_program_objects, ()),
     # The read and write parsers report a PLC error code as RuntimeError.
     ("_parse_read_response", _parse_read_response, (RuntimeError,)),
     ("_parse_substreamed_read_response", _parse_substreamed_read_response, (RuntimeError,)),

@@ -6,16 +6,18 @@ import hmac
 import struct
 import time
 from collections.abc import Generator
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
 from s7commplus.error import S7ConnectionError, S7IntegrityError, S7ReturnValueError
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import (
+    ProgramObject,
     S7CommPlusClient,
     _build_multi_symbolic_read_payload,
     _build_symbolic_write_payload,
+    _parse_program_objects,
     _parse_explore_datablocks,
 )
 from s7commplus.connection import _parse_get_var_substreamed_response, _verify_v3_hmac
@@ -335,7 +337,7 @@ class TestClientServerIntegration:
 
             expected_payload = bytes.fromhex(expected_hex)
             send.assert_called_once_with(FunctionCode.EXPLORE, expected_payload, integrity_tail=5, reassemble=True)
-            assert [db["number"] for db in _parse_explore_datablocks(response)] == [1, 2]
+            assert [db.number for db in _parse_explore_datablocks(response)] == [1, 2]
         finally:
             client.disconnect()
 
@@ -365,12 +367,49 @@ class TestClientServerIntegration:
         finally:
             client.disconnect()
 
+    def test_program_objects(self, server: S7CommPlusServer) -> None:
+        # One object per block class besides DB, and PLCProgramChange, which a PLC sends as object 0x38 without a name
+        registered = [
+            ProgramObject(0x8A120001, Ids.FB_CLASS_RID, "FB1"),
+            ProgramObject(0x8A130001, Ids.FC_CLASS_RID, "FC1"),
+            ProgramObject(0x8A320001, Ids.PROGRAM_CYCLE_OB_CLASS_RID, "Main"),
+            ProgramObject(0x8A320020, Ids.CYCLIC_OB_CLASS_RID, "Cyclic interrupt"),
+            ProgramObject(0x89FD0001, Ids.UDT_CLASS_RID, "UDT1"),
+            ProgramObject(0x38, Ids.PLC_PROGRAM_CHANGE_CLASS_RID, ""),
+        ]
+        for obj in registered:
+            server.register_program_object(obj.rid, obj.class_id, obj.name or None)
+        client = S7CommPlusClient()
+        client.connect("127.0.0.1", port=server.port)
+        try:
+            assert client._connection is not None
+            with patch.object(client._connection, "send_request", wraps=client._connection.send_request) as send:
+                objects = client.program_objects()
+                datablocks = client.list_datablocks()
+            # Both send thePLCProgram with ObjectVariableTypeName (233) and Block.BlockNumber (2521) as VLQ
+            payload = bytes.fromhex("00000003000101000002816993590000000000")
+            request = call(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            assert send.call_args_list == [request, request]
+            # Children close before their parent, so PLCProgram comes last, as in a live S7-1500 reply
+            assert objects == [
+                ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1"),
+                ProgramObject(0x8A0E0002, Ids.DB_CLASS_RID, "DB2"),
+                *registered,
+                ProgramObject(Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram"),
+            ]
+            assert [db.number for db in datablocks] == [1, 2]
+            # Exploring FB1 returns FB1 alone, without the data blocks or the other registered objects
+            assert _parse_program_objects(client.explore(0x8A120001)) == [registered[0]]
+        finally:
+            client.disconnect()
+
     @pytest.mark.parametrize(
         "method, replies, operation",
         [
             # The hex reply is what a real S7-1500 sends for a missing object (ReturnValue -12)
             ("get_cpu_state", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "CPU state read"),
-            ("list_datablocks", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Data block list"),
+            ("list_datablocks", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
+            ("program_objects", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
             # browse() lists the data blocks first: b"\x00" is an empty list, so only the type-info explore fails
             ("browse", [b"\x00", bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Type-info browse"),
         ],
@@ -508,7 +547,7 @@ class TestAsyncClientServerIntegration:
 
             expected_payload = bytes.fromhex(expected_hex)
             send.assert_awaited_once_with(FunctionCode.EXPLORE, expected_payload, integrity_tail=5, reassemble=True)
-            assert [db["number"] for db in _parse_explore_datablocks(response)] == [1, 2]
+            assert [db.number for db in _parse_explore_datablocks(response)] == [1, 2]
 
     async def test_explore_missing_object(self, server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
@@ -529,12 +568,45 @@ class TestAsyncClientServerIntegration:
                 with pytest.raises(ValueError, match="truncated ReturnValue"):
                     await client.explore(0x12345678)
 
+    async def test_program_objects(self, server: S7CommPlusServer) -> None:
+        # One object per block class besides DB, and PLCProgramChange, which a PLC sends as object 0x38 without a name
+        registered = [
+            ProgramObject(0x8A120001, Ids.FB_CLASS_RID, "FB1"),
+            ProgramObject(0x8A130001, Ids.FC_CLASS_RID, "FC1"),
+            ProgramObject(0x8A320001, Ids.PROGRAM_CYCLE_OB_CLASS_RID, "Main"),
+            ProgramObject(0x8A320020, Ids.CYCLIC_OB_CLASS_RID, "Cyclic interrupt"),
+            ProgramObject(0x89FD0001, Ids.UDT_CLASS_RID, "UDT1"),
+            ProgramObject(0x38, Ids.PLC_PROGRAM_CHANGE_CLASS_RID, ""),
+        ]
+        for obj in registered:
+            server.register_program_object(obj.rid, obj.class_id, obj.name or None)
+        async with S7CommPlusAsyncClient() as client:
+            await client.connect("127.0.0.1", port=server.port)
+            with patch.object(client, "_send_request", wraps=client._send_request) as send:
+                objects = await client.program_objects()
+                datablocks = await client.list_datablocks()
+            # Both send thePLCProgram with ObjectVariableTypeName (233) and Block.BlockNumber (2521) as VLQ
+            payload = bytes.fromhex("00000003000101000002816993590000000000")
+            request = call(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            assert send.await_args_list == [request, request]
+            # Children close before their parent, so PLCProgram comes last, as in a live S7-1500 reply
+            assert objects == [
+                ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1"),
+                ProgramObject(0x8A0E0002, Ids.DB_CLASS_RID, "DB2"),
+                *registered,
+                ProgramObject(Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram"),
+            ]
+            assert [db.number for db in datablocks] == [1, 2]
+            # Exploring FB1 returns FB1 alone, without the data blocks or the other registered objects
+            assert _parse_program_objects(await client.explore(0x8A120001)) == [registered[0]]
+
     @pytest.mark.parametrize(
         "method, replies, operation",
         [
             # The hex reply is what a real S7-1500 sends for a missing object (ReturnValue -12)
             ("get_cpu_state", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "CPU state read"),
-            ("list_datablocks", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Data block list"),
+            ("list_datablocks", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
+            ("program_objects", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
             # browse() lists the data blocks first: b"\x00" is an empty list, so only the type-info explore fails
             ("browse", [b"\x00", bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Type-info browse"),
         ],
@@ -875,16 +947,7 @@ class TestSessionKeyIntegration:
         client = S7CommPlusClient()
         client.connect("127.0.0.1", port=session_key_server.port)
         try:
-            assert client.list_datablocks() == [
-                {
-                    "name": "DB1",
-                    "number": 1,
-                    "rid": 0x8A0E0001,
-                    "language": None,
-                    "knowhow_protected": False,
-                    "unlinked": False,
-                }
-            ]
+            assert client.list_datablocks() == [ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1")]
         finally:
             client.disconnect()
 

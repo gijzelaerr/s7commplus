@@ -12,6 +12,9 @@ Clients
    :members:
    :undoc-members:
 
+.. autoclass:: s7commplus.ProgramObject
+   :members:
+
 Symbolic tags
 -------------
 

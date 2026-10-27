@@ -15,7 +15,7 @@ import s7commplus.client as client_module
 from s7commplus import typeinfo
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.catalog import SymbolicTag
-from s7commplus.client import _AUTO_REFRESH_MIN_INTERVAL, S7CommPlusClient, _block_signature, _type_info_times
+from s7commplus.client import _AUTO_REFRESH_MIN_INTERVAL, ProgramObject, S7CommPlusClient, _block_signature, _type_info_times
 from s7commplus.error import S7ConnectionError
 from s7commplus.protocol import DataType, Ids, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
@@ -23,7 +23,7 @@ from s7commplus.typeinfo import Softdatatype
 from s7commplus.vlq import encode_uint32_vlq, encode_uint64_vlq
 
 TIME = Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME
-BLOCKS = [{"name": "DB1", "number": 1, "rid": 0x8A0E0001}]
+BLOCKS = [ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1")]
 SIGNATURE = [("DB1", 1, 0x8A0E0001)]
 TI_RID = 0x90000001
 
@@ -116,7 +116,7 @@ def test_type_info_times_keeps_only_reported_root_types() -> None:
 def test_sync_refreshes_on_first_call_then_only_on_change() -> None:
     client = S7CommPlusClient()
     client._connection = MagicMock()
-    one = [{"name": "DB1", "number": 1, "rid": 0x8A0E0001}]
+    one = [ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1")]
     client.list_datablocks = MagicMock(return_value=one)  # type: ignore[method-assign]
     client._browse_layout = MagicMock(  # type: ignore[method-assign]
         side_effect=lambda: ([], _block_signature(client.list_datablocks.return_value), {})
@@ -126,7 +126,7 @@ def test_sync_refreshes_on_first_call_then_only_on_change() -> None:
     assert client.refresh_caches_if_program_changed() is False  # unchanged
     assert client._browse_layout.call_count == 1
 
-    client.list_datablocks.return_value = one + [{"name": "DB2", "number": 2, "rid": 0x8A0E0002}]
+    client.list_datablocks.return_value = one + [ProgramObject(0x8A0E0002, Ids.DB_CLASS_RID, "DB2")]
     assert client.refresh_caches_if_program_changed() is True
     assert client._browse_layout.call_count == 2
 
@@ -151,7 +151,7 @@ async def test_async_refresh_requires_a_connection() -> None:
 async def test_async_refreshes_only_on_change() -> None:
     client = S7CommPlusAsyncClient()
     client._connected = True
-    client.list_datablocks = AsyncMock(return_value=[{"name": "DB1", "number": 1, "rid": 1}])  # type: ignore[method-assign]
+    client.list_datablocks = AsyncMock(return_value=[ProgramObject(1, Ids.DB_CLASS_RID, "DB1")])  # type: ignore[method-assign]
     client._browse_layout = AsyncMock(  # type: ignore[method-assign]
         side_effect=lambda: ([], _block_signature(client.list_datablocks.return_value), {})
     )
@@ -160,7 +160,7 @@ async def test_async_refreshes_only_on_change() -> None:
     assert await client.refresh_caches_if_program_changed() is False
     assert client._browse_layout.await_count == 1
 
-    client.list_datablocks.return_value = [{"name": "DB1", "number": 1, "rid": 1}, {"name": "DB2", "number": 2, "rid": 2}]
+    client.list_datablocks.return_value = [ProgramObject(1, Ids.DB_CLASS_RID, "DB1"), ProgramObject(2, Ids.DB_CLASS_RID, "DB2")]
     assert await client.refresh_caches_if_program_changed() is True
     assert client._browse_layout.await_count == 2
 

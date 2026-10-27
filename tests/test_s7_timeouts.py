@@ -552,7 +552,7 @@ def test_sync_explore_waits_for_the_explore_timeout_while_other_requests_do_not(
     try:
         proxy.pipe.delay_replies(0.8)
         start = time.monotonic()
-        assert [block["number"] for block in client.list_datablocks()] == [1]
+        assert [block.number for block in client.list_datablocks()] == [1]
         assert time.monotonic() - start > 0.7  # well past the request timeout
         assert client.connected
 
@@ -571,7 +571,7 @@ async def test_async_explore_waits_for_the_explore_timeout_while_other_requests_
     try:
         proxy.pipe.delay_replies(0.8)
         start = time.monotonic()
-        assert [block["number"] for block in await asyncio.wait_for(client.list_datablocks(), timeout=10)] == [1]
+        assert [block.number for block in await asyncio.wait_for(client.list_datablocks(), timeout=10)] == [1]
         assert time.monotonic() - start > 0.7  # well past the request timeout
         assert client.connected
 

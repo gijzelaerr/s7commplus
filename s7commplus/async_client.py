@@ -54,6 +54,9 @@ from .client import (
     _build_symbolic_read_payload,
     _build_symbolic_write_payload,
     _build_write_payload,
+    ProgramObject,
+    _PROGRAM_TREE_EXPLORE,
+    _parse_program_objects,
     _parse_explore_datablocks,
     _parse_cpu_state,
     _parse_read_response,
@@ -2196,22 +2199,39 @@ class S7CommPlusAsyncClient:
                 raise
         return _value_plans(self._symbol_catalog or await self.refresh_tag_catalog(), names)
 
-    async def list_datablocks(self) -> list[dict[str, Any]]:
+    async def list_datablocks(self) -> list[ProgramObject]:
         """List all datablocks on the PLC via EXPLORE.
 
         .. warning:: This method is **experimental** and may change.
+
+        See `S7CommPlusClient.list_datablocks`.
         """
         if self._session_key is not None and not self.legacy_s7_1500:
             # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
             # matching TIA Portal's browse pattern
             payload = _build_explore_payload_v3(0x8A11FFFF)
-        else:
-            payload = _build_explore_request(
-                Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER]
-            )
-        response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
-        parse_or_raise_for_return_value(response, "Data block list")
-        return _parse_explore_datablocks(response)
+            response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            parse_or_raise_for_return_value(response, "Data block list")
+            return _parse_explore_datablocks(response)
+        return [obj for obj in await self.program_objects() if obj.is_datablock]
+
+    async def program_objects(self) -> list[ProgramObject]:
+        """List every object of the PLC program: blocks, UDTs and the objects that contain them.
+
+        .. warning:: This method is **experimental** and may change.
+
+        See `S7CommPlusClient.program_objects`.
+
+        Raises:
+            NotImplementedError: On a V1 SessionKey session, which does not explore the program.
+            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
+        """
+        if self._session_key is not None and not self.legacy_s7_1500:
+            raise NotImplementedError("program_objects() is not supported on V1 SessionKey sessions")
+
+        response = await self._send_request(FunctionCode.EXPLORE, _PROGRAM_TREE_EXPLORE, integrity_tail=5, reassemble=True)
+        parse_or_raise_for_return_value(response, "Program object list")
+        return _parse_program_objects(response)
 
     @_retry_on_dropped_connection
     async def browse(self) -> list[dict[str, Any]]:
@@ -2239,15 +2259,13 @@ class S7CommPlusAsyncClient:
         root_nodes: list[typeinfo.Node] = []
         blocks = await self.list_datablocks()
         for db_info in blocks:
-            if db_info.get("number", 0) <= 0 or db_info.get("rid", 0) == 0:
+            if not db_info.number or db_info.rid == 0:
                 continue
-            ti_rid = await self._with_reconnect(lambda: self._read_typeinfo_rid(db_info["rid"]))
+            ti_rid = await self._with_reconnect(lambda: self._read_typeinfo_rid(db_info.rid))
             if ti_rid == 0:
                 continue  # load-memory-only DB, skip
             root_nodes.append(
-                typeinfo.Node(
-                    node_type=typeinfo.NodeType.ROOT, name=db_info["name"], access_id=db_info["rid"], relation_id=ti_rid
-                )
+                typeinfo.Node(node_type=typeinfo.NodeType.ROOT, name=db_info.name, access_id=db_info.rid, relation_id=ti_rid)
             )
 
         # Add the native process areas with their known synthetic type-info ids.

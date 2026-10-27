@@ -287,7 +287,7 @@ def list_datablocks(plc_adapter: PLCAdapter, scenario_state: dict[str, Any]) -> 
 
 @then("the read-only fixture DB and the scratch DB are listed")
 def fixture_dbs_listed(plc_config: PLCConfig, scenario_state: dict[str, Any]) -> None:
-    numbers = {block.get("number") for block in scenario_state["datablocks"]}
+    numbers = {block.number for block in scenario_state["datablocks"]}
     assert plc_config.read_db in numbers
     assert plc_config.write_db in numbers
 

@@ -221,6 +221,7 @@ class S7CommPlusServer:
         max_request_bytes: Optional[int] = None,
     ) -> None:
         self._data_blocks: dict[int, DataBlock] = {}
+        self._program_objects: dict[int, tuple[int, Optional[str]]] = {}
         self._cpu_state = CPUState.RUN
         self._protocol_version = protocol_version
         self._next_session_id = 1
@@ -338,6 +339,24 @@ class S7CommPlusServer:
         db.data = data
         self._data_blocks[db_number] = db
         return db
+
+    def register_program_object(self, rid: int, class_id: int, name: Optional[str] = None) -> None:
+        """Register a program object other than a data block, such as an FB, an OB or a UDT.
+
+        EXPLORE replies list it after the data blocks, with its name as the only
+        attribute, and an EXPLORE of its RID succeeds. It holds no data.
+
+        Args:
+            rid: Relation ID of the object, e.g. ``0x8A120001`` for FB 1.
+            class_id: ClassId of the object, e.g. `Ids.FB_CLASS_RID`.
+            name: ObjectVariableTypeName; None sends the object without a name, as a PLC
+                does for some system objects.
+
+        Example::
+
+            server.register_program_object(0x8A120001, Ids.FB_CLASS_RID, "FB1")
+        """
+        self._program_objects[rid] = (class_id, name)
 
     def get_db(self, db_number: int) -> Optional[DataBlock]:
         """Get a registered data block."""
@@ -1001,7 +1020,8 @@ class S7CommPlusServer:
         response += self._build_response_header(FunctionCode.EXPLORE, seq_num)
 
         # The ExploreId is a fixed UInt32 at the start of the request.
-        if len(request_data) >= 4 and not self._explore_object_exists(struct.unpack_from(">I", request_data)[0]):
+        explore_id = struct.unpack_from(">I", request_data)[0] if len(request_data) >= 4 else None
+        if explore_id is not None and not self._explore_object_exists(explore_id):
             # ReturnValue a real S7-1500 sends for an EXPLORE of an object that does not exist, RID 0 included:
             # error flag (bit 63) set, no error extension (bit 62 clear), error code -12 in the low 16 bits.
             _EXPLORE_NO_SUCH_OBJECT = 0x8020AB001992FFF4
@@ -1012,28 +1032,26 @@ class S7CommPlusServer:
 
         response += encode_uint32_vlq(0)  # Return code: success
 
-        if len(request_data) >= 4 and struct.unpack_from(">I", request_data)[0] == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID:
+        if explore_id == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID:
             response += self._cpu_exec_unit_object()
+            response += struct.pack(">I", 0)
+            return bytes(response)
+
+        # A registered program object is explored on its own, without the rest of the program
+        if explore_id in self._program_objects:
+            response += self._program_object(explore_id)
             response += struct.pack(">I", 0)
             return bytes(response)
 
         # Return list of data blocks as objects using the real S7-1500 IDs:
         # a DataBlock object has ClassId DB_CLASS_RID and a RelationId in the DB area
         # (0x8A0E0000 | number), which is how the client recovers the DB number.
+        # Every block is a child of PLCProgram, as in a live S7-1500 reply (_REAL_PROGRAM_TREE in tests/test_s7_unit.py).
+        response += _start_of_object(Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID)
+        response += _name_attribute("PLCProgram")
         for db_num, db in sorted(self._data_blocks.items()):
-            response += bytes([ElementID.START_OF_OBJECT])
-            response += struct.pack(">I", Ids.DB_ACCESS_AREA_BASE | (db_num & 0xFFFF))  # Relation ID
-            response += encode_uint32_vlq(Ids.DB_CLASS_RID)  # Class: DataBlock
-            response += encode_uint32_vlq(0x00000000)  # Class flags
-            response += encode_uint32_vlq(0x00000000)  # Attribute ID
-
-            # ObjectVariableTypeName (233) -- DB name as WSTRING
-            response += bytes([ElementID.ATTRIBUTE])
-            response += encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
-            name_bytes = f"DB{db_num}".encode("utf-16-be")
-            response += bytes([0x00, DataType.WSTRING])
-            response += encode_uint32_vlq(len(name_bytes))
-            response += name_bytes
+            response += _start_of_object(Ids.DB_ACCESS_AREA_BASE | (db_num & 0xFFFF), Ids.DB_CLASS_RID)
+            response += _name_attribute(f"DB{db_num}")
 
             # Block_BlockNumber (2521) -- DB number as UDINT
             response += bytes([ElementID.ATTRIBUTE])
@@ -1047,29 +1065,26 @@ class S7CommPlusServer:
             response += bytes([0x00, DataType.UDINT])
             response += encode_uint32_vlq(len(db.data))
 
-            # Variable list -- used by browse to resolve field names
-            if db.variables:
-                for var_name, var in db.variables.items():
-                    response += bytes([ElementID.START_OF_OBJECT])
-                    response += struct.pack(">I", 0)  # child RID
-                    response += encode_uint32_vlq(0)
-                    response += encode_uint32_vlq(0)
-                    response += encode_uint32_vlq(0)
-
-                    response += bytes([ElementID.ATTRIBUTE])
-                    response += encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
-                    vname_bytes = var_name.encode("utf-16-be")
-                    response += bytes([0x00, DataType.WSTRING])
-                    response += encode_uint32_vlq(len(vname_bytes))
-                    response += vname_bytes
-
-                    response += bytes([ElementID.TERMINATING_OBJECT])
-
             response += bytes([ElementID.TERMINATING_OBJECT])
+
+        # Only the program lists the other blocks; the type-info, alarm and area explores never contained them
+        if explore_id == Ids.NATIVE_THE_PLC_PROGRAM_RID:
+            for rid in self._program_objects:
+                response += self._program_object(rid)
+
+        response += bytes([ElementID.TERMINATING_OBJECT])  # PLCProgram
 
         # Final terminator
         response += struct.pack(">I", 0)
         return bytes(response)
+
+    def _program_object(self, rid: int) -> bytes:
+        """A registered program object, with its name as the only attribute."""
+        class_id, name = self._program_objects[rid]
+        obj = _start_of_object(rid, class_id)
+        if name is not None:
+            obj += _name_attribute(name)
+        return obj + bytes([ElementID.TERMINATING_OBJECT])
 
     def _cpu_exec_unit_object(self) -> bytes:
         """theCPUexecUnit as PLCSIM Advanced reports it, reduced to its operating state.
@@ -1097,9 +1112,9 @@ class S7CommPlusServer:
         """Whether an EXPLORE target names an object this emulator has.
 
         These are the native objects the clients and examples explore, plus one
-        object per registered data block. A real PLC rejects any other id.
+        object per registered data block or program object. A real PLC rejects any other id.
         """
-        if explore_id in (
+        if explore_id in self._program_objects or explore_id in (
             Ids.NATIVE_THE_PLC_PROGRAM_RID,
             Ids.NATIVE_THE_ALARM_SUBSYSTEM_RID,
             Ids.NATIVE_THE_CPU_EXEC_UNIT_RID,
@@ -1458,6 +1473,23 @@ class S7CommPlusServer:
 
 #: The error the emulator returns for an item it cannot serve.
 _ITEM_ERROR = 0x8104
+
+
+def _start_of_object(rid: int, class_id: int) -> bytes:
+    """StartOfObject with its RelationId (fixed UInt32), ClassId, and zero ClassFlags and AttributeId."""
+    return bytes([ElementID.START_OF_OBJECT]) + struct.pack(">I", rid) + encode_uint32_vlq(class_id) + bytes([0, 0])
+
+
+def _name_attribute(name: str) -> bytes:
+    """ObjectVariableTypeName (233) attribute carrying ``name`` as a WSTRING."""
+    encoded = name.encode("utf-16-be")
+    return (
+        bytes([ElementID.ATTRIBUTE])
+        + encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
+        + bytes([0x00, DataType.WSTRING])
+        + encode_uint32_vlq(len(encoded))
+        + encoded
+    )
 
 
 def _resolve_classic_blob(access_area: int, lids: list[int]) -> Optional[tuple[int, int, int]]:

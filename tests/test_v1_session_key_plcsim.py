@@ -13,9 +13,10 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from s7commplus.async_client import S7CommPlusAsyncClient
-from s7commplus.client import _LEGACY_KEY_CACHE, S7CommPlusClient
+from s7commplus.client import _LEGACY_KEY_CACHE, ProgramObject, S7CommPlusClient
 from s7commplus.connection import _build_v1_get_var_substreamed_payload, _v1_integrity_tail
 from s7commplus.error import S7ReturnValueError
+from s7commplus.protocol import Ids
 from s7commplus.server import S7CommPlusServer
 from s7commplus.v1_session_key import handshake, legitimation
 from s7commplus.v1_session_key.blob_metadata import ENCRYPTED_BLOB_LENGTH_PLCSIM, write_metadata
@@ -265,16 +266,7 @@ def test_sync_client_authenticates_against_family_03(plcsim_server: tuple[S7Comm
         assert abs(struct.unpack(">f", client.db_read(1, 0, 4))[0] - 23.5) < 0.001
         client.db_write(1, 0, struct.pack(">f", 42.0))
         assert abs(struct.unpack(">f", client.db_read(1, 0, 4))[0] - 42.0) < 0.001
-        assert client.list_datablocks() == [
-            {
-                "name": "DB1",
-                "number": 1,
-                "rid": 0x8A0E0001,
-                "language": None,
-                "knowhow_protected": False,
-                "unlinked": False,
-            }
-        ]
+        assert client.list_datablocks() == _DB1
     finally:
         client.disconnect()
 
@@ -295,16 +287,7 @@ async def test_async_client_authenticates_against_family_03(
         assert abs(struct.unpack(">f", await client.db_read(1, 0, 4))[0] - 23.5) < 0.001
         await client.db_write(1, 0, struct.pack(">f", 42.0))
         assert abs(struct.unpack(">f", await client.db_read(1, 0, 4))[0] - 42.0) < 0.001
-        assert await client.list_datablocks() == [
-            {
-                "name": "DB1",
-                "number": 1,
-                "rid": 0x8A0E0001,
-                "language": None,
-                "knowhow_protected": False,
-                "unlinked": False,
-            }
-        ]
+        assert await client.list_datablocks() == _DB1
     finally:
         await client.disconnect()
 
@@ -334,7 +317,7 @@ async def test_async_client_legitimates_with_a_password_on_plcsim(plcsim_server:
 
 # --- legacy_s7_1500=False: the IntegrityId leads every response ---
 
-_DB1 = [{"name": "DB1", "number": 1, "rid": 0x8A0E0001, "language": None, "knowhow_protected": False, "unlinked": False}]
+_DB1 = [ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1")]
 
 
 def test_sync_client_without_the_v1_profile_reads_from_a_leading_integrity_id_emulator(
@@ -419,6 +402,35 @@ async def test_async_explore_checks_the_return_value_in_each_v1_profile(
         with pytest.raises(S7ReturnValueError) as caught:
             await client.explore(_MISSING_DB)
         assert caught.value.error_code == -12
+    finally:
+        await client.disconnect()
+
+
+def test_sync_program_objects_not_supported_on_v1_initial_session(
+    leading_integrity_id_server: tuple[S7CommPlusServer, int],
+) -> None:
+    _, port = leading_integrity_id_server
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=port, legacy_s7_1500=False)
+    try:
+        with pytest.raises(NotImplementedError, match="V1 SessionKey"):
+            client.program_objects()
+        assert [db.number for db in client.list_datablocks()] == [1]
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_async_program_objects_not_supported_on_v1_initial_session(
+    leading_integrity_id_server: tuple[S7CommPlusServer, int],
+) -> None:
+    _, port = leading_integrity_id_server
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=port, legacy_s7_1500=False)
+    try:
+        with pytest.raises(NotImplementedError, match="V1 SessionKey"):
+            await client.program_objects()
+        assert [db.number for db in await client.list_datablocks()] == [1]
     finally:
         await client.disconnect()
 

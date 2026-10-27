@@ -9,6 +9,7 @@ import logging
 import struct
 import threading
 import time
+import warnings
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
@@ -86,6 +87,67 @@ _P = ParamSpec("_P")
 DBWriteItem: TypeAlias = tuple[int, int, bytes, DataType]
 SymbolicReadItem: TypeAlias = tuple[int, list[int]] | tuple[int, list[int], int]
 SymbolicWriteItem: TypeAlias = tuple[int, list[int], bytes, int, DataType | PValueArray]
+
+
+@dataclasses.dataclass(frozen=True)
+class ProgramObject(Mapping[str, Any]):
+    """An object of the PLC program tree, as returned by `S7CommPlusClient.program_objects`.
+
+    `program_objects` and `list_datablocks` ask the PLC only for the name and block number, so
+    `language`, `knowhow_protected` and `unlinked` keep their defaults unless the firmware
+    sends those attributes unasked.
+
+    Attributes:
+        rid: RelationId of the object, e.g. ``0x8A0E0001`` for DB 1.
+        class_id: ClassId of the object, e.g. `Ids.DB_CLASS_RID` or `Ids.FB_CLASS_RID`.
+        name: ObjectVariableTypeName, or ``""`` when the object carries none.
+        language: Block language name, or None when the reply carries no ``Block.BlockLanguage``.
+        knowhow_protected: Whether the reply carries the ``Block.KnowhowProtected`` attribute.
+        unlinked: Value of ``Block.Unlinked``; False when the reply does not carry it.
+        block_number: ``Block.BlockNumber`` as the PLC sent it; None for objects that are not blocks.
+            It repeats the low 16 bits of a block's RelationId, so equality ignores it.
+    """
+
+    rid: int
+    class_id: int
+    name: str
+    language: str | None = None
+    knowhow_protected: bool = False
+    unlinked: bool = False
+    block_number: int | None = dataclasses.field(default=None, compare=False)
+
+    @property
+    def number(self) -> int | None:
+        """Block number: `block_number` when the PLC sent it, else for a data block the low 16 bits of its RelationId.
+
+        None for objects that are not blocks, such as PLCProgram.
+        """
+        if self.block_number is not None:
+            return self.block_number
+        return self.rid & 0xFFFF if self.is_datablock else None
+
+    @property
+    def is_datablock(self) -> bool:
+        """Whether this is a DataBlock: ClassId `Ids.DB_CLASS_RID` and a RelationId in the DB area (``0x8A0E....``)."""
+        return self.class_id == Ids.DB_CLASS_RID and (self.rid >> 16) == 0x8A0E
+
+    def __getitem__(self, key: str) -> Any:
+        """Dict-style access, for code written against the dicts `list_datablocks` used to return.
+
+        .. deprecated:: 0.4.0
+            Read the attribute instead: ``block.number`` rather than ``block["number"]``.
+        """
+        if key not in tuple(self):
+            raise KeyError(key)
+        warnings.warn(f'block["{key}"] is deprecated; read block.{key} instead', DeprecationWarning, stacklevel=2)
+        return getattr(self, key)
+
+    def __iter__(self) -> Iterator[str]:
+        yield from (field.name for field in dataclasses.fields(self))
+        yield "number"
+
+    def __len__(self) -> int:
+        return len(dataclasses.fields(self)) + 1
 
 
 def _normalize_write_item(item: DBWriteItem) -> tuple[int, int, bytes, DataType]:
@@ -304,9 +366,9 @@ def _subscriptions_interrupted(created: list[int], total: int, error: Exception)
 _AUTO_REFRESH_MIN_INTERVAL = 10.0
 
 
-def _block_signature(blocks: Sequence[Mapping[str, Any]]) -> list[tuple[str, int, int]]:
+def _block_signature(blocks: Sequence[ProgramObject]) -> list[tuple[str, int, int]]:
     """The identity of a data-block list, for detecting a program change."""
-    return sorted((str(block.get("name", "")), int(block.get("number", 0)), int(block.get("rid", 0))) for block in blocks)
+    return sorted((block.name, block.number or 0, block.rid) for block in blocks)
 
 
 def _type_info_times(root_nodes: Sequence["typeinfo.Node"], type_objects: Sequence["typeinfo.PObject"]) -> dict[int, bytes]:
@@ -1712,15 +1774,14 @@ class S7CommPlusClient:
 
         self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, bytes(payload))
 
-    def list_datablocks(self) -> list[dict[str, Any]]:
+    def list_datablocks(self) -> list[ProgramObject]:
         """List all datablocks on the PLC via EXPLORE.
 
         .. warning:: This method is **experimental** and may change.
 
         Returns:
-            List of dicts with keys ``name``, ``number``, ``rid``,
-            ``language`` (block language name or ``None``),
-            ``knowhow_protected`` and ``unlinked``.
+            One `ProgramObject` per data block; `ProgramObject.number` is the DB number.
+            The list ends at the first attribute value the codec cannot decode.
 
         Note:
             ``knowhow_protected`` reports the presence of the
@@ -1738,13 +1799,36 @@ class S7CommPlusClient:
             # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
             # matching TIA Portal's browse pattern
             payload = _build_explore_payload_v3(0x8A11FFFF)
-        else:
-            payload = _build_explore_request(
-                Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER]
-            )
-        response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
-        parse_or_raise_for_return_value(response, "Data block list")
-        return _parse_explore_datablocks(response)
+            response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            parse_or_raise_for_return_value(response, "Data block list")
+            return _parse_explore_datablocks(response)
+        return [obj for obj in self.program_objects() if obj.is_datablock]
+
+    def program_objects(self) -> list[ProgramObject]:
+        """List every object of the PLC program: blocks, UDTs and the objects that contain them.
+
+        .. warning:: This method is **experimental** and may change.
+
+        Sends the same single EXPLORE request as `list_datablocks`, asking only for
+        each object's name and block number. Filter on `ProgramObject.class_id`, e.g.
+        `Ids.FB_CLASS_RID`, to pick one kind of object.
+
+        Returns:
+            One entry per object, children before their parent. The list ends at the first
+            attribute value the codec cannot decode, as does `list_datablocks`.
+
+        Raises:
+            NotImplementedError: On a V1 SessionKey session, which does not explore the program.
+            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
+        """
+        if self._connection is None:
+            raise RuntimeError("Not connected")
+        if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
+            raise NotImplementedError("program_objects() is not supported on V1 SessionKey sessions")
+
+        response = self._connection.send_request(FunctionCode.EXPLORE, _PROGRAM_TREE_EXPLORE, integrity_tail=5, reassemble=True)
+        parse_or_raise_for_return_value(response, "Program object list")
+        return _parse_program_objects(response)
 
     @_retry_on_dropped_connection
     def browse(self) -> list[dict[str, Any]]:
@@ -1775,17 +1859,15 @@ class S7CommPlusClient:
         root_nodes: list[typeinfo.Node] = []
         blocks = self.list_datablocks()
         for db_info in blocks:
-            if db_info.get("number", 0) <= 0 or db_info.get("rid", 0) == 0:
+            if not db_info.number or db_info.rid == 0:
                 continue
             # A symbolic read may prompt a TCP RST on RST-happy firmware; retry once
             # on a fresh session so the read still resolves.
-            ti_rid = self._with_reconnect(lambda: self._read_typeinfo_rid(db_info["rid"]))
+            ti_rid = self._with_reconnect(lambda: self._read_typeinfo_rid(db_info.rid))
             if ti_rid == 0:
                 continue  # load-memory-only DB, skip
             root_nodes.append(
-                typeinfo.Node(
-                    node_type=typeinfo.NodeType.ROOT, name=db_info["name"], access_id=db_info["rid"], relation_id=ti_rid
-                )
+                typeinfo.Node(node_type=typeinfo.NodeType.ROOT, name=db_info.name, access_id=db_info.rid, relation_id=ti_rid)
             )
 
         # Add the native process areas with their known synthetic type-info ids.
@@ -2791,19 +2873,31 @@ def _build_explore_request(explore_id: int, attribute_ids: list[int]) -> bytes:
     return bytes(payload)
 
 
-def _parse_explore_datablocks(response: bytes) -> list[dict[str, Any]]:
-    """Parse an EXPLORE(thePLCProgram) response to extract datablock info.
+# EXPLORE of thePLCProgram asking for each object's name and block number, as sent by
+# list_datablocks() and program_objects().
+_PROGRAM_TREE_EXPLORE = _build_explore_request(
+    Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER]
+)
 
-    Walks the PObject tree (StartOfObject / Attribute / TerminatingObject) keeping a
-    stack of ``[relation_id, class_id, name]``. A DataBlock is an object whose ClassId
-    is ``DB_CLASS_RID`` and whose RelationId is a DB area id (``relid >> 16 == 0x8A0E``);
-    its number is ``relid & 0xFFFF`` and its name comes from the ObjectVariableTypeName
-    attribute (the first step of the symbol-tree browse).
 
-    Returns:
-        List of dicts: ``{"name": str, "number": int, "rid": int}``
+def _parse_explore_datablocks(response: bytes) -> list[ProgramObject]:
+    """Parse an EXPLORE(thePLCProgram) response to extract the data blocks.
+
+    A DataBlock is an object whose ClassId is ``DB_CLASS_RID`` and whose RelationId is a
+    DB area id (``relid >> 16 == 0x8A0E``).
     """
-    datablocks: list[dict[str, Any]] = []
+    return [obj for obj in _parse_program_objects(response) if obj.is_datablock]
+
+
+def _parse_program_objects(response: bytes) -> list[ProgramObject]:
+    """Parse an EXPLORE response's PObject tree into its objects, each listed when it closes.
+
+    Walks StartOfObject / Attribute / TerminatingObject keeping a stack of
+    ``[relation_id, class_id, name, language, knowhow, unlinked, block_number]``. The name comes from the
+    ObjectVariableTypeName attribute (the first step of the symbol-tree browse). Children close,
+    and so are listed, before their parent. The walk stops at the first attribute value the
+    codec cannot decode, and logs a warning when it does or when objects are left open.
+    """
     offset = 0
 
     # ReturnValue (UInt64 VLQ) at the start of the response.
@@ -2811,7 +2905,8 @@ def _parse_explore_datablocks(response: bytes) -> list[dict[str, Any]]:
         _, consumed = decode_uint64_vlq(response, offset)
         offset += consumed
 
-    # Each stack entry: [relation_id, class_id, name, language, knowhow, unlinked]
+    objects: list[ProgramObject] = []
+    # Each stack entry: [relation_id, class_id, name, language, knowhow, unlinked, block_number]
     stack: list[list[Any]] = []
     while offset < len(response):
         tag = response[offset]
@@ -2828,23 +2923,12 @@ def _parse_explore_datablocks(response: bytes) -> list[dict[str, Any]]:
             offset += consumed
             _attr_id, consumed = decode_uint32_vlq(response, offset)  # AttributeId
             offset += consumed
-            stack.append([relid, class_id, "", None, False, False])
+            stack.append([relid, class_id, "", None, False, False, None])
 
         elif tag == ElementID.TERMINATING_OBJECT:
             offset += 1
             if stack:
-                relid, class_id, name, language, knowhow, unlinked = stack.pop()
-                if class_id == Ids.DB_CLASS_RID and (relid >> 16) == 0x8A0E:
-                    datablocks.append(
-                        {
-                            "name": name,
-                            "number": relid & 0xFFFF,
-                            "rid": relid,
-                            "language": language,
-                            "knowhow_protected": knowhow,
-                            "unlinked": unlinked,
-                        }
-                    )
+                objects.append(ProgramObject(*stack.pop()))
 
         elif tag == ElementID.ATTRIBUTE:
             offset += 1
@@ -2854,6 +2938,11 @@ def _parse_explore_datablocks(response: bytes) -> list[dict[str, Any]]:
             try:
                 value, consumed = decode_pvalue_to_bytes(response, offset)
             except (ValueError, IndexError):
+                logger.warning(
+                    "EXPLORE reply has an undecodable value of attribute %d at offset %d; object list is partial",
+                    attr_id,
+                    value_start,
+                )
                 break
             # The two typed-value header bytes ([flags][datatype]) sit at the
             # value's start; decode_pvalue_to_bytes returns only the payload.
@@ -2902,12 +2991,19 @@ def _parse_explore_datablocks(response: bytes) -> list[dict[str, Any]]:
                 if value:
                     stack[-1][5] = value[0] != 0
 
+            elif attr_id == Ids.BLOCK_BLOCK_NUMBER and stack:
+                # UINT on an S7-1500 (lab captures), UDINT from the emulator
+                if value and not attribute_flags & 0x10 and attribute_datatype in (DataType.UINT, DataType.UDINT):
+                    stack[-1][6] = int.from_bytes(value, "big")
+
         else:
             # Response-preamble fields before the first object, or unhandled element
             # tags (e.g. Relation): advance one byte and keep scanning.
             offset += 1
 
-    return datablocks
+    if stack:
+        logger.warning("EXPLORE reply ends inside %d open object(s); their entries are missing from the object list", len(stack))
+    return objects
 
 
 # ---------------------------------------------------------------------------

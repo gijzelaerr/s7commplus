@@ -17,10 +17,10 @@ import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.catalog import SymbolCatalog
-from s7commplus.client import _AUTO_RECONNECT_MARKER, _AUTO_RECONNECT_MIN_INTERVAL, S7CommPlusClient
+from s7commplus.client import _AUTO_RECONNECT_MARKER, _AUTO_RECONNECT_MIN_INTERVAL, ProgramObject, S7CommPlusClient
 from s7commplus.codec import encode_pvalue_blob
 from s7commplus.error import S7ConnectionError, S7TimeoutError
-from s7commplus.protocol import ProtocolVersion
+from s7commplus.protocol import Ids, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from s7commplus.vlq import encode_uint32_vlq, encode_uint64_vlq
 
@@ -365,7 +365,7 @@ async def test_async_failed_attempt_also_starts_the_interval() -> None:
     assert client._rebuild_session.await_count == 1
 
 
-DATABLOCKS = [{"name": "DB1", "number": 1, "rid": 0x8A0E0001}]
+DATABLOCKS = [ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1")]
 
 
 def test_sync_browse_does_not_retry_its_own_failed_reconnect_at_once() -> None:

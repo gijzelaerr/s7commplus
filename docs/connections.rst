@@ -306,8 +306,8 @@ once more on the new session:
 Only these reads are retried: ``db_read``, ``db_read_multi``, ``read_area``,
 ``read_symbolic``, ``read_symbolic_multi``, ``read_tag``, ``read_tags``,
 ``read_value``, ``read_values``, ``browse`` (and through it ``refresh_tag_catalog`` and ``resolve_tag``) and
-``get_cpu_state``. Other operations, such as ``explore``, ``list_datablocks``
-and ``read_alarms``, are not. **Writes are never retried**: when a request is
+``get_cpu_state``. Other operations, such as ``explore``, ``list_datablocks``,
+``program_objects`` and ``read_alarms``, are not. **Writes are never retried**: when a request is
 lost, it is unknown whether the PLC applied it, so the error reaches the caller.
 
 Any ``S7ConnectionError`` from one of these reads counts as a dropped
@@ -351,7 +351,7 @@ Timeouts
    answers.
 ``explore_timeout`` (default 30; ``None``: the request timeout)
    does the same for the reply to an EXPLORE, which ``browse()``,
-   ``list_datablocks()``, ``explore()``, ``get_cpu_state()`` and
+   ``list_datablocks()``, ``program_objects()``, ``explore()``, ``get_cpu_state()`` and
    ``read_alarms()`` send, among others. These replies can be large: on a CPU
    1215C (FW V4.2, 54 data blocks, 6802 variables) the type-info EXPLORE of
    ``browse()``, about 111 KB in 111 parts, took 5.9 to 7.0 s in total, where

@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-from s7commplus import AsyncClient, Client
+from s7commplus import AsyncClient, Client, ProgramObject
 from s7commplus.protocol import Ids
 
 DB_SIZE = 37
@@ -141,7 +141,7 @@ class PLCAdapter(Protocol):
 
     def read_multi(self, db_number: int, regions: Sequence[tuple[int, int]]) -> list[bytes]: ...
 
-    def list_datablocks(self) -> list[dict[str, Any]]: ...
+    def list_datablocks(self) -> list[ProgramObject]: ...
 
     def browse(self) -> list[dict[str, Any]]: ...
 
@@ -249,7 +249,7 @@ class S7CommPlusAdapter:
     def read_multi(self, db_number: int, regions: Sequence[tuple[int, int]]) -> list[bytes]:
         return self.client.db_read_multi([(db_number, offset, size) for offset, size in regions])
 
-    def list_datablocks(self) -> list[dict[str, Any]]:
+    def list_datablocks(self) -> list[ProgramObject]:
         return self.client.list_datablocks()
 
     def browse(self) -> list[dict[str, Any]]:
@@ -348,7 +348,7 @@ class AsyncS7CommPlusAdapter:
     def read_multi(self, db_number: int, regions: Sequence[tuple[int, int]]) -> list[bytes]:
         return self._run(lambda: self.client.db_read_multi([(db_number, offset, size) for offset, size in regions]))
 
-    def list_datablocks(self) -> list[dict[str, Any]]:
+    def list_datablocks(self) -> list[ProgramObject]:
         return self._run(self.client.list_datablocks)
 
     def browse(self) -> list[dict[str, Any]]:
