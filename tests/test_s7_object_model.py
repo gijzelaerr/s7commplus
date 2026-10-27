@@ -22,7 +22,8 @@ class TestTables:
 
     def test_block_attributes(self) -> None:
         assert attribute_name(0x9EA, 0x9D9) == "BlockNumber"
-        assert attribute_name(0x9EA, 0x9DA) == "BlockLanguage"
+        assert attribute_name(0x9EA, 0x9DA) == "AutoNumbering"
+        assert attribute_name(0x9EA, 0x9DB) == "BlockLanguage"
         assert attribute_name(0x9EA, 0x9DC) == "KnowhowProtected"
         assert attribute_name(0x9EA, 0x9DF) == "Unlinked"
 
@@ -42,7 +43,7 @@ class TestTables:
 
 class TestDescribe:
     def test_known_renders_class_dot_name(self) -> None:
-        assert describe_attribute(0x9EA, 0x9DA) == "Block.BlockLanguage"
+        assert describe_attribute(0x9EA, 0x9DB) == "Block.BlockLanguage"
         assert describe_attribute(0x883, 0xD9E) == "CPUexecUnit.OperatingState"
 
     def test_unknown_attribute_renders_numerically(self) -> None:

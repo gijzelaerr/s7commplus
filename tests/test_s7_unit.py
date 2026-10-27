@@ -925,25 +925,43 @@ class TestClientErrorPaths:
 class TestExploreDatablocks:
     """Test the EXPLORE(thePLCProgram) request format and DB-list parser."""
 
-    # Live S7-1500 (6ES7 512-1CK01-0AB0, FW V2.9) reply to an EXPLORE of the PLC
-    # program filtered to ObjectVariableTypeName (233) and Block.BlockNumber (2521),
-    # cut down to DB1 and DB2. The data blocks are children of PLCProgram (RID 3),
-    # and the reply carries 5 bytes after the ReturnValue and a 4-byte trailer that
-    # the walk has to skip.
+    # Live S7-1500 (6ES7 512-1CK01-0AB0, FW V2.9) reply to the request list_datablocks()
+    # sends, cut down to DB1 and DB2:
+    #   _build_explore_request(Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER])
+    # The data blocks are children of PLCProgram (RID 3), and the reply carries 5 bytes
+    # after the ReturnValue and a 4-byte trailer that the walk has to skip.
     _REAL_PROGRAM_TREE = bytes.fromhex(
         "00000000010ca10000000393583000a3816900150a504c4350726f6772616da18a0e0001940e2000a38169001509526561"
         "645f6f6e6c79a3935900030001a2a18a0e0002940e2000a3816900150c446174615f626c6f636b5f32a3935900030002a2"
         "a200000000"
     )
 
+    # The same PLC's reply with the language and auto numbering added to the filter, cut down to
+    # DB1 and DB2:
+    #   _build_explore_request(
+    #       Ids.NATIVE_THE_PLC_PROGRAM_RID,
+    #       [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER, Ids.BLOCK_AUTO_NUMBERING, Ids.BLOCK_BLOCK_LANGUAGE],
+    #   )
+    # Each DB carries the language as a UINT, ``a3 93 5b 00 03 00 05`` (5 = DB), then auto
+    # numbering as a BOOL, ``a3 93 5a 00 01 00`` (both DBs were numbered by hand).
+    _REAL_PROGRAM_TREE_WITH_LANGUAGE = bytes.fromhex(
+        "00000000010aa10000000393583000a3816900150a504c4350726f6772616da18a0e0001940e2000a38169001509526561"
+        "645f6f6e6c79a3935900030001a3935b00030005a3935a000100a2a18a0e0002940e2000a3816900150c446174615f626c"
+        "6f636b5f32a3935900030002a3935b00030005a3935a000100a2a200000000"
+    )
+
     def test_parse_real_program_tree(self) -> None:
         objects = _parse_program_objects(self._REAL_PROGRAM_TREE)
-        assert [(obj.rid, obj.class_id, obj.name, obj.block_number) for obj in objects] == [
-            (0x8A0E0001, Ids.DB_CLASS_RID, "Read_only", 1),
-            (0x8A0E0002, Ids.DB_CLASS_RID, "Data_block_2", 2),
-            (Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram", None),
+        assert [(obj.rid, obj.class_id, obj.name, obj.block_number, obj.language) for obj in objects] == [
+            (0x8A0E0001, Ids.DB_CLASS_RID, "Read_only", 1, None),
+            (0x8A0E0002, Ids.DB_CLASS_RID, "Data_block_2", 2, None),
+            (Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram", None, None),
         ]
         assert [db.number for db in _parse_explore_datablocks(self._REAL_PROGRAM_TREE)] == [1, 2]
+
+    def test_parse_real_program_tree_language(self) -> None:
+        dbs = _parse_explore_datablocks(self._REAL_PROGRAM_TREE_WITH_LANGUAGE)
+        assert [(db.number, db.name, db.language) for db in dbs] == [(1, "Read_only", "DB"), (2, "Data_block_2", "DB")]
 
     def test_build_explore_request_format(self) -> None:
         # ExploreId as a fixed UInt32, then the marker bytes, address count + ids,

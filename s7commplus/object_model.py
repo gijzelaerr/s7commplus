@@ -51,7 +51,8 @@ ATTRIBUTE_NAMES: dict[tuple[int, int], str] = {
     (287, 306): "Version",
     # --- Block (base class of program blocks) ---
     (0x9EA, 0x9D9): "BlockNumber",
-    (0x9EA, 0x9DA): "BlockLanguage",
+    (0x9EA, 0x9DA): "AutoNumbering",
+    (0x9EA, 0x9DB): "BlockLanguage",
     (0x9EA, 0x9DC): "KnowhowProtected",
     (0x9EA, 0x9DF): "Unlinked",
     (0x9EA, 0x9E4): "CRC",
@@ -96,7 +97,7 @@ def attribute_name(class_id: int, attribute_id: int) -> Optional[str]:
 def describe_attribute(class_id: int, attribute_id: int) -> str:
     """Render a (class id, attribute id) pair as a readable string.
 
-    >>> describe_attribute(0x9EA, 0x9DA)
+    >>> describe_attribute(0x9EA, 0x9DB)
     'Block.BlockLanguage'
     >>> describe_attribute(2574, 99999)
     'class 2574 attribute 99999'

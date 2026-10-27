@@ -282,7 +282,6 @@ class Ids(IntEnum):
     # The name is single-source: it follows the attribute-id table of Wireshark's
     # S7CommPlus dissector (packet-s7comm_plus.c), at an unverified line and version.
     VARIABLE_TYPE_STRUCT_MODIFICATION_TIME = 529
-    BLOCK_BLOCK_NUMBER = 2521
     DATA_INTERFACE_INTERFACE_DESCRIPTION = 2544
     DATA_INTERFACE_LINE_COMMENTS = 2546
     AS_OBJECT_ES_COMMENT = 4288
@@ -309,9 +308,12 @@ class Ids(IntEnum):
     # Block object attributes (ClassId Block = 0x9EA). Reported by EXPLORE for
     # program blocks; the know-how flag explains a block whose tag tree cannot
     # be browsed. Source: TIA Portal EXPLORE captures; Ids.cs defines only
-    # Block_BlockNumber (2521). Not verified against a live PLC.
-    BLOCK_BLOCKNUMBER = 0x9D9
-    BLOCK_BLOCK_LANGUAGE = 0x9DA
+    # Block_BlockNumber (2521). BlockLanguage and AutoNumbering (0 on blocks
+    # numbered by hand) were seen on an S7-1500 FW V2.9; the others are not
+    # verified against a live PLC.
+    BLOCK_BLOCK_NUMBER = 0x9D9
+    BLOCK_AUTO_NUMBERING = 0x9DA
+    BLOCK_BLOCK_LANGUAGE = 0x9DB
     BLOCK_KNOWHOW_PROTECTED = 0x9DC
     BLOCK_UNLINKED = 0x9DF
     BLOCK_CRC = 0x9E4
@@ -496,10 +498,10 @@ class LegitimationId(IntEnum):
 
 
 class BlockLanguage(IntEnum):
-    """Programming language of a program block (attribute 0x9DA).
+    """Programming language of a program block (attribute 0x9DB).
 
     Source: TIA Portal block-property captures; the codes are the SIMATIC
-    block-language identifiers. Not verified against a live PLC.
+    block-language identifiers. Only DB (5) is verified, on an S7-1500 FW V2.9.
     """
 
     UNDEF = 0
