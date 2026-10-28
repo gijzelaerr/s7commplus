@@ -1318,7 +1318,7 @@ requires-dist = [
     { name = "furo", marker = "extra == 'docs'", specifier = ">=2024.8.6" },
     { name = "hypothesis", marker = "extra == 'test'" },
     { name = "mypy", marker = "extra == 'test'" },
-    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'", specifier = "<9.2" },
     { name = "pytest-asyncio", marker = "extra == 'test'" },
     { name = "pytest-bdd", marker = "extra == 'test'", specifier = ">=9,<10" },
     { name = "pytest-cov", marker = "extra == 'test'" },
