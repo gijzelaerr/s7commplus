@@ -31,7 +31,7 @@ dependencies = ["cryptography>=41"]
 s7commplus = "s7commplus.cli:main"
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-asyncio", "pytest-bdd>=9,<10", "pytest-cov", "hypothesis", "mypy", "ruff"]
+test = ["pytest<9.2", "pytest-asyncio", "pytest-bdd>=9,<10", "pytest-cov", "hypothesis", "mypy", "ruff"]
 docs = ["sphinx>=7.2", "furo>=2024.8.6"]
 analysis = ["z3-solver>=4.13,<5"]
 
