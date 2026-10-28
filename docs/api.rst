@@ -12,6 +12,9 @@ Clients
    :members:
    :undoc-members:
 
+.. autoclass:: s7commplus.OperatingStateChange
+   :members:
+
 Symbolic tags
 -------------
 
@@ -70,6 +73,9 @@ Protocol enums
    :members:
 
 .. autoclass:: s7commplus.protocol.AccessLevel
+   :members:
+
+.. autoclass:: s7commplus.protocol.OperatingStateRequest
    :members:
 
 Exceptions

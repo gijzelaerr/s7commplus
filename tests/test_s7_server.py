@@ -19,7 +19,16 @@ from s7commplus.client import (
     _parse_explore_datablocks,
 )
 from s7commplus.connection import _parse_get_var_substreamed_response, _verify_v3_hmac
-from s7commplus.protocol import DataType, ElementID, FunctionCode, Ids, LegitimationId, ObjectId, ProtocolVersion
+from s7commplus.protocol import (
+    DataType,
+    ElementID,
+    FunctionCode,
+    Ids,
+    LegitimationId,
+    ObjectId,
+    OperatingStateRequest,
+    ProtocolVersion,
+)
 from s7commplus.server import (
     CPUState,
     DataBlock,
@@ -187,6 +196,30 @@ class TestClientServerIntegration:
     def test_set_plc_operating_state_refuses_when_not_connected(self) -> None:
         with pytest.raises(NotImplementedError):
             S7CommPlusClient().set_plc_operating_state(3)
+
+    def test_request_operating_state_round_trips_through_the_emulator(self, server: S7CommPlusServer) -> None:
+        """The experimental write (issue #8) flips the emulator's reported state.
+
+        This exercises only the request/response shape against the emulator; it
+        is not evidence the layout is correct on hardware.
+        """
+        server.cpu_state = CPUState.RUN
+        with S7CommPlusClient() as client:
+            client.connect("127.0.0.1", port=TEST_PORT)
+
+            stop = client.request_operating_state(OperatingStateRequest.STOP)
+            assert stop.state == OperatingStateRequest.STOP
+            assert stop.return_value == 0 and stop.ok
+            assert stop.request and stop.response  # raw evidence is captured
+            assert client.get_cpu_state() == "STOP"
+
+            run = client.request_operating_state(OperatingStateRequest.RUN)
+            assert run.ok
+            assert client.get_cpu_state() == "RUN"
+
+    def test_request_operating_state_requires_connection(self) -> None:
+        with pytest.raises(RuntimeError, match="Not connected"):
+            S7CommPlusClient().request_operating_state(OperatingStateRequest.STOP)
 
     def test_context_manager(self, server: S7CommPlusServer) -> None:
         with S7CommPlusClient() as client:
@@ -596,6 +629,21 @@ class TestAsyncClientServerIntegration:
                 await client.set_plc_operating_state(1)
             assert client._sequence_number == sent
             assert await client.get_cpu_state() in ("RUN", "STOP", "UNKNOWN")
+
+    async def test_request_operating_state_round_trips_through_the_emulator(self, server: S7CommPlusServer) -> None:
+        """Async parity with the sync experimental write (issue #8)."""
+        server.cpu_state = CPUState.RUN
+        async with S7CommPlusAsyncClient() as client:
+            await client.connect("127.0.0.1", port=TEST_PORT)
+
+            stop = await client.request_operating_state(OperatingStateRequest.STOP)
+            assert stop.state == OperatingStateRequest.STOP
+            assert stop.ok and stop.request and stop.response
+            assert await client.get_cpu_state() == "STOP"
+
+            run = await client.request_operating_state(OperatingStateRequest.RUN)
+            assert run.ok
+            assert await client.get_cpu_state() == "RUN"
 
     async def test_explore_xml(self, server: S7CommPlusServer) -> None:
         """Test explore_xml returns None on emulated server (no zlib blobs)."""
