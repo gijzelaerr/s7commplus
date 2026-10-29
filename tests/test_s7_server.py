@@ -115,6 +115,14 @@ class TestServer:
         db = srv.register_raw_db(10, data)
         assert db.read(0, 4) == b"\x01\x02\x03\x04"
 
+    @pytest.mark.parametrize("rid", [Ids.DB_ACCESS_AREA_BASE | 1, 0x8A120001])
+    def test_register_program_object_refuses_data_blocks(self, rid: int) -> None:
+        # A DataBlock registered here would also be listed by list_datablocks() next to the ones from register_db()
+        srv = S7CommPlusServer()
+        with pytest.raises(ValueError, match="register_db"):
+            srv.register_program_object(rid, Ids.DB_CLASS_RID, "DB1")
+        assert srv._program_objects == {}
+
     def test_cpu_state(self) -> None:
         srv = S7CommPlusServer()
         assert srv.cpu_state == CPUState.RUN

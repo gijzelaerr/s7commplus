@@ -352,10 +352,15 @@ class S7CommPlusServer:
             name: ObjectVariableTypeName; None sends the object without a name, as a PLC
                 does for some system objects.
 
+        Raises:
+            ValueError: If the object is a data block; register those with :meth:`register_db`.
+
         Example::
 
             server.register_program_object(0x8A120001, Ids.FB_CLASS_RID, "FB1")
         """
+        if class_id == Ids.DB_CLASS_RID:
+            raise ValueError("Data blocks must be registered with register_db() instead")
         self._program_objects[rid] = (class_id, name)
 
     def get_db(self, db_number: int) -> Optional[DataBlock]:
