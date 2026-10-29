@@ -2381,22 +2381,43 @@ def _parse_read_response(response: bytes, expected_count: Optional[int] = None) 
 
     Returns:
         List of raw bytes per item (None for errored items)
-    """
-    offset = 0
 
+    A real S7-1500 (CPU 1512SP-1 PN, FW V2.9) answers an item for a missing DB
+    twice: with an empty value in the value list and with an entry in the error
+    list (#130). Such an item counts once and is reported as an error. An item
+    named twice in one list, or with a non-empty value and an error, is still
+    refused when ``expected_count`` is given.
+
+    When some items of a request fail, the same PLC sets a non-zero ReturnValue
+    (``0x20278000009A0013``) but still sends the values of the other items (#129).
+    A reply with a non-zero ReturnValue whose item lists parse, name at least one
+    failed item and (with ``expected_count``) account for every item is returned
+    per item. Any other reply with a non-zero ReturnValue is a request refused as
+    a whole and gives ``[]``.
+    """
     # S7-1200 single-byte scalar: [value 0x00 | 00 04 00 00 00 00]
     if response.endswith(_SCALAR_RESPONSE_SUFFIX):
         body = response[: -len(_SCALAR_RESPONSE_SUFFIX)]
         if len(body) == 2 and body[1] == 0x00:
             return [bytes(body[:1])]
 
-    return_value, consumed = decode_uint64_vlq(response, offset)
-    offset += consumed
+    return_value, offset = decode_uint64_vlq(response, 0)
+    if return_value == 0:
+        return _parse_read_items(response, offset, expected_count)
 
-    if return_value != 0:
+    try:
+        results = _parse_read_items(response, offset, expected_count)
+    except (RuntimeError, ValueError):
+        results = []
+    if None not in results:
         logger.error(f"_parse_read_response: PLC returned error 0x{return_value:X}")
         return []
+    logger.warning(f"_parse_read_response: PLC returned 0x{return_value:X}; {results.count(None)} of {len(results)} items failed")
+    return results
 
+
+def _parse_read_items(response: bytes, offset: int, expected_count: Optional[int]) -> list[Optional[bytes]]:
+    """Parse the value and error lists of a GetMultiVariables reply, starting at ``offset``."""
     values: dict[int, bytes] = {}
     while offset < len(response):
         item_nr, consumed = decode_uint32_vlq(response, offset)
@@ -2417,27 +2438,25 @@ def _parse_read_response(response: bytes, expected_count: Optional[int] = None) 
             break
         err_value, consumed = decode_uint64_vlq(response, offset)
         offset += consumed
-        if expected_count is not None and (err_item_nr > expected_count or err_item_nr in values or err_item_nr in errors):
+        # An empty value next to an error is how a PLC answers a missing DB; any
+        # other item that already has a value or an error is a duplicate.
+        duplicate = err_item_nr in errors or bool(values.get(err_item_nr))
+        if expected_count is not None and (err_item_nr > expected_count or duplicate):
             raise RuntimeError(f"Symbolic multi-read failed: unexpected or duplicate item {err_item_nr}")
         errors[err_item_nr] = err_value
 
-    if expected_count is not None and len(values) + len(errors) != expected_count:
-        raise RuntimeError(f"Symbolic multi-read failed: PLC answered {len(values) + len(errors)} of {expected_count} items")
+    answered = len(values.keys() | errors.keys())
+    if expected_count is not None and answered != expected_count:
+        raise RuntimeError(f"Symbolic multi-read failed: PLC answered {answered} of {expected_count} items")
 
     max_item = max(max(values.keys(), default=0), max(errors.keys(), default=0))
     # Every requested item is answered once, with a value or an error, so item
     # numbers run 1..N for N answered items. A higher number would make the list
     # below as long as the number says (up to 2**32 entries from a few bytes).
-    if max_item > len(values) + len(errors):
-        raise ValueError(f"Read response names item {max_item} but answers only {len(values) + len(errors)} items")
-    results: list[Optional[bytes]] = []
-    for i in range(1, max_item + 1):
-        if i in values:
-            results.append(values[i])
-        else:
-            results.append(None)
-
-    return results
+    if max_item > answered:
+        raise ValueError(f"Read response names item {max_item} but answers only {answered} items")
+    # An item with an error is reported as one, even when it also has a value.
+    return [None if i in errors else values.get(i) for i in range(1, max_item + 1)]
 
 
 def _build_write_payload(items: list[DBWriteItem], protocol_version: int = ProtocolVersion.V2) -> bytes:
