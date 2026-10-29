@@ -14,6 +14,7 @@ from s7commplus.client import (
     ProgramObject,
     S7CommPlusClient,
     _build_read_payload,
+    _db_read_values,
     _parse_read_response,
     _build_write_payload,
     _parse_write_response,
@@ -409,8 +410,7 @@ class TestParseReadResponse:
 
     # GetMultiVariables replies from an S7-1500 (CPU 1512SP-1 PN, FW V2.9, TLS), captured
     # by @bvanelli for #120 (after the 14-byte response header). DB1 is 37 bytes; DB9999
-    # does not exist. The PLC sent ReturnValue 0x20278000009A0013 with each one (#129);
-    # the tests replace it with 0 to reach the item lists.
+    # does not exist. The PLC sent ReturnValue 0x20278000009A0013 with each one (#129).
     CAPTURED = {
         # (1,0,2), (9999,0,2), (1,4,4): the missing DB is in both lists
         "missing DB in the middle": (
@@ -463,6 +463,38 @@ class TestParseReadResponse:
         response = self._build_response(errors=[(1, 0xDEAD), (1, 0xBEEF)])
         with pytest.raises(RuntimeError, match="duplicate item 1"):
             _parse_read_response(response, expected_count=1)
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_keeps_the_good_values_despite_its_return_value(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = bytes.fromhex(hex_reply)
+        assert decode_uint64_vlq(reply, 0)[0] == 0x20278000009A0013
+        assert _parse_read_response(reply) == expected
+        assert _parse_read_response(reply, expected_count=len(expected)) == expected
+        assert _db_read_values(reply, len(expected)) == [value or b"" for value in expected]
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_with_the_wrong_item_count_counts_as_refused(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = bytes.fromhex(hex_reply)
+        assert _parse_read_response(reply, expected_count=len(expected) + 1) == []
+        assert _db_read_values(reply, len(expected) + 1) == [b""] * (len(expected) + 1)
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            pytest.param(encode_uint64_vlq(0x05A9), id="no item lists"),
+            pytest.param(encode_uint64_vlq(0x05A9) + b"\x00\x00", id="empty item lists"),
+            pytest.param(encode_uint64_vlq(0x05A9) + b"\x01", id="truncated item list"),
+            pytest.param(
+                encode_uint64_vlq(0x05A9) + encode_uint32_vlq(1) + encode_pvalue_blob(b"\x01") + b"\x00\x00",
+                id="values but no failed item",
+            ),
+        ],
+    )
+    def test_a_non_zero_return_value_without_failed_items_is_a_refusal(self, response: bytes) -> None:
+        assert _parse_read_response(response) == []
+        assert _parse_read_response(response, expected_count=1) == []
 
 
 class TestParseWriteResponse:

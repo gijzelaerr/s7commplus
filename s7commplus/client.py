@@ -2387,22 +2387,37 @@ def _parse_read_response(response: bytes, expected_count: Optional[int] = None) 
     list (#130). Such an item counts once and is reported as an error. An item
     named twice in one list, or with a non-empty value and an error, is still
     refused when ``expected_count`` is given.
-    """
-    offset = 0
 
+    When some items of a request fail, the same PLC sets a non-zero ReturnValue
+    (``0x20278000009A0013``) but still sends the values of the other items (#129).
+    A reply with a non-zero ReturnValue whose item lists parse, name at least one
+    failed item and (with ``expected_count``) account for every item is returned
+    per item. Any other reply with a non-zero ReturnValue is a request refused as
+    a whole and gives ``[]``.
+    """
     # S7-1200 single-byte scalar: [value 0x00 | 00 04 00 00 00 00]
     if response.endswith(_SCALAR_RESPONSE_SUFFIX):
         body = response[: -len(_SCALAR_RESPONSE_SUFFIX)]
         if len(body) == 2 and body[1] == 0x00:
             return [bytes(body[:1])]
 
-    return_value, consumed = decode_uint64_vlq(response, offset)
-    offset += consumed
+    return_value, offset = decode_uint64_vlq(response, 0)
+    if return_value == 0:
+        return _parse_read_items(response, offset, expected_count)
 
-    if return_value != 0:
+    try:
+        results = _parse_read_items(response, offset, expected_count)
+    except (RuntimeError, ValueError):
+        results = []
+    if None not in results:
         logger.error(f"_parse_read_response: PLC returned error 0x{return_value:X}")
         return []
+    logger.warning(f"_parse_read_response: PLC returned 0x{return_value:X}; {results.count(None)} of {len(results)} items failed")
+    return results
 
+
+def _parse_read_items(response: bytes, offset: int, expected_count: Optional[int]) -> list[Optional[bytes]]:
+    """Parse the value and error lists of a GetMultiVariables reply, starting at ``offset``."""
     values: dict[int, bytes] = {}
     while offset < len(response):
         item_nr, consumed = decode_uint32_vlq(response, offset)
