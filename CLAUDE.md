@@ -32,6 +32,8 @@ tested against an isolated, non-safety-critical controller.
 - `s7commplus/server.py`: S7CommPlus server emulator and in-memory data blocks
 - `s7commplus/tag_browser.py`, `typeinfo.py`, and `blob_decompressor.py`: symbol,
   type-information, and compressed metadata parsing
+- `s7commplus/block_interface.py`: block interface members and `LineComm` id-path
+  resolution; `tag_browser` re-exports its names
 - `s7commplus/subscription.py` and `alarm.py`: cyclic subscriptions and alarms
 - `s7commplus/legitimation.py`: client-side password legitimation for TLS
   (V2/V3) sessions

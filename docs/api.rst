@@ -33,6 +33,21 @@ Symbolic tags
 .. automodule:: s7commplus.values
    :members: decode, encode, assemble, split
 
+Block interfaces
+----------------
+
+.. autoclass:: s7commplus.BlockInterface
+   :members:
+
+.. autoclass:: s7commplus.Member
+   :members:
+
+.. autofunction:: s7commplus.resolve_id_path
+
+.. autofunction:: s7commplus.block_interface_from_explore
+
+.. autofunction:: s7commplus.find_preset_stream
+
 Subscriptions and alarms
 ------------------------
 

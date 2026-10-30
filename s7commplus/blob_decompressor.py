@@ -163,6 +163,35 @@ def iter_preset_streams(data: bytes) -> Iterator[PresetStream]:
         yield PresetStream(preset, text)
 
 
+def find_preset_stream(data: bytes, kinds: tuple[str, ...]) -> int | None:
+    """Return the offset of the first preset-dict stream of the most preferred kind in `kinds`.
+
+    A block EXPLORE response contains several preset-dict streams; callers need
+    the one for a specific dictionary kind, not merely the first. Only headers
+    are read, so the other streams are never decompressed.
+
+    Matching by kind alone also accepts any future version of a dictionary, so
+    adding a second version of one of these kinds feeds its streams to the same
+    parser.
+
+    Args:
+        data: The EXPLORE response payload.
+        kinds: Preset-dictionary kinds to look for, most preferred first.
+
+    Returns:
+        The offset to pass to :func:`decompress_blob`, or None if no stream of
+        any of the kinds is present.
+    """
+    offsets: dict[str, int] = {}
+    for offset, preset in iter_preset_headers(data):
+        if preset.kind in kinds:
+            offsets.setdefault(preset.kind, offset)
+    for kind in kinds:
+        if kind in offsets:
+            return offsets[kind]
+    return None
+
+
 def find_and_decompress(data: bytes) -> str | None:
     """Scan raw bytes for a zlib stream with preset dictionary and decompress it.
 

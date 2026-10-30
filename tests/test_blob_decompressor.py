@@ -7,7 +7,8 @@ from itertools import accumulate
 import pytest
 
 from s7commplus import PresetStream, decompress_blob, find_and_decompress, iter_preset_streams
-from s7commplus.blob_decompressor import iter_preset_headers
+from s7commplus.blob_decompressor import find_preset_stream, iter_preset_headers
+from s7commplus.block_interface import _INTFDESC_KINDS
 from s7commplus.zlib_dicts import ZLIB_DICTIONARIES, ZLIB_DICT_IDENTITIES, ZLIB_DICT_NAMES, PresetIdentity
 
 
@@ -131,3 +132,18 @@ def test_find_and_decompress_standard():
 def test_find_and_decompress_no_stream():
     result = find_and_decompress(b"\x00\x01\x02\x03\x04\x05")
     assert result is None
+
+
+def test_find_preset_stream_matches_kind_across_versions():
+    # LineComm 0x90000001 then 0x98000001: the first stream of the kind wins, whatever its version.
+    # Only headers are read, so the streams need no body.
+    payload = bytes.fromhex("787d 79b2bda3 787d 3c55436a")
+    assert find_preset_stream(payload, ("LineComm",)) == 0
+    assert find_preset_stream(payload, ("IntfDesc",)) is None
+
+
+def test_find_preset_stream_prefers_debuginfo_intfdesc():
+    # IntfDesc then DebugInfo IntfDesc: the optimized interface wins although it comes second.
+    payload = bytes.fromhex("787d 4b8416f0 787d 66052b13")
+    assert find_preset_stream(payload, _INTFDESC_KINDS) == 6
+    assert find_preset_stream(payload[6:] + payload[:6], _INTFDESC_KINDS) == 0
