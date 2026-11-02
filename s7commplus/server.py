@@ -30,6 +30,7 @@ import socket
 import ssl
 import struct
 import threading
+from collections.abc import Sequence
 from enum import IntEnum
 from typing import Any, Callable, Optional
 
@@ -215,6 +216,7 @@ class S7CommPlusServer:
         public_key_fingerprint: Optional[str] = None,
         session_challenge: Optional[bytes] = None,
         session_key: Optional[bytes] = None,
+        renewal_session_keys: Sequence[bytes] = (),
         rst_after_symbolic_read: bool = False,
         v1_integrity_id_after_body: bool = True,
         max_response_pdu: Optional[int] = None,
@@ -251,6 +253,12 @@ class S7CommPlusServer:
         # negotiated key explicitly to exercise V3 framing end to end.
         self._session_key = session_key
         self._accepted_session_key_setups = 0
+        # The same goes for a renewal: tests provide the keys it will negotiate, in
+        # order. Without one, a renewal is refused. The key is shared by all
+        # connections, so a renewal only suits a server with one client.
+        self._renewal_session_keys = list(renewal_session_keys)
+        self._pending_session_key: Optional[bytes] = None
+        self._accepted_session_key_renewals = 0
 
         # When True, the server closes the TCP connection after responding
         # to a GetMultiVariables request (emulating firmware like S7-1200
@@ -601,6 +609,9 @@ class S7CommPlusServer:
                             request_version if request_version == ProtocolVersion.V3 else self._protocol_version,
                             split_response,
                         )
+                        if self._pending_session_key is not None:
+                            # The reply went out under the old key; the next request uses the new one.
+                            self._session_key, self._pending_session_key = self._pending_session_key, None
 
                     if rst:
                         logger.debug(f"RST emulation: closing connection to {address}")
@@ -1453,21 +1464,38 @@ class S7CommPlusServer:
     def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
         """Handle SetVariable: accept the session activation and legitimation writes.
 
-        A SessionKey renewal stays refused: the emulator cannot derive the new
-        key from the blob, so accepting it would break the next signed request.
+        A SessionKey renewal is accepted only for the next key in
+        ``renewal_session_keys``: the emulator cannot derive the new key from the
+        blob, so accepting any other would break the next signed request.
         """
         try:
             _count, consumed = decode_uint32_vlq(request_data, 4)
             address, _ = decode_uint32_vlq(request_data, 4 + consumed)
         except ValueError:
             return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
-        if address == LegitimationId.SESSION_SETUP_LEGITIMATION:
+        if address == LegitimationId.SESSION_SETUP_LEGITIMATION and not self._accept_session_key_renewal(request_data):
             return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
         response = bytearray()
         response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
         response += encode_uint32_vlq(0)  # Return code: success
         response += struct.pack(">I", 0)
         return bytes(response)
+
+    def _accept_session_key_renewal(self, request_data: bytes) -> bool:
+        """Accept a renewal whose SecurityKey names the next configured key."""
+        from .v1_session_key.utils import derive_key_id
+
+        with self._lock:
+            if not self._renewal_session_keys:
+                return False
+            key = self._renewal_session_keys[0]
+            if encode_uint64_vlq(int.from_bytes(derive_key_id(key), "little")) not in request_data:
+                logger.warning("SetVariable: rejected a SessionKey renewal for an unexpected key")
+                return False
+            self._renewal_session_keys.pop(0)
+            self._pending_session_key = key
+            self._accepted_session_key_renewals += 1
+        return True
 
     def _build_error_response(self, seq_num: int, session_id: int, function_code: int) -> bytes:
         """Build a generic error response for unsupported function codes."""

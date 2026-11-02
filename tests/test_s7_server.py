@@ -1207,6 +1207,122 @@ class TestSetVariable:
         assert "generic error" in caplog.text
 
 
+class TestAcceptedSessionKeyRenewal:
+    """A renewal end to end: both sides move to the new key after the reply."""
+
+    NEW_KEY = bytes(range(100, 124))
+    NEWER_KEY = bytes(range(130, 154))
+
+    @pytest.fixture()
+    def renewal_server(self, monkeypatch: pytest.MonkeyPatch) -> Generator[S7CommPlusServer, None, None]:
+        from s7commplus.v1_session_key import handshake
+
+        keys = iter([TEST_SESSION_KEY, self.NEW_KEY, self.NEWER_KEY])
+        monkeypatch.setattr(handshake, "authenticate_real_plc", lambda *_args: (bytes(180), next(keys)))
+        srv = S7CommPlusServer(
+            public_key_fingerprint=TEST_FINGERPRINT,
+            session_challenge=TEST_CHALLENGE,
+            session_key=TEST_SESSION_KEY,
+            renewal_session_keys=[self.NEW_KEY, self.NEWER_KEY],
+        )
+        srv.register_db(1, {"temperature": ("Real", 0)})
+        srv.start(port=0)
+        time.sleep(0.1)
+        yield srv
+        srv.stop()
+
+    @staticmethod
+    def _wait_for_renewals(server: S7CommPlusServer, count: int) -> None:
+        deadline = time.monotonic() + 5.0
+        while server._accepted_session_key_renewals < count and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server._accepted_session_key_renewals == count
+
+    def test_requests_are_signed_with_the_new_key_after_a_renewal(self, renewal_server: S7CommPlusServer) -> None:
+        client = S7CommPlusClient()
+        client.connect("127.0.0.1", port=renewal_server.port, legacy_session_key_refresh_interval=None)
+        try:
+            connection = client._connection
+            assert connection is not None
+            for key in (self.NEW_KEY, self.NEWER_KEY):
+                with connection._request_lock:
+                    connection._renew_session_key_locked()
+                assert connection._session_key == key
+                client.db_write(1, 0, b"\x2a")
+                assert client.db_read(1, 0, 1) == b"\x2a"
+                assert renewal_server._session_key == key
+        finally:
+            client.disconnect()
+
+    def test_timer_renews_while_requests_keep_working(self, renewal_server: S7CommPlusServer) -> None:
+        client = S7CommPlusClient()
+        client.connect("127.0.0.1", port=renewal_server.port, legacy_session_key_refresh_interval=0.05)
+        try:
+            self._wait_for_renewals(renewal_server, 2)
+            assert client.db_read(1, 0, 1) == b"\x00"
+            assert client._connection is not None
+            assert client._connection._session_key == self.NEWER_KEY
+        finally:
+            client.disconnect()
+
+    def test_refused_renewal_keeps_the_old_key_on_both_sides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from s7commplus.v1_session_key import handshake
+
+        keys = iter([TEST_SESSION_KEY, self.NEWER_KEY])  # the server expects NEW_KEY
+        monkeypatch.setattr(handshake, "authenticate_real_plc", lambda *_args: (bytes(180), next(keys)))
+        srv = S7CommPlusServer(
+            public_key_fingerprint=TEST_FINGERPRINT,
+            session_challenge=TEST_CHALLENGE,
+            session_key=TEST_SESSION_KEY,
+            renewal_session_keys=[self.NEW_KEY],
+        )
+        srv.register_db(1, {"temperature": ("Real", 0)})
+        srv.start(port=0)
+        time.sleep(0.1)
+        client = S7CommPlusClient()
+        try:
+            client.connect("127.0.0.1", port=srv.port, legacy_session_key_refresh_interval=None)
+            connection = client._connection
+            assert connection is not None
+            with connection._request_lock, pytest.raises(S7ConnectionError, match="generic error"):
+                connection._renew_session_key_locked()
+            assert connection._session_key == srv._session_key == TEST_SESSION_KEY
+            assert srv._accepted_session_key_renewals == 0
+            assert client.db_read(1, 0, 1) == b"\x00"
+        finally:
+            client.disconnect()
+            srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_async_requests_are_signed_with_the_new_key_after_a_renewal(self, renewal_server: S7CommPlusServer) -> None:
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=renewal_server.port, legacy_session_key_refresh_interval=None)
+        try:
+            for key in (self.NEW_KEY, self.NEWER_KEY):
+                async with client._lock:
+                    await client._renew_session_key_locked()
+                assert client._session_key == key
+                await client.db_write(1, 0, b"\x2a")
+                assert await client.db_read(1, 0, 1) == b"\x2a"
+                assert renewal_server._session_key == key
+        finally:
+            await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_async_timer_renews_while_requests_keep_working(self, renewal_server: S7CommPlusServer) -> None:
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=renewal_server.port, legacy_session_key_refresh_interval=0.05)
+        try:
+            deadline = time.monotonic() + 5.0
+            while renewal_server._accepted_session_key_renewals < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert renewal_server._accepted_session_key_renewals == 2
+            assert await client.db_read(1, 0, 1) == b"\x00"
+            assert client._session_key == self.NEWER_KEY
+        finally:
+            await client.disconnect()
+
+
 class TestServerRequestParsers:
     """The server-side parsers resolve an address or say they cannot."""
 
