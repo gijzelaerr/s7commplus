@@ -19,7 +19,7 @@ from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import _LEGACY_KEY_CACHE, S7CommPlusClient
 from s7commplus.codec import encode_header
 from s7commplus.connection import S7CommPlusConnection, _response_continues
-from s7commplus.error import S7ConnectionError
+from s7commplus.error import S7ConnectionError, S7ProtocolError
 from s7commplus.protocol import FunctionCode, Opcode, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 
@@ -309,8 +309,9 @@ WHOLE_V3_WITHOUT_A_KEY = encode_header(ProtocolVersion.V3, len(_ENVELOPE)) + _EN
 
 
 def test_sync_rejects_a_whole_v3_reply_without_a_session_key() -> None:
+    # Refused before the key check: without a key the frame's first byte is read as the opcode.
     conn = _sync_connection(WHOLE_V3_WITHOUT_A_KEY)
-    with pytest.raises(S7ConnectionError, match="without a session key"):
+    with pytest.raises(S7ProtocolError, match="Unexpected S7CommPlus opcode 0x20"):
         conn.send_request(FunctionCode.GET_MULTI_VARIABLES)
 
 
