@@ -301,3 +301,16 @@ async def test_async_reassembly_rejects_a_v3_fragment_without_a_session_key() ->
     client = _async_client()
     with pytest.raises(S7ConnectionError, match="without a session key"):
         await client._recv_reassembled_payload(V3_WITHOUT_A_KEY)
+
+
+def test_sync_rejects_a_whole_v3_reply_without_a_session_key() -> None:
+    conn = _sync_connection(V3_WITHOUT_A_KEY)
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        conn.send_request(FunctionCode.GET_MULTI_VARIABLES)
+
+
+@pytest.mark.asyncio
+async def test_async_rejects_a_whole_v3_reply_without_a_session_key() -> None:
+    client = _async_client(V3_WITHOUT_A_KEY)
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
