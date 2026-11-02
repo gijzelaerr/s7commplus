@@ -985,7 +985,7 @@ class S7CommPlusServer:
         """Build a minimal ServerSessionVersion Struct(314) typed value.
 
         Matches the wire format a real V1-initial S7-1200 PLC emits:
-        flags=0x00, type=STRUCT, structId=VLQ(314), elements..., terminator=0x00.
+        flags=0x00, type=STRUCT, structId=UInt32(314), elements..., terminator=0x00.
 
         Element 319 is the PAOM device string. The client strips it before
         echoing — here we include a short placeholder so the stripping logic
@@ -993,7 +993,7 @@ class S7CommPlusServer:
         """
         buf = bytearray()
         buf += bytes([0x00, DataType.STRUCT])
-        buf += encode_uint32_vlq(314)  # Struct ID
+        buf += struct.pack(">I", 314)  # Struct ID, a fixed 4-byte word
 
         # Element 315: protocol version as UDINT
         buf += encode_uint32_vlq(315)

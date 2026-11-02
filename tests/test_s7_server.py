@@ -1172,3 +1172,37 @@ class TestServerRequestParsers:
         # Cut inside the LID list: the address is incomplete, so it is not a range.
         marker_at = payload.rindex(bytes([BLOB]))
         assert _server_parse_read_request(payload[: marker_at + 1]) == [None]
+
+
+class TestSessionKeyServerSessionVersion:
+    """The emulator's ServerSessionVersion struct has the layout of a real CPU (#151)."""
+
+    def test_struct_id_is_a_fixed_word(self) -> None:
+        built = S7CommPlusServer._build_server_session_version_struct()
+        assert built[:6] == bytes.fromhex("0017 0000013a")
+
+    def test_client_captures_the_whole_struct_and_strips_the_device_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from s7commplus import Client
+        from s7commplus.connection import _strip_paom_string_in_session_version
+        from s7commplus.v1_session_key import handshake
+
+        monkeypatch.setattr(handshake, "authenticate_real_plc", lambda challenge, public_key, family: (bytes(180), bytes(24)))
+        server = S7CommPlusServer(
+            public_key_fingerprint="01:BD426B091F08731A",
+            session_challenge=bytes(20),
+            session_key=bytes(24),
+        )
+        server.start(port=0)
+        try:
+            client = Client()
+            client.connect("127.0.0.1", port=server.port)
+            try:
+                captured = client._connection._server_session_version
+                assert captured == S7CommPlusServer._build_server_session_version_struct()
+                assert captured is not None
+                assert b"6ES7" in captured
+                assert b"6ES7" not in _strip_paom_string_in_session_version(captured)
+            finally:
+                client.disconnect()
+        finally:
+            server.stop()
