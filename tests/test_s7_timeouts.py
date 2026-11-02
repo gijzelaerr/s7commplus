@@ -631,7 +631,7 @@ def test_sync_every_part_of_an_explore_reply_gets_the_explore_timeout() -> None:
 
     assert not parts and None not in waits
     first, second, other_first, other_second = waits
-    assert 4.5 < first <= 9.0 and second == 9.0
+    assert 4.5 < first <= 9.0 + 1e-9 and second == 9.0
     assert 0.25 < other_first <= 0.5 + 1e-9 and other_second == 0.5
 
 
