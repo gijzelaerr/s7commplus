@@ -348,6 +348,7 @@ class S7CommPlusAsyncClient:
         # V1 SessionKey state (non-TLS V1 sessions only), as in S7CommPlusConnection.
         self._legacy_s7_1500: bool | None = None
         self._last_raw_response_payload: bytes | None = None
+        self._last_response_function: int | None = None
         self._public_key_fingerprint: Optional[str] = None
         self._session_challenge: Optional[bytes] = None
         # ServerSession.Role from the CreateObject response; the
@@ -1009,7 +1010,7 @@ class S7CommPlusAsyncClient:
         value += encrypted_response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
         resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     async def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR)."""
@@ -1020,7 +1021,7 @@ class S7CommPlusAsyncClient:
         value += response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
         resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     @property
     def connection_generation(self) -> int:
@@ -1220,7 +1221,8 @@ class S7CommPlusAsyncClient:
             self._v1_session_key_public_key, self._v1_session_key_family, blob, new_session_key
         )
         renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
-        _check_set_variable_response(await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4))
+        renewal_response = await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4)
+        _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")
 
@@ -2443,7 +2445,7 @@ class S7CommPlusAsyncClient:
             data = await self._recv_reassembled_payload(response_data, reply_timeout)
             if len(data) < 10:
                 raise S7ConnectionError("Response too short")
-            _validate_response_header(data, function_code, seq_num)
+            self._last_response_function = _validate_response_header(data, function_code, seq_num)
             return self._response_payload(function_code, bytes(data[10:]))
 
         version, data_length, consumed = decode_header(response_data)
@@ -2458,7 +2460,7 @@ class S7CommPlusAsyncClient:
                 await self._invalidate_integrity_failure()
                 raise
 
-        _validate_response_header(response, function_code, seq_num)
+        self._last_response_function = _validate_response_header(response, function_code, seq_num)
 
         # RESPONSE header is 10 bytes (opcode+res+func+res+seqnr+transport) — responses
         # carry no SessionId field (requests do, hence their 14-byte header). For V2+ the
@@ -2897,6 +2899,10 @@ class S7CommPlusAsyncClient:
         async with self._lock:
             payload = _build_session_activate_payload(self._session_id, self._sequence_number)
             await self._send_request_locked(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
+        if self._last_response_function == FunctionCode.ERROR:
+            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
+            logger.warning("Session activation answered with the generic error function")
+            return
         logger.info("Session activation completed")
 
     async def _post_auth_legitimation(self, password: str = "") -> None:

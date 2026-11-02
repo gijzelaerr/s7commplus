@@ -1662,6 +1662,28 @@ class TestLegacySessionKeyRefresh:
 
         assert conn._session_key == old_key
 
+    def test_error_frame_never_installs_generated_key(self) -> None:
+        conn = self._authenticated_connection()
+        challenge = bytes(range(20))
+        challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(challenge)]) + challenge
+        old_key = conn._session_key
+        replies = iter(
+            [(FunctionCode.GET_VAR_SUBSTREAMED, challenge_response), (FunctionCode.ERROR, bytes.fromhex("893100000000"))]
+        )
+
+        def exchange(*_args: object) -> bytes:
+            conn._last_response_function, reply = next(replies)
+            return reply
+
+        conn._send_request = MagicMock(side_effect=exchange)
+        with (
+            patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
+            pytest.raises(S7ConnectionError, match="generic error"),
+        ):
+            conn._renew_session_key_locked()
+
+        assert conn._session_key == old_key
+
     def test_short_interval_renews_while_requests_remain_usable(self) -> None:
         conn = self._authenticated_connection()
         conn._session_key_refresh_interval = 0.01

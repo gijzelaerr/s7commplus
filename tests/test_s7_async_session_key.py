@@ -329,6 +329,26 @@ async def test_async_rejected_renewal_never_installs_generated_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_error_frame_never_installs_generated_key() -> None:
+    client = _authenticated_client()
+    challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
+    old_key = client._session_key
+    replies = iter([(FunctionCode.GET_VAR_SUBSTREAMED, challenge_response), (FunctionCode.ERROR, bytes.fromhex("893100000000"))])
+
+    async def exchange(*_args: object) -> bytes:
+        client._last_response_function, reply = next(replies)
+        return reply
+
+    client._send_request_locked = AsyncMock(side_effect=exchange)  # type: ignore[method-assign]
+    with (
+        patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
+        pytest.raises(S7ConnectionError, match="generic error"),
+    ):
+        await client._renew_session_key_locked()
+    assert client._session_key == old_key
+
+
+@pytest.mark.asyncio
 async def test_async_short_interval_renews_and_disconnect_stops_it() -> None:
     client = _authenticated_client()
     client._session_key_refresh_interval = 0.01

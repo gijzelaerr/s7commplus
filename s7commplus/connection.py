@@ -178,8 +178,8 @@ def _response_continues(frame: bytes) -> bool:
     return bytes(frame[end : end + 4]) != struct.pack(">BBH", 0x72, version, 0x0000)
 
 
-def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> None:
-    """Validate that application data is the response to one outstanding request."""
+def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> int:
+    """Validate that application data is the response to one outstanding request; return its function code."""
     from .error import S7ConnectionError, S7ProtocolError
 
     if len(response) < 10:
@@ -199,6 +199,7 @@ def _validate_response_header(response: bytes, expected_function: int, expected_
         raise S7ProtocolError(
             f"Response sequence mismatch: expected seq={expected_sequence}, got seq={sequence} for function=0x{function:04X}"
         )
+    return int(function)
 
 
 def _log_create_object_return_value(return_value: int, tls_active: bool) -> None:
@@ -491,13 +492,19 @@ def _build_set_variable_payload(in_object_id: int, address: int, value: bytes) -
     return payload
 
 
-def _check_set_variable_response(payload: bytes) -> None:
-    """Raise when a SetVariable response reports a refused legitimation.
+def _check_set_variable_response(payload: bytes, function: Optional[int] = None) -> None:
+    """Raise when a SetVariable response reports a refused write.
+
+    ``function`` is the response's function code. A generic ERROR frame is
+    always a refusal, whatever its payload decodes to: its first value is the
+    error function code, which has no sign bit.
 
     Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
     """
     from .error import S7ConnectionError
 
+    if function == FunctionCode.ERROR:
+        raise S7ConnectionError("SetVariable answered with the generic error function")
     if not payload:
         raise S7ConnectionError("SetVariable response is empty")
     try:
@@ -1234,6 +1241,7 @@ class S7CommPlusConnection:
     ):
         self._legacy_s7_1500 = legacy_s7_1500
         self._last_raw_response_payload: Optional[bytes] = None
+        self._last_response_function: Optional[int] = None
         self.host = host
         self.port = port
 
@@ -1752,7 +1760,7 @@ class S7CommPlusConnection:
         value += encrypted_response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
         resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR).
@@ -1764,7 +1772,7 @@ class S7CommPlusConnection:
         value += response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
         resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     def collect_explore_frames(self, first_payload: bytes) -> bytes:
         """Collect unauthenticated multi-fragment EXPLORE continuation frames.
@@ -1947,7 +1955,7 @@ class S7CommPlusConnection:
         security_key = self._encode_security_key_struct(blob, new_session_key)
         renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
         renewal_response = self._send_request(FunctionCode.SET_VARIABLE, renewal_payload, 4, False)
-        _check_set_variable_response(renewal_response)
+        _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")
 
@@ -2068,7 +2076,7 @@ class S7CommPlusConnection:
                 from .error import S7ConnectionError
 
                 raise S7ConnectionError("Response too short")
-            _validate_response_header(data, function_code, seq_num)
+            self._last_response_function = _validate_response_header(data, function_code, seq_num)
             logger.debug(f"  Reassembled response ({len(data)} bytes), payload {len(data) - 10} bytes")
             return self._response_payload(function_code, bytes(data[10:]))
 
@@ -2101,7 +2109,7 @@ class S7CommPlusConnection:
 
         logger.debug(f"  Response data ({len(response)} bytes): {response.hex(' ')}")
 
-        _validate_response_header(response, function_code, seq_num)
+        self._last_response_function = _validate_response_header(response, function_code, seq_num)
 
         # Parse the 10-byte response header for debug (responses carry no SessionId)
         resp_opcode = response[0]
@@ -2681,6 +2689,10 @@ class S7CommPlusConnection:
         logger.debug("Session activation: SET_VARIABLE addr 323 = USINT(5)")
         payload = _build_session_activate_payload(self._session_id, self._sequence_number)
         self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
+        if self._last_response_function == FunctionCode.ERROR:
+            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
+            logger.warning("Session activation answered with the generic error function")
+            return
         logger.info("Session activation completed")
 
     def _skip_integrity_ids_after_legitimation(self) -> None:

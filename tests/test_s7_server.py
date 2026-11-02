@@ -1172,3 +1172,58 @@ class TestServerRequestParsers:
         # Cut inside the LID list: the address is incomplete, so it is not a range.
         marker_at = payload.rindex(bytes([BLOB]))
         assert _server_parse_read_request(payload[: marker_at + 1]) == [None]
+
+
+class TestSetVariable:
+    """A generic error frame is a refusal, and the emulator answers SetVariable (#152)."""
+
+    def test_error_frame_is_refused_whatever_it_decodes_to(self) -> None:
+        from s7commplus.connection import _check_set_variable_response
+
+        frame = bytes.fromhex("893100000000")
+        _check_set_variable_response(frame)  # without the function code it reads as success
+        with pytest.raises(S7ConnectionError, match="generic error"):
+            _check_set_variable_response(frame, FunctionCode.ERROR)
+        _check_set_variable_response(bytes(5), FunctionCode.SET_VARIABLE)
+
+    @pytest.mark.parametrize(
+        "address, function",
+        [
+            (323, FunctionCode.SET_VARIABLE),
+            (LegitimationId.LEGITIMATE, FunctionCode.SET_VARIABLE),
+            (LegitimationId.SESSION_SETUP_LEGITIMATION, FunctionCode.ERROR),
+        ],
+    )
+    def test_emulator_answer_by_address(self, address: int, function: int) -> None:
+        from s7commplus.connection import _build_set_variable_payload
+
+        server = S7CommPlusServer()
+        request = _build_set_variable_payload(0x100, address, bytes([0x00, DataType.USINT, 0x05]))
+        reply = server._handle_set_variable(7, 0x100, request)
+        assert struct.unpack_from(">H", reply, 3)[0] == function
+        assert struct.unpack_from(">H", reply, 7)[0] == 7
+
+    def test_legitimation_answered_with_an_error_frame_is_refused(self) -> None:
+        from s7commplus.connection import S7CommPlusConnection
+
+        conn = S7CommPlusConnection("127.0.0.1")
+
+        def exchange(*_args: object, **_kwargs: object) -> bytes:
+            conn._last_response_function = FunctionCode.ERROR
+            return bytes.fromhex("893100000000")
+
+        with patch.object(conn, "send_request", side_effect=exchange), pytest.raises(S7ConnectionError, match="generic error"):
+            conn._send_legitimation_new(bytes(16))
+
+    def test_refused_activation_is_only_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        from s7commplus.connection import S7CommPlusConnection
+
+        conn = S7CommPlusConnection("127.0.0.1")
+
+        def exchange(*_args: object, **_kwargs: object) -> bytes:
+            conn._last_response_function = FunctionCode.ERROR
+            return bytes.fromhex("893100000000")
+
+        with patch.object(conn, "send_request", side_effect=exchange), caplog.at_level("WARNING", "s7commplus.connection"):
+            conn._session_activate()
+        assert "generic error" in caplog.text

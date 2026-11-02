@@ -849,6 +849,9 @@ class S7CommPlusServer:
         elif function_code == FunctionCode.SET_VAR_SUBSTREAMED:
             response = self._handle_set_var_substreamed(seq_num, req_session_id, request_data)
             rst = False
+        elif function_code == FunctionCode.SET_VARIABLE:
+            response = self._handle_set_variable(seq_num, req_session_id, request_data)
+            rst = False
         else:
             response = self._build_error_response(seq_num, req_session_id, function_code)
             rst = False
@@ -1444,6 +1447,25 @@ class S7CommPlusServer:
         response = bytearray()
         response += self._build_response_header(FunctionCode.SET_VAR_SUBSTREAMED, seq_num)
         response += encode_uint64_vlq(0)  # ReturnValue: success
+        response += struct.pack(">I", 0)
+        return bytes(response)
+
+    def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
+        """Handle SetVariable: accept the session activation and legitimation writes.
+
+        A SessionKey renewal stays refused: the emulator cannot derive the new
+        key from the blob, so accepting it would break the next signed request.
+        """
+        try:
+            _count, consumed = decode_uint32_vlq(request_data, 4)
+            address, _ = decode_uint32_vlq(request_data, 4 + consumed)
+        except ValueError:
+            return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        if address == LegitimationId.SESSION_SETUP_LEGITIMATION:
+            return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        response = bytearray()
+        response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
+        response += encode_uint32_vlq(0)  # Return code: success
         response += struct.pack(">I", 0)
         return bytes(response)
 
