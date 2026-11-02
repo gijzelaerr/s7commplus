@@ -1152,28 +1152,6 @@ class TestServerRefusesItemsItCannotServeAsync:
         assert _db1(small_db_server) == before
 
 
-class TestServerRequestParsers:
-    """The server-side parsers resolve an address or say they cannot."""
-
-    def test_read_request_resolves_classic_blob_ranges_only(self) -> None:
-        payload = _build_multi_symbolic_read_payload(
-            [(DB1_AREA, [BLOB, 4, 4]), (DB1_AREA, [1, 2]), (DB7_AREA, [BLOB, 0, 2]), (DB1_AREA, [BLOB, 0])]
-        )
-        assert _server_parse_read_request(payload) == [(1, 4, 4), None, (7, 0, 2), None]
-
-    def test_write_request_resolves_classic_blob_ranges_only(self) -> None:
-        resolved = _build_symbolic_write_payload(DB1_AREA, [BLOB, 4, 2], b"\xaa\xbb")
-        unresolved = _build_symbolic_write_payload(DB1_AREA, [1, 2], b"\xaa\xbb")
-        assert _server_parse_write_request(resolved) == ([(1, 4, 2)], [b"\xaa\xbb"])
-        assert _server_parse_write_request(unresolved) == ([None], [b"\xaa\xbb"])
-
-    def test_truncated_read_request_resolves_nothing(self) -> None:
-        payload = _build_multi_symbolic_read_payload([(DB1_AREA, [BLOB, 4, 4])])
-        # Cut inside the LID list: the address is incomplete, so it is not a range.
-        marker_at = payload.rindex(bytes([BLOB]))
-        assert _server_parse_read_request(payload[: marker_at + 1]) == [None]
-
-
 class TestSetVariable:
     """A generic error frame is a refusal, and the emulator answers SetVariable (#152)."""
 
@@ -1227,3 +1205,25 @@ class TestSetVariable:
         with patch.object(conn, "send_request", side_effect=exchange), caplog.at_level("WARNING", "s7commplus.connection"):
             conn._session_activate()
         assert "generic error" in caplog.text
+
+
+class TestServerRequestParsers:
+    """The server-side parsers resolve an address or say they cannot."""
+
+    def test_read_request_resolves_classic_blob_ranges_only(self) -> None:
+        payload = _build_multi_symbolic_read_payload(
+            [(DB1_AREA, [BLOB, 4, 4]), (DB1_AREA, [1, 2]), (DB7_AREA, [BLOB, 0, 2]), (DB1_AREA, [BLOB, 0])]
+        )
+        assert _server_parse_read_request(payload) == [(1, 4, 4), None, (7, 0, 2), None]
+
+    def test_write_request_resolves_classic_blob_ranges_only(self) -> None:
+        resolved = _build_symbolic_write_payload(DB1_AREA, [BLOB, 4, 2], b"\xaa\xbb")
+        unresolved = _build_symbolic_write_payload(DB1_AREA, [1, 2], b"\xaa\xbb")
+        assert _server_parse_write_request(resolved) == ([(1, 4, 2)], [b"\xaa\xbb"])
+        assert _server_parse_write_request(unresolved) == ([None], [b"\xaa\xbb"])
+
+    def test_truncated_read_request_resolves_nothing(self) -> None:
+        payload = _build_multi_symbolic_read_payload([(DB1_AREA, [BLOB, 4, 4])])
+        # Cut inside the LID list: the address is incomplete, so it is not a range.
+        marker_at = payload.rindex(bytes([BLOB]))
+        assert _server_parse_read_request(payload[: marker_at + 1]) == [None]
