@@ -15,7 +15,15 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from typing import Any, Concatenate, Literal, Optional, ParamSpec, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError, S7SubscriptionError, S7TimeoutError, S7TlsHandshakeError, S7WriteError
+from .error import (
+    S7ConnectionError,
+    S7NotConnectedError,
+    S7ProtocolError,
+    S7SubscriptionError,
+    S7TimeoutError,
+    S7TlsHandshakeError,
+    S7WriteError,
+)
 
 from . import typeinfo
 from .alarm import (
@@ -797,7 +805,7 @@ class S7CommPlusClient:
         fallback to plaintext never outlives the connection it was made for.
         """
         if self._connect_params is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         p = self._connect_params
         if not p["auto_tls"]:
             self._open_connection_with_key_fallback()
@@ -930,7 +938,7 @@ class S7CommPlusClient:
                 cleared its parameters.
         """
         if self._connect_params is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         logger.info("Reconnecting to the PLC")
         self._reconnect()
 
@@ -1009,7 +1017,7 @@ class S7CommPlusClient:
             Raw bytes read from the data block
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             return self._db_read_substreamed(db_number, start, size)
@@ -1071,7 +1079,7 @@ class S7CommPlusClient:
                 nothing is sent.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             normalized = [_normalize_write_item(item) for item in items]
@@ -1137,7 +1145,7 @@ class S7CommPlusClient:
                 exactly once.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             return [self._db_read_substreamed(db, start, size) for db, start, size in items]
@@ -1166,7 +1174,7 @@ class S7CommPlusClient:
             Raw bytes read from the area.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             payload = _build_substreamed_read_payload(
@@ -1196,7 +1204,7 @@ class S7CommPlusClient:
                 use an explicit scalar datatype when writing a scalar target.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             payload = _build_substreamed_write_payload(
@@ -1250,7 +1258,7 @@ class S7CommPlusClient:
             Raw bytes of the variable value.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, self._connection.object_qualifier_version)
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
@@ -1280,7 +1288,7 @@ class S7CommPlusClient:
             RuntimeError: If the PLC does not answer every requested item.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not items:
             return []
 
@@ -1321,7 +1329,7 @@ class S7CommPlusClient:
                 legacy calls but is not a generic replacement for scalar types.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         payload = _build_symbolic_write_payload(
             access_area,
@@ -1369,7 +1377,7 @@ class S7CommPlusClient:
             RuntimeError: If not connected.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if _block_signature(self.list_datablocks()) != self._block_layout_signature:
             logger.info("The PLC data-block list changed; refreshing the tag catalog")
             self.refresh_tag_catalog()
@@ -1389,7 +1397,7 @@ class S7CommPlusClient:
     def _read_type_info_time(self, ti_rid: int) -> Optional[bytes]:
         """EXPLORE one type-info object for its modification time (``None`` if not reported)."""
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         payload = _build_explore_request(ti_rid, [Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME])
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
@@ -1523,7 +1531,7 @@ class S7CommPlusClient:
                 nothing is sent.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not values:
             return []
         tags, _ = self._resolve_tags(list(values))
@@ -1643,7 +1651,7 @@ class S7CommPlusClient:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue, e.g. for an object that does not exist.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection._session_key is not None:
             explore_id = explore_id or 0x38
@@ -1710,7 +1718,7 @@ class S7CommPlusClient:
             One of ``"RUN"``, ``"STOP"``, or ``"UNKNOWN"``.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         # Read the CPU exec unit object to get the running state
         payload = _build_explore_request(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, [])
@@ -1731,7 +1739,7 @@ class S7CommPlusClient:
             Raw block data.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         # Use GET_VAR_SUBSTREAMED to read block content
         payload = bytearray()
@@ -1760,7 +1768,7 @@ class S7CommPlusClient:
             data: Raw block data to write.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         from .codec import encode_pvalue_blob
 
@@ -1793,7 +1801,7 @@ class S7CommPlusClient:
             for an unprotected block is available to pin its encoding.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
             # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
@@ -1822,7 +1830,7 @@ class S7CommPlusClient:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
             raise NotImplementedError("program_objects() is not supported on V1 SessionKey sessions")
 
@@ -1851,7 +1859,7 @@ class S7CommPlusClient:
     def _browse_layout(self) -> tuple[list[dict[str, Any]], list[tuple[str, int, int]], dict[int, bytes]]:
         """:meth:`browse`, also returning the block-list signature and type-info modification times."""
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         # Phase A: enumerate data blocks. Phase B/C: resolve each DB's type-info RID
         # (a LID=1 read — needed for instance DBs whose TI is not their own RID) and seed
@@ -1926,7 +1934,7 @@ class S7CommPlusClient:
     def _explore_type_info_container(self) -> list["typeinfo.PObject"]:
         """EXPLORE the OMS type-info container and return its per-type objects."""
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         payload = _build_explore_request(Ids.OBJECT_OMS_TYPE_INFO_CONTAINER, [])
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, "Type-info browse")
@@ -1965,7 +1973,7 @@ class S7CommPlusClient:
                 :meth:`create_subscriptions` for that many items.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
 
@@ -2041,7 +2049,7 @@ class S7CommPlusClient:
                 first one fails, that error propagates unchanged.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not items:
             raise ValueError("a subscription requires at least one item")
         container_id = self._connection.subscription_container_id
@@ -2116,7 +2124,7 @@ class S7CommPlusClient:
         """
         _check_timeout("timeout", timeout)
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         wait = self._notification_wait(timeout)
         deadline = time.monotonic() + wait
         if subscription_id is not None:
@@ -2181,7 +2189,7 @@ class S7CommPlusClient:
                 for logging.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
 
@@ -2217,7 +2225,7 @@ class S7CommPlusClient:
             Subscription object ID assigned by the PLC.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_alarm_subscription_request(
@@ -2242,7 +2250,7 @@ class S7CommPlusClient:
         subscription container, data subscriptions included.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(
@@ -2269,7 +2277,7 @@ class S7CommPlusClient:
         """
         _check_timeout("timeout", timeout)
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         wait = self._notification_wait(timeout)
         deadline = time.monotonic() + wait
         while True:
@@ -2320,7 +2328,7 @@ class S7CommPlusClient:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         response = self._connection.send_request(
             FunctionCode.EXPLORE, build_alarm_explore_request(), integrity_tail=5, reassemble=True
         )

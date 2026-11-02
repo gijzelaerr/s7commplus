@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pickle
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack
@@ -13,7 +14,7 @@ import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
-from s7commplus.error import S7ConnectionError
+from s7commplus.error import S7ConnectionError, S7NotConnectedError
 from s7commplus.protocol import LegitimationType, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from tests.test_s7_tls import _generate_self_signed_cert
@@ -188,3 +189,39 @@ async def test_async_concurrent_reconnects_run_one_after_the_other(server: tuple
         assert await client.db_read(1, 0, 4) == DB1
     finally:
         await client.disconnect()
+
+
+class TestNotConnected:
+    """Both clients raise one exception, which is also what they used to raise."""
+
+    @pytest.mark.parametrize("expected", [S7NotConnectedError, S7ConnectionError, RuntimeError])
+    def test_sync_before_connect(self, expected: type[Exception]) -> None:
+        with pytest.raises(expected, match="Not connected"):
+            S7CommPlusClient().db_read(1, 0, 1)
+
+    @pytest.mark.parametrize("expected", [S7NotConnectedError, S7ConnectionError, RuntimeError])
+    async def test_async_before_connect(self, expected: type[Exception]) -> None:
+        with pytest.raises(expected, match="Not connected"):
+            await S7CommPlusAsyncClient().db_read(1, 0, 1)
+
+    def test_it_survives_a_pickle_round_trip(self) -> None:
+        restored = pickle.loads(pickle.dumps(S7NotConnectedError("Not connected")))
+        assert isinstance(restored, S7NotConnectedError) and str(restored) == "Not connected"
+
+    def test_sync_read_after_disconnect_does_not_reconnect(self, server: tuple[S7CommPlusServer, int]) -> None:
+        _, port = server
+        client = S7CommPlusClient()
+        client.connect("127.0.0.1", port=port, auto_reconnect=True)
+        client.disconnect()
+        with pytest.raises(S7NotConnectedError):
+            client.db_read(1, 0, 1)
+        assert not client.connected
+
+    async def test_async_read_after_disconnect_does_not_reconnect(self, server: tuple[S7CommPlusServer, int]) -> None:
+        _, port = server
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=port, auto_reconnect=True)
+        await client.disconnect()
+        with pytest.raises(S7NotConnectedError):
+            await client.db_read(1, 0, 1)
+        assert not client.connected
