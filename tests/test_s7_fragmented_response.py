@@ -284,3 +284,20 @@ async def test_async_reassembly_rejects_a_trailer_of_another_version() -> None:
     client = _async_client()
     with pytest.raises(S7ConnectionError, match="fragment version"):
         await client._recv_reassembled_payload(WRONG_VERSION_TRAILER)
+
+
+# A V3 fragment on a session without a key: its HMAC cannot be checked.
+V3_WITHOUT_A_KEY = encode_header(ProtocolVersion.V3, 12) + _response(5, b"\xaa\xbb") + b"\x72\x03\x00\x00"
+
+
+def test_sync_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
+    conn = _sync_connection()
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        conn._recv_reassembled_payload(V3_WITHOUT_A_KEY)
+
+
+@pytest.mark.asyncio
+async def test_async_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
+    client = _async_client()
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        await client._recv_reassembled_payload(V3_WITHOUT_A_KEY)

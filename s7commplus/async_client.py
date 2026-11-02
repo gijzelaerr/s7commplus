@@ -2642,7 +2642,9 @@ class S7CommPlusAsyncClient:
             await ensure(frag_len)
             fragment_data = bytes(buf[:frag_len])
             del buf[:frag_len]
-            if digest_state is not None:
+            if fragment_version == ProtocolVersion.V3:
+                if digest_state is None:
+                    raise S7ConnectionError("V3 response received without a session key")
                 try:
                     fragment_data = (
                         legacy_verifier.verify(fragment_data)
