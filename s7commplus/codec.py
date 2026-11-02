@@ -332,7 +332,7 @@ def encode_typed_value(datatype: int, value: Any) -> bytes:
         encoded: bytes = value.encode("utf-8")
         return tag + encode_uint32_vlq(len(encoded)) + encoded
     elif datatype == DataType.BLOB:
-        return bytes(tag + encode_uint32_vlq(len(value)) + value)
+        return bytes(tag + encode_uint32_vlq(0) + encode_uint32_vlq(len(value)) + value)  # BlobRootId, length, data
     else:
         raise ValueError(f"Unsupported DataType for encoding: {datatype:#04x}")
 
@@ -508,6 +508,11 @@ def _pack_decoded(fmt: str, value: int) -> bytes:
         raise ValueError(f"PValue value {value} does not fit {fmt}") from exc
 
 
+def _is_packed_struct(struct_id: int) -> bool:
+    """Whether a struct id marks a packed struct, whose members travel as one opaque blob."""
+    return 0x90000000 < struct_id < 0x9FFFFFFF or 0x02000000 < struct_id < 0x02FFFFFF
+
+
 def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     """Decode a PValue from S7CommPlus response to raw bytes.
 
@@ -610,7 +615,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         raw = data[offset + consumed : offset + consumed + length]
         consumed += length
         return bytes(raw), consumed
-    elif datatype == DataType.WSTRING:
+    elif datatype in (DataType.WSTRING, DataType.S7STRING):
         length, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c
         raw = data[offset + consumed : offset + consumed + length]
@@ -633,7 +638,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         struct_id = int.from_bytes(data[offset + consumed : offset + consumed + 4], "big")
         consumed += 4
 
-        if (0x90000000 < struct_id < 0x9FFFFFFF) or (0x02000000 < struct_id < 0x02FFFFFF):
+        if _is_packed_struct(struct_id):
             consumed += 8  # PackedStructInterfaceTimestamp (UInt64, fixed)
             transport_flags, c = decode_uint32_vlq(data, offset + consumed)
             consumed += c
@@ -733,13 +738,25 @@ def skip_typed_value(data: bytes, offset: int, datatype: int, flags: int) -> int
         offset += consumed
         length, consumed = decode_uint32_vlq(data, offset)
         return offset + consumed + length
-    elif datatype == DataType.WSTRING:
+    elif datatype in (DataType.WSTRING, DataType.S7STRING):
         length, consumed = decode_uint32_vlq(data, offset)
         return offset + consumed + length
     elif datatype == DataType.STRUCT:
+        struct_id = int.from_bytes(data[offset : offset + 4], "big")
+        offset += 4  # struct id (UInt32, not VLQ)
+        if _is_packed_struct(struct_id):
+            # Same layout as in decode_pvalue_to_bytes.
+            offset += 8  # PackedStructInterfaceTimestamp (UInt64, fixed)
+            transport_flags, consumed = decode_uint32_vlq(data, offset)
+            offset += consumed
+            count, consumed = decode_uint32_vlq(data, offset)
+            offset += consumed
+            if transport_flags & 0x400:  # Count2Present: a second count follows
+                count, consumed = decode_uint32_vlq(data, offset)
+                offset += consumed
+            return offset + count
         # Normal-mode struct: UInt32 struct-id, then members [VLQ key][typed value],
         # terminated by a 0x00 list-terminator byte (keys always start with high bit set).
-        offset += 4  # struct id (UInt32, not VLQ)
         while offset < len(data):
             if data[offset] == 0x00:
                 offset += 1
