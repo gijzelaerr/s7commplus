@@ -1111,12 +1111,13 @@ def _integrity_id_follows_body(family: Optional[KeyFamily], function_code: int) 
 
     PLCSIM Advanced does so for the set-side operations (SET/CREATE/DELETE_OBJECT).
     A CPU 1215C FW V4.2 starts its CreateObject response with the return value
-    as well; its other responses keep the existing handling, which is all that
-    has been exercised on it.
+    as well, and a CPU 1214C FW V4.2 its SetMultiVariables response (#136); other
+    responses keep the existing handling, which is all that has been exercised
+    on these CPUs.
     """
     if family == KeyFamily.PLCSIM:
         return True
-    return family == KeyFamily.S7_1200 and function_code == FunctionCode.CREATE_OBJECT
+    return family == KeyFamily.S7_1200 and function_code in (FunctionCode.CREATE_OBJECT, FunctionCode.SET_MULTI_VARIABLES)
 
 
 def _strip_response_integrity_id(function_code: int, payload: bytes, session_key_active: bool, legacy_s7_1500: bool) -> bytes:

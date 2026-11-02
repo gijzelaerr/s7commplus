@@ -1634,7 +1634,8 @@ class TestS71200Subscriptions:
         ("family", "function_code", "follows"),
         [
             ("S7_1200", FunctionCode.CREATE_OBJECT, True),
-            ("S7_1200", FunctionCode.SET_MULTI_VARIABLES, False),
+            ("S7_1200", FunctionCode.SET_MULTI_VARIABLES, True),
+            ("S7_1500", FunctionCode.SET_MULTI_VARIABLES, False),
             ("S7_1200", FunctionCode.DELETE_OBJECT, False),
             ("S7_1500", FunctionCode.CREATE_OBJECT, False),
             ("PLCSIM", FunctionCode.CREATE_OBJECT, True),
@@ -1656,6 +1657,29 @@ class TestS71200Subscriptions:
         assert payload == self._CREATE_RESPONSE
         object_ids, _, return_value = parse_create_object_session_id(payload)
         assert (object_ids, return_value) == ([0x70000F91], 0)
+
+    # SetMultiVariables replies from a CPU 1214C FW V4.2 for a write that landed (#136).
+    @pytest.mark.parametrize("reply", ["00 00 06 00 00 00 00", "00 00 09 00 00 00 00"])
+    def test_write_response_from_the_plc_reports_no_errors(self, reply: str) -> None:
+        from s7commplus.client import _write_item_errors
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        conn = TestPlcsimResponseLayout._connection(KeyFamily.S7_1200)
+        payload = conn._response_payload(FunctionCode.SET_MULTI_VARIABLES, bytes.fromhex(reply))
+        assert _write_item_errors(payload, 1) == {}
+
+    @pytest.mark.parametrize("reply", ["00 00 06 00 00 00 00", "00 00 09 00 00 00 00"])
+    def test_async_write_response_from_the_plc_reports_no_errors(self, reply: str) -> None:
+        from s7commplus.async_client import S7CommPlusAsyncClient
+        from s7commplus.client import _write_item_errors
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        client = S7CommPlusAsyncClient()
+        client._session_key = b"k" * 24
+        client._protocol_version = ProtocolVersion.V1
+        client._v1_session_key_family = KeyFamily.S7_1200
+        payload = client._response_payload(FunctionCode.SET_MULTI_VARIABLES, bytes.fromhex(reply))
+        assert _write_item_errors(payload, 1) == {}
 
     def test_s7_1500_create_object_response_still_strips_the_leading_id(self) -> None:
         from s7commplus.v1_session_key.keys import KeyFamily
