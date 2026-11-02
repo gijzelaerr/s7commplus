@@ -303,14 +303,19 @@ async def test_async_reassembly_rejects_a_v3_fragment_without_a_session_key() ->
         await client._recv_reassembled_payload(V3_WITHOUT_A_KEY)
 
 
+# The same as one whole reply, with the digest length and digest of a V3 envelope.
+_ENVELOPE = bytes([32]) + bytes(32) + _response(5, bytes([0xAA, 0xBB]))
+WHOLE_V3_WITHOUT_A_KEY = encode_header(ProtocolVersion.V3, len(_ENVELOPE)) + _ENVELOPE + bytes([0x72, 0x03, 0x00, 0x00])
+
+
 def test_sync_rejects_a_whole_v3_reply_without_a_session_key() -> None:
-    conn = _sync_connection(V3_WITHOUT_A_KEY)
+    conn = _sync_connection(WHOLE_V3_WITHOUT_A_KEY)
     with pytest.raises(S7ConnectionError, match="without a session key"):
         conn.send_request(FunctionCode.GET_MULTI_VARIABLES)
 
 
 @pytest.mark.asyncio
 async def test_async_rejects_a_whole_v3_reply_without_a_session_key() -> None:
-    client = _async_client(V3_WITHOUT_A_KEY)
+    client = _async_client(WHOLE_V3_WITHOUT_A_KEY)
     with pytest.raises(S7ConnectionError, match="without a session key"):
         await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
