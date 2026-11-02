@@ -755,7 +755,7 @@ class S7CommPlusAsyncClient:
                 if _sends_session_activation(self._v1_session_key_family):
                     await self._session_activate()
                 else:
-                    logger.info("Skipping the address-323 session activation for this key family")
+                    logger.info("Skipping the address-323 session activation for %s", self._v1_session_key_family)
                 if p["password"]:
                     await self._post_auth_legitimation(p["password"])
                 else:
