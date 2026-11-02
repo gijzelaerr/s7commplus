@@ -18,7 +18,6 @@ SYNC_ONLY = {"add_subscription_callback", "remove_subscription_callback"}
 ASYNC_ONLY = {
     "subscription_queue",  # see SYNC_ONLY
     # The async client is one class; on the sync side these are on ``Client._connection``.
-    "authenticate",
     "legacy_s7_1500",
     "object_qualifier_version",
     "oms_secret",
