@@ -1099,12 +1099,18 @@ def _strip_response_integrity_id(function_code: int, payload: bytes, session_key
     """Remove the IntegrityId that leads SessionKey response payloads.
 
     The legacy S7-1500 profile keeps GET_MULTI_VARIABLES and EXPLORE payloads
-    whole, because there the IntegrityId follows the body.
+    whole, because there the IntegrityId follows the body. A leading value too
+    large for an IntegrityId is the return value of a PLC that sends it first,
+    as a rejected S7-1215C legitimation does, so that payload stays whole too.
     """
     if legacy_s7_1500 and function_code in (FunctionCode.GET_MULTI_VARIABLES, FunctionCode.EXPLORE):
         return payload
     if session_key_active and len(payload) > 1:
-        resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        try:
+            resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        except ValueError:
+            logger.debug("  Response starts with a value that is not an IntegrityId; keeping it whole")
+            return payload
         logger.debug("  Response IntegrityId: %d (%d bytes)", resp_iid, consumed)
         return payload[consumed:]
     return payload

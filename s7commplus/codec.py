@@ -13,12 +13,15 @@ Reference: thomas-v2/S7CommPlusDriver/Core/S7p.cs
 """
 
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from .error import S7ReturnValueError
 from .protocol import PROTOCOL_ID, DataType, ElementID, Ids, ObjectId, ProtocolVersion, service_result_code
 from .vlq import (
+    decode_int32_vlq,
+    decode_int64_vlq,
     decode_uint32_vlq,
     decode_uint64_vlq,
     encode_int32_vlq,
@@ -542,10 +545,11 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         else:
             # Variable-length elements (VLQ encoded)
             result = bytearray()
+            decode, encode = _vlq_element_codec(datatype)
             for _ in range(count):
-                val, c = decode_uint32_vlq(data, offset + consumed)
+                val, c = decode(data, offset + consumed)
                 consumed += c
-                result += encode_uint32_vlq(val)
+                result += encode(val)
             return bytes(result), consumed
 
     # Scalar types
@@ -566,8 +570,6 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         return data[offset + consumed : offset + consumed + 4], consumed + 4
     elif datatype in (DataType.DINT,):
         # Signed VLQ
-        from .vlq import decode_int32_vlq
-
         val, c = decode_int32_vlq(data, offset + consumed)
         consumed += c
         return _pack_decoded(">i", val), consumed
@@ -583,16 +585,12 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         # ValueLWord is a fixed 8-byte big-endian value, not VLQ.
         return data[offset + consumed : offset + consumed + 8], consumed + 8
     elif datatype in (DataType.LINT,):
-        from .vlq import decode_int64_vlq
-
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
         return _pack_decoded(">q", val), consumed
     elif datatype == DataType.TIMESTAMP:
         return data[offset + consumed : offset + consumed + 8], consumed + 8
     elif datatype == DataType.TIMESPAN:
-        from .vlq import decode_int64_vlq
-
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
         return _pack_decoded(">q", val), consumed
@@ -677,6 +675,17 @@ def _pvalue_element_size(datatype: int) -> int:
         return 0  # Variable-length (VLQ encoded)
 
 
+def _vlq_element_codec(datatype: int) -> tuple[Callable[[bytes, int], tuple[int, int]], Callable[[int], bytes]]:
+    """Return the (decoder, encoder) for a variable-length array element of this type."""
+    if datatype == DataType.ULINT:
+        return decode_uint64_vlq, encode_uint64_vlq
+    if datatype in (DataType.LINT, DataType.TIMESPAN):
+        return decode_int64_vlq, encode_int64_vlq
+    if datatype == DataType.DINT:
+        return decode_int32_vlq, encode_int32_vlq
+    return decode_uint32_vlq, encode_uint32_vlq
+
+
 # -- PObject-tree parsing shared by the sync (S7CommPlusConnection) and async clients --
 
 
@@ -694,10 +703,11 @@ def skip_typed_value(data: bytes, offset: int, datatype: int, flags: int) -> int
             offset += count * elem_size
         else:
             # Variable-length: skip each VLQ element.
+            decode, _encode = _vlq_element_codec(datatype)
             for _ in range(count):
                 if offset >= len(data):
                     break
-                _, consumed = decode_uint32_vlq(data, offset)
+                _, consumed = decode(data, offset)
                 offset += consumed
         return offset
 
@@ -707,8 +717,11 @@ def skip_typed_value(data: bytes, offset: int, datatype: int, flags: int) -> int
         return offset + 1
     elif datatype in (DataType.UINT, DataType.WORD, DataType.INT):
         return offset + 2
-    elif datatype in (DataType.UDINT, DataType.AID, DataType.DINT):
+    elif datatype in (DataType.UDINT, DataType.AID):
         _, consumed = decode_uint32_vlq(data, offset)
+        return offset + consumed
+    elif datatype == DataType.DINT:
+        _, consumed = decode_int32_vlq(data, offset)
         return offset + consumed
     elif datatype == DataType.DWORD:
         return offset + 4  # fixed 4-byte, not VLQ

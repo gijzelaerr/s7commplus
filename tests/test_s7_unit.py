@@ -1342,10 +1342,16 @@ class TestLegitimationRejection:
         from s7commplus.connection import _check_v1_legitimation_response, _strip_response_integrity_id
         from s7commplus.error import S7ConnectionError
 
-        stripped = _strip_response_integrity_id(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED, True, False)
-        _check_v1_legitimation_response(stripped)  # the stripped reading alone looks like success
+        # The return value is too large for an IntegrityId, so nothing is stripped.
+        kept = _strip_response_integrity_id(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED, True, False)
+        assert kept == self._REJECTED
         with pytest.raises(S7ConnectionError, match="rejected"):
-            _check_v1_legitimation_response(stripped, self._REJECTED)
+            _check_v1_legitimation_response(kept, kept)
+
+        hidden = self._REJECTED[5:]  # a reading that starts inside the return value looks like success
+        _check_v1_legitimation_response(hidden)
+        with pytest.raises(S7ConnectionError, match="rejected"):
+            _check_v1_legitimation_response(hidden, self._REJECTED)
 
     def test_success_with_leading_integrity_id_is_accepted(self) -> None:
         from s7commplus.connection import _check_v1_legitimation_response

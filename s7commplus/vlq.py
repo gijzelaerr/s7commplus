@@ -76,6 +76,12 @@ def decode_uint32_vlq(data: bytes, offset: int = 0) -> tuple[int, int]:
 
         if not (octet & 0x80):  # No continuation bit
             break
+    else:
+        raise ValueError("Unterminated uint32 VLQ: the fifth byte has a continuation flag")
+
+    # Five 7-bit groups hold 35 bits, more than the type.
+    if value > 0xFFFFFFFF:
+        raise ValueError(f"Value out of range for uint32 VLQ: {value}")
 
     return value, consumed
 
@@ -152,6 +158,12 @@ def decode_int32_vlq(data: bytes, offset: int = 0) -> tuple[int, int]:
 
         if not (octet & 0x80):  # No continuation bit
             break
+    else:
+        raise ValueError("Unterminated int32 VLQ: the fifth byte has a continuation flag")
+
+    # Five 7-bit groups hold 35 bits, more than the type.
+    if value < -0x80000000 or value > 0x7FFFFFFF:
+        raise ValueError(f"Value out of range for int32 VLQ: {value}")
 
     return value, consumed
 
