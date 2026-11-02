@@ -26,6 +26,16 @@ with Client() as client:
     data = client.db_read(1, 0, 4)
 ```
 
+Optimized blocks are read and written by tag name, as Python values; a struct,
+UDT or array name gives a `dict` or `list`:
+
+```python
+with Client() as client:
+    client.connect("192.168.1.10", use_tls=True, tls_ca="plc-ca.pem")  # verify the PLC certificate
+    temperature = client.read_value("Data_block_1.temperature")
+    client.write_value("Data_block_1.recipe", {"speed": 120, "name": "batch 7"})
+```
+
 S7CommPlus is used by newer S7-1200/1500 PLCs when classic PUT/GET access is
 disabled. This is an unofficial implementation and is not affiliated with,
 endorsed by, or supported by Siemens AG. Test against an isolated controller
@@ -50,6 +60,15 @@ device_family("6ES7 512-1DK01-0AB0")  # 's7-1500-sp'
 `DEVICE_NAMES` holds the full table (S7-1200/1500 controllers, SIPLUS
 variants, software controllers and PLCSIM; classic S7-300/400 is out of
 scope). `python tools/check_devices_table.py` validates its shape.
+
+Installing the package also installs a `s7commplus` command-line tool:
+
+```console
+s7commplus browse --host 192.168.1.10
+s7commplus read --host 192.168.1.10 DB1.Motor.Speed
+```
+
+See the command-line interface guide in the documentation.
 
 ## Development
 

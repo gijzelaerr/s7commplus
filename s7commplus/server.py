@@ -43,6 +43,8 @@ from .codec import (
 )
 from .connection import _S7_CIPHERS, _set_s7_groups
 from .protocol import (
+    OPERATING_STATE_RUN_OBSERVED,
+    OPERATING_STATE_STOP_OBSERVED,
     READ_FUNCTION_CODES,
     DataType,
     ElementID,
@@ -54,7 +56,7 @@ from .protocol import (
     ProtocolVersion,
     SoftDataType,
 )
-from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq, encode_uint64_vlq
+from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_int32_vlq, encode_uint32_vlq, encode_uint64_vlq
 
 logger = logging.getLogger(__name__)
 
@@ -214,13 +216,18 @@ class S7CommPlusServer:
         session_challenge: Optional[bytes] = None,
         session_key: Optional[bytes] = None,
         rst_after_symbolic_read: bool = False,
+        v1_integrity_id_after_body: bool = True,
+        max_response_pdu: Optional[int] = None,
+        max_request_bytes: Optional[int] = None,
     ) -> None:
         self._data_blocks: dict[int, DataBlock] = {}
+        self._program_objects: dict[int, tuple[int, Optional[str]]] = {}
         self._cpu_state = CPUState.RUN
         self._protocol_version = protocol_version
         self._next_session_id = 1
 
         self._server_socket: Optional[socket.socket] = None
+        self._port = 0
         self._server_thread: Optional[threading.Thread] = None
         self._client_threads: list[threading.Thread] = []
         self._running = False
@@ -249,6 +256,39 @@ class S7CommPlusServer:
         # to a GetMultiVariables request (emulating firmware like S7-1200
         # FW V4.1 that RSTs the session after a symbolic read).
         self._rst_after_symbolic_read = rst_after_symbolic_read
+
+        # V1 SessionKey PLCs seen so far (S7-1200 FW V4.2, S7-1500 FW 2.6,
+        # PLCSIM) put the response IntegrityId after the body of reads and
+        # around the legitimation write; the client's default V1 profile
+        # expects that. False leads every response with it instead, the layout
+        # that connect(legacy_s7_1500=False) expects. No V1 SessionKey PLC has
+        # been seen using it, so it exists to test that client profile.
+        self._v1_integrity_id_after_body = v1_integrity_id_after_body
+
+        # When set, a response after session setup whose application data is longer
+        # than this is split over several PDUs with the trailer only after the last,
+        # as a PLC splits a large response (V3: see _protect_v3_fragments).
+        if max_response_pdu is not None and max_response_pdu <= 0:
+            raise ValueError("max_response_pdu must be positive")
+        self._max_response_pdu = max_response_pdu
+
+        # When set, the server closes the connection on a request frame longer
+        # than this many bytes, as PLCSIM Advanced does past about 1 KB. The frame
+        # is counted as the clients' max_request_bytes counts it: from the frame
+        # header to the trailer, after TLS decryption, including any V3 HMAC.
+        # Tests use it to catch a request the client failed to split.
+        if max_request_bytes is not None and max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be positive")
+        self._max_request_bytes = max_request_bytes
+
+    @property
+    def port(self) -> int:
+        """The TCP port the server listens on while it runs, else 0.
+
+        With ``start(port=0)`` the OS picks a free port at bind time, so tests
+        can run emulators side by side without choosing ports in advance.
+        """
+        return self._port
 
     @property
     def cpu_state(self) -> CPUState:
@@ -300,6 +340,29 @@ class S7CommPlusServer:
         self._data_blocks[db_number] = db
         return db
 
+    def register_program_object(self, rid: int, class_id: int, name: Optional[str] = None) -> None:
+        """Register a program object other than a data block, such as an FB, an OB or a UDT.
+
+        EXPLORE replies list it after the data blocks, with its name as the only
+        attribute, and an EXPLORE of its RID succeeds. It holds no data.
+
+        Args:
+            rid: Relation ID of the object, e.g. ``0x8A120001`` for FB 1.
+            class_id: ClassId of the object, e.g. `Ids.FB_CLASS_RID`.
+            name: ObjectVariableTypeName; None sends the object without a name, as a PLC
+                does for some system objects.
+
+        Raises:
+            ValueError: If the object is a data block; register those with :meth:`register_db`.
+
+        Example::
+
+            server.register_program_object(0x8A120001, Ids.FB_CLASS_RID, "FB1")
+        """
+        if class_id == Ids.DB_CLASS_RID:
+            raise ValueError("Data blocks must be registered with register_db() instead")
+        self._program_objects[rid] = (class_id, name)
+
     def get_db(self, db_number: int) -> Optional[DataBlock]:
         """Get a registered data block."""
         return self._data_blocks.get(db_number)
@@ -317,7 +380,7 @@ class S7CommPlusServer:
 
         Args:
             host: Bind address
-            port: TCP port to listen on
+            port: TCP port to listen on; 0 lets the OS pick one (see :attr:`port`)
             use_tls: Whether to wrap client sockets with TLS after InitSSL
             tls_cert: Path to server TLS certificate (PEM)
             tls_key: Path to server private key (PEM)
@@ -341,16 +404,30 @@ class S7CommPlusServer:
             else:
                 self._ssl_context.verify_mode = ssl.CERT_NONE
 
-        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server_socket.settimeout(1.0)
-        self._server_socket.bind((host, port))
-        self._server_socket.listen(5)
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            exclusive: Optional[int] = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                # On Windows SO_REUSEADDR lets a second socket bind a port that
+                # is already listening, so two emulators would share one port and
+                # clients could reach the wrong one. Windows rebinds a port in
+                # TIME_WAIT without SO_REUSEADDR anyway.
+                server_socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+            else:
+                server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.settimeout(1.0)
+            server_socket.bind((host, port))
+            server_socket.listen(5)
+        except OSError:
+            server_socket.close()
+            raise
+        self._server_socket = server_socket
+        self._port = server_socket.getsockname()[1]
 
         self._running = True
         self._server_thread = threading.Thread(target=self._server_loop, daemon=True, name="s7commplus-server")
         self._server_thread.start()
-        logger.info(f"S7CommPlus server started on {host}:{port} (TLS={use_tls}, V{self._protocol_version})")
+        logger.info(f"S7CommPlus server started on {host}:{self._port} (TLS={use_tls}, V{self._protocol_version})")
 
     def stop(self) -> None:
         """Stop the server."""
@@ -362,6 +439,7 @@ class S7CommPlusServer:
             except Exception:
                 pass
             self._server_socket = None
+        self._port = 0
 
         if self._server_thread:
             self._server_thread.join(timeout=5.0)
@@ -428,28 +506,37 @@ class S7CommPlusServer:
                             return None
                         tls["in"].write(more)
 
-            def send_app_frame(data: bytes, frame_version: int) -> None:
+            def send_app_frame(data: bytes, frame_version: int, split: bool) -> None:
+                size = len(data) or 1
+                if split and self._max_response_pdu is not None:
+                    size = self._max_response_pdu
+                pieces = [data[start : start + size] for start in range(0, len(data), size)] or [b""]
                 if frame_version == ProtocolVersion.V3:
                     if self._session_key is None:
                         raise ConnectionError("V3 response requested without a session key")
-                    digest = hmac.new(self._session_key[:24], data, hashlib.sha256).digest()
-                    frame_data = bytes([len(digest)]) + digest + data
+                    bodies = self._protect_v3_fragments(self._session_key, pieces)
                 else:
-                    frame_data = data
-                frame = encode_header(frame_version, len(frame_data)) + frame_data
-                frame += struct.pack(">BBH", 0x72, frame_version, 0x0000)
-                if tls["obj"] is None:
-                    self._send_cotp_dt_raw(client_sock, frame)
-                else:
-                    tls["obj"].write(frame)
-                    out = tls["out"].read()
-                    if out:
-                        self._send_cotp_dt_raw(client_sock, out)
+                    bodies = pieces
+                frames = [encode_header(frame_version, len(body)) + body for body in bodies]
+                frames[-1] += struct.pack(">BBH", 0x72, frame_version, 0x0000)
+                for frame in frames:
+                    if tls["obj"] is None:
+                        self._send_cotp_dt_raw(client_sock, frame)
+                    else:
+                        tls["obj"].write(frame)
+                        out = tls["out"].read()
+                        if out:
+                            self._send_cotp_dt_raw(client_sock, out)
 
             while self._running:
                 try:
                     data = recv_app_frame()
                     if data is None:
+                        break
+                    if self._max_request_bytes is not None and len(data) > self._max_request_bytes:
+                        logger.warning(
+                            f"Closing connection to {address}: {len(data)}-byte request exceeds {self._max_request_bytes} bytes"
+                        )
                         break
 
                     request_version, data_length, hdr_consumed = decode_header(data)
@@ -463,13 +550,24 @@ class S7CommPlusServer:
 
                     # Decode the request function code once (used for TLS + IntegrityId).
                     func_code = None
+                    session_setup_write = False
                     try:
                         _, _, hdr_consumed = decode_header(data)
                         payload = data[hdr_consumed:]
                         if len(payload) >= 14:
                             func_code = struct.unpack_from(">H", payload, 3)[0]
+                            if func_code == FunctionCode.SET_MULTI_VARIABLES:
+                                session_setup_write = self._is_session_setup_write(payload[14:])
                     except (ValueError, struct.error):
                         pass
+
+                    # The clients read the session-setup replies (InitSSL, CreateObject,
+                    # the session setup write) as one PDU, so only later responses are split.
+                    split_response = (
+                        session_id != 0
+                        and func_code not in (FunctionCode.INIT_SSL, FunctionCode.CREATE_OBJECT)
+                        and not session_setup_write
+                    )
 
                     response, rst = self._process_request(data, session_id, integrity_id_read, integrity_id_write)
                     if response is not None:
@@ -477,7 +575,8 @@ class S7CommPlusServer:
                             session_id = struct.unpack_from(">I", response, 9)[0]
                         if request_version == ProtocolVersion.V3 and func_code is not None:
                             response_integrity_id = integrity_id_read if func_code in READ_FUNCTION_CODES else integrity_id_write
-                            if self._protocol_version == ProtocolVersion.V1 and func_code in (
+                            v1_after_body = self._protocol_version == ProtocolVersion.V1 and self._v1_integrity_id_after_body
+                            if v1_after_body and func_code in (
                                 FunctionCode.GET_MULTI_VARIABLES,
                                 FunctionCode.GET_VAR_SUBSTREAMED,
                             ):
@@ -485,15 +584,22 @@ class S7CommPlusServer:
                                 # PLCSIM) put the IntegrityId after the body, in place
                                 # of the legacy zero id.
                                 response = response[:-1] + encode_uint32_vlq(response_integrity_id)
-                            elif self._protocol_version == ProtocolVersion.V1 and func_code == FunctionCode.SET_VAR_SUBSTREAMED:
+                            elif v1_after_body and func_code == FunctionCode.SET_VAR_SUBSTREAMED:
                                 # The legitimation write ends with a four-byte fill; the
                                 # IntegrityId goes before it (as the real PLC and the
                                 # HarpoS7 capture do).
                                 response = response[:-4] + encode_uint32_vlq(response_integrity_id) + response[-4:]
+                            elif v1_after_body and func_code == FunctionCode.EXPLORE:
+                                # The client keeps legacy EXPLORE payloads whole because the
+                                # IntegrityId follows the body (v1_session_key/ARCHITECTURE.md).
+                                # Its exact position is unverified on real V1 firmware.
+                                response = response + encode_uint32_vlq(response_integrity_id)
                             else:
                                 response = response[:10] + encode_uint32_vlq(response_integrity_id) + response[10:]
                         send_app_frame(
-                            response, request_version if request_version == ProtocolVersion.V3 else self._protocol_version
+                            response,
+                            request_version if request_version == ProtocolVersion.V3 else self._protocol_version,
+                            split_response,
                         )
 
                     if rst:
@@ -534,6 +640,34 @@ class S7CommPlusServer:
             except Exception:
                 pass
             logger.info(f"Client disconnected: {address}")
+
+    @staticmethod
+    def _protect_v3_fragments(session_key: bytes, pieces: list[bytes]) -> list[bytes]:
+        """Prefix each fragment of one V3 response with its HMAC.
+
+        The first fragment carries a standard HMAC. Each later one carries the
+        digest of both HMAC SHA-256 states finalized and then continued over its
+        data: the legacy continuation that ``_fragment_hmac`` verifies in the V1
+        SessionKey profile, which every V3 session of this emulator uses. A
+        response sent as one fragment keeps its standard HMAC.
+        """
+        from ._fragment_hmac import _continue_sha256
+
+        key = session_key[:24]
+        first = pieces[0]
+        inner = hashlib.sha256(bytes(value ^ 0x36 for value in key.ljust(64, b"\0")) + first).digest()
+        outer = hmac.new(key, first, hashlib.sha256).digest()
+        # Message byte counts include the 64-byte HMAC pads; the outer hash takes
+        # one 32-byte inner digest per fragment.
+        inner_count, outer_count = 64 + len(first), 64 + 32
+        protected = [bytes([len(outer)]) + outer + first]
+        for piece in pieces[1:]:
+            inner_count += len(piece)
+            outer_count += 32
+            inner = _continue_sha256(inner, piece, inner_count)
+            outer = _continue_sha256(outer, inner, outer_count)
+            protected.append(bytes([len(outer)]) + outer + piece)
+        return protected
 
     @staticmethod
     def _verify_v3_data(protected: bytes, session_key: bytes) -> bytes:
@@ -891,7 +1025,8 @@ class S7CommPlusServer:
         response += self._build_response_header(FunctionCode.EXPLORE, seq_num)
 
         # The ExploreId is a fixed UInt32 at the start of the request.
-        if len(request_data) >= 4 and not self._explore_object_exists(struct.unpack_from(">I", request_data)[0]):
+        explore_id = struct.unpack_from(">I", request_data)[0] if len(request_data) >= 4 else None
+        if explore_id is not None and not self._explore_object_exists(explore_id):
             # ReturnValue a real S7-1500 sends for an EXPLORE of an object that does not exist, RID 0 included:
             # error flag (bit 63) set, no error extension (bit 62 clear), error code -12 in the low 16 bits.
             _EXPLORE_NO_SUCH_OBJECT = 0x8020AB001992FFF4
@@ -902,23 +1037,26 @@ class S7CommPlusServer:
 
         response += encode_uint32_vlq(0)  # Return code: success
 
+        if explore_id == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID:
+            response += self._cpu_exec_unit_object()
+            response += struct.pack(">I", 0)
+            return bytes(response)
+
+        # A registered program object is explored on its own, without the rest of the program
+        if explore_id in self._program_objects:
+            response += self._program_object(explore_id)
+            response += struct.pack(">I", 0)
+            return bytes(response)
+
         # Return list of data blocks as objects using the real S7-1500 IDs:
         # a DataBlock object has ClassId DB_CLASS_RID and a RelationId in the DB area
         # (0x8A0E0000 | number), which is how the client recovers the DB number.
+        # Every block is a child of PLCProgram, as in a live S7-1500 reply (_REAL_PROGRAM_TREE in tests/test_s7_unit.py).
+        response += _start_of_object(Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID)
+        response += _name_attribute("PLCProgram")
         for db_num, db in sorted(self._data_blocks.items()):
-            response += bytes([ElementID.START_OF_OBJECT])
-            response += struct.pack(">I", Ids.DB_ACCESS_AREA_BASE | (db_num & 0xFFFF))  # Relation ID
-            response += encode_uint32_vlq(Ids.DB_CLASS_RID)  # Class: DataBlock
-            response += encode_uint32_vlq(0x00000000)  # Class flags
-            response += encode_uint32_vlq(0x00000000)  # Attribute ID
-
-            # ObjectVariableTypeName (233) -- DB name as WSTRING
-            response += bytes([ElementID.ATTRIBUTE])
-            response += encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
-            name_bytes = f"DB{db_num}".encode("utf-16-be")
-            response += bytes([0x00, DataType.WSTRING])
-            response += encode_uint32_vlq(len(name_bytes))
-            response += name_bytes
+            response += _start_of_object(Ids.DB_ACCESS_AREA_BASE | (db_num & 0xFFFF), Ids.DB_CLASS_RID)
+            response += _name_attribute(f"DB{db_num}")
 
             # Block_BlockNumber (2521) -- DB number as UDINT
             response += bytes([ElementID.ATTRIBUTE])
@@ -932,37 +1070,56 @@ class S7CommPlusServer:
             response += bytes([0x00, DataType.UDINT])
             response += encode_uint32_vlq(len(db.data))
 
-            # Variable list -- used by browse to resolve field names
-            if db.variables:
-                for var_name, var in db.variables.items():
-                    response += bytes([ElementID.START_OF_OBJECT])
-                    response += struct.pack(">I", 0)  # child RID
-                    response += encode_uint32_vlq(0)
-                    response += encode_uint32_vlq(0)
-                    response += encode_uint32_vlq(0)
-
-                    response += bytes([ElementID.ATTRIBUTE])
-                    response += encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
-                    vname_bytes = var_name.encode("utf-16-be")
-                    response += bytes([0x00, DataType.WSTRING])
-                    response += encode_uint32_vlq(len(vname_bytes))
-                    response += vname_bytes
-
-                    response += bytes([ElementID.TERMINATING_OBJECT])
-
             response += bytes([ElementID.TERMINATING_OBJECT])
+
+        # Only the program lists the other blocks; the type-info, alarm and area explores never contained them
+        if explore_id == Ids.NATIVE_THE_PLC_PROGRAM_RID:
+            for rid in self._program_objects:
+                response += self._program_object(rid)
+
+        response += bytes([ElementID.TERMINATING_OBJECT])  # PLCProgram
 
         # Final terminator
         response += struct.pack(">I", 0)
         return bytes(response)
 
+    def _program_object(self, rid: int) -> bytes:
+        """A registered program object, with its name as the only attribute."""
+        class_id, name = self._program_objects[rid]
+        obj = _start_of_object(rid, class_id)
+        if name is not None:
+            obj += _name_attribute(name)
+        return obj + bytes([ElementID.TERMINATING_OBJECT])
+
+    def _cpu_exec_unit_object(self) -> bytes:
+        """theCPUexecUnit as PLCSIM Advanced reports it, reduced to its operating state.
+
+        The state code is the DINT member 0xD9E of the Struct attribute 0x8BD
+        (struct id 0xD99): 8 in RUN, 4 in STOP. Layout copied from
+        tests/fixtures/plcsim_cpu_exec_unit_20261008.py.
+        """
+        code = {CPUState.RUN: OPERATING_STATE_RUN_OBSERVED, CPUState.STOP: OPERATING_STATE_STOP_OBSERVED}.get(self._cpu_state, 0)
+        obj = bytearray([ElementID.START_OF_OBJECT])
+        obj += struct.pack(">I", Ids.NATIVE_THE_CPU_EXEC_UNIT_RID)  # Relation ID
+        obj += encode_uint32_vlq(0x883)  # Class: CPUexecUnit, as object_model.CLASS_NAMES lists it
+        obj += encode_uint32_vlq(0)  # Class flags
+        obj += encode_uint32_vlq(0)  # Attribute ID
+        obj += bytes([ElementID.ATTRIBUTE])
+        obj += encode_uint32_vlq(Ids.CPU_EXEC_UNIT_OPERATING_STATE_STRUCT)
+        obj += bytes([0x00, DataType.STRUCT]) + struct.pack(">I", Ids.CPU_EXEC_UNIT_OPERATING_STATE_STRUCT_ID)
+        obj += encode_uint32_vlq(Ids.CPU_EXEC_UNIT_OPERATING_STATE)
+        obj += bytes([0x00, DataType.DINT]) + encode_int32_vlq(code)
+        obj += b"\x00"  # end of struct members
+        obj += bytes([ElementID.TERMINATING_OBJECT])
+        return bytes(obj)
+
     def _explore_object_exists(self, explore_id: int) -> bool:
         """Whether an EXPLORE target names an object this emulator has.
 
         These are the native objects the clients and examples explore, plus one
-        object per registered data block. A real PLC rejects any other id.
+        object per registered data block or program object. A real PLC rejects any other id.
         """
-        if explore_id in (
+        if explore_id in self._program_objects or explore_id in (
             Ids.NATIVE_THE_PLC_PROGRAM_RID,
             Ids.NATIVE_THE_ALARM_SUBSYSTEM_RID,
             Ids.NATIVE_THE_CPU_EXEC_UNIT_RID,
@@ -1321,6 +1478,23 @@ class S7CommPlusServer:
 
 #: The error the emulator returns for an item it cannot serve.
 _ITEM_ERROR = 0x8104
+
+
+def _start_of_object(rid: int, class_id: int) -> bytes:
+    """StartOfObject with its RelationId (fixed UInt32), ClassId, and zero ClassFlags and AttributeId."""
+    return bytes([ElementID.START_OF_OBJECT]) + struct.pack(">I", rid) + encode_uint32_vlq(class_id) + bytes([0, 0])
+
+
+def _name_attribute(name: str) -> bytes:
+    """ObjectVariableTypeName (233) attribute carrying ``name`` as a WSTRING."""
+    encoded = name.encode("utf-16-be")
+    return (
+        bytes([ElementID.ATTRIBUTE])
+        + encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
+        + bytes([0x00, DataType.WSTRING])
+        + encode_uint32_vlq(len(encoded))
+        + encoded
+    )
 
 
 def _resolve_classic_blob(access_area: int, lids: list[int]) -> Optional[tuple[int, int, int]]:

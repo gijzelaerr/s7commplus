@@ -6,7 +6,7 @@ fixture DBs, so CI checks that each Gherkin step is bound and that the step
 code works, for both clients, without a PLC. It proves nothing about the
 protocol; that is what the real-PLC run is for.
 
-The fake accepts the password in ``S7COMMPLUS_TEST_PASSWORD``, trusts no CA
+The fake requires the password in ``S7COMMPLUS_TEST_PASSWORD`` when it is set, trusts no CA
 file (any ``tls_ca`` is refused) and presents a fixed certificate fingerprint.
 """
 
@@ -21,7 +21,9 @@ from typing import Any, Optional
 import pytest
 
 from s7commplus.catalog import SymbolicTag, TagResult
+from s7commplus.client import ProgramObject
 from s7commplus.error import S7AuthenticationError, S7ConnectionError
+from s7commplus.protocol import Ids
 from s7commplus.subscription import SubscriptionNotification
 from tests.real_plc import support
 
@@ -115,7 +117,10 @@ class FakeClient:
             raise ssl.SSLCertVerificationError("certificate verify failed: unable to get local issuer certificate")
         if tls_cert_fingerprint is not None and bytes.fromhex(tls_cert_fingerprint) != FAKE_CERTIFICATE_FINGERPRINT:
             raise S7ConnectionError("PLC TLS certificate does not match the pinned fingerprint")
-        if password is not None and password != os.environ.get(support.PASSWORD_ENV):
+        expected_password = os.environ.get(support.PASSWORD_ENV)
+        if expected_password is not None and password is None:
+            raise ValueError(f"{support.PASSWORD_ENV} is set but connect() was called without a password")
+        if password is not None and password != expected_password:
             raise S7AuthenticationError("Post-auth legitimation rejected by PLC (wrong password)")
         self.connected = True
         self.tls_active = use_tls
@@ -150,9 +155,9 @@ class FakeClient:
     def db_read_multi(self, items: Sequence[tuple[int, int, int]]) -> list[bytes]:
         return [FakeClient.db_read(self, db_number, start, size) for db_number, start, size in items]
 
-    def list_datablocks(self) -> list[dict[str, Any]]:
+    def list_datablocks(self) -> list[ProgramObject]:
         self._require_connection()
-        return [{"name": name, "number": number, "rid": 0x8A0E0000 | number} for number, name in _DB_NAMES.items()]
+        return [ProgramObject(0x8A0E0000 | number, Ids.DB_CLASS_RID, name) for number, name in _DB_NAMES.items()]
 
     def browse(self) -> list[dict[str, Any]]:
         self._require_connection()

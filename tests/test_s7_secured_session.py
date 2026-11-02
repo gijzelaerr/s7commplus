@@ -16,7 +16,6 @@ from s7commplus.codec import (
 from s7commplus.protocol import DataType, ElementID
 from s7commplus.server import S7CommPlusServer
 from s7commplus.vlq import encode_uint32_vlq
-from tests.conftest import get_free_tcp_port
 
 
 def _attribute(attr_id: int, value_bytes: bytes) -> bytes:
@@ -115,8 +114,8 @@ class TestSecuredSessionProperty:
 def emulator() -> Generator[tuple[S7CommPlusServer, int], None, None]:
     srv = S7CommPlusServer()
     srv.register_db(1, {"temperature": ("Real", 0)})
-    port = get_free_tcp_port()
-    srv.start(port=port)
+    srv.start(port=0)
+    port = srv.port
     import time
 
     time.sleep(0.1)

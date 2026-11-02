@@ -1,23 +1,26 @@
 """Tests for S7CommPlus async client TLS support."""
 
 import contextlib
+import hashlib
+import logging
+import os
 import ssl
 import struct
 import tempfile
 import time
 from collections.abc import Generator
+from pathlib import Path
+from typing import Any
 
 import pytest
 
-from s7commplus.error import S7ConnectionError
+from s7commplus.error import S7CertificateError, S7ConnectionError
 from s7commplus import connection
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.connection import S7CommPlusConnection
+from s7commplus.legitimation import build_new_response, derive_legitimation_key
 from s7commplus.server import S7CommPlusServer
-from s7commplus.protocol import ProtocolVersion
-
-TEST_PORT_V2 = 11130
-TEST_PORT_V2_TLS = 11131
+from s7commplus.protocol import AccessLevel, LegitimationType, ProtocolVersion
 
 
 def _generate_self_signed_cert() -> tuple[str, str]:
@@ -71,6 +74,13 @@ def _generate_self_signed_cert() -> tuple[str, str]:
     key_file.close()
 
     return cert_file.name, key_file.name
+
+
+def _certificate_sha256_hex(pem_path: str) -> str:
+    """SHA-256 of a PEM certificate's DER, as colon-free hex (a pin value)."""
+    with open(pem_path, encoding="ascii") as fh:
+        der = ssl.PEM_cert_to_DER_cert(fh.read())
+    return hashlib.sha256(der).hexdigest()
 
 
 import ipaddress  # noqa: E402
@@ -133,7 +143,7 @@ def v2_server() -> Generator[S7CommPlusServer, None, None]:
     db1 = srv.get_db(1)
     assert db1 is not None
     struct.pack_into(">f", db1.data, 0, 99.9)
-    srv.start(port=TEST_PORT_V2)
+    srv.start(port=0)
     time.sleep(0.1)
     yield srv
     srv.stop()
@@ -147,7 +157,7 @@ class TestAsyncClientV2WithoutTLS:
         """V2 protocol requires TLS — connecting without should raise."""
         client = S7CommPlusAsyncClient()
         with pytest.raises(S7ConnectionError, match="V2.*requires TLS"):
-            await client.connect("127.0.0.1", port=TEST_PORT_V2)
+            await client.connect("127.0.0.1", port=v2_server.port)
 
 
 try:
@@ -174,7 +184,7 @@ class TestAsyncClientV2WithTLS:
         assert db1 is not None
         struct.pack_into(">f", db1.data, 0, 42.0)
 
-        srv.start(port=TEST_PORT_V2_TLS, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+        srv.start(port=0, use_tls=True, tls_cert=cert_path, tls_key=key_path)
         time.sleep(0.1)
 
         yield srv, cert_path, key_path
@@ -192,7 +202,7 @@ class TestAsyncClientV2WithTLS:
         srv, cert_path, key_path = tls_server
 
         client = S7CommPlusAsyncClient()
-        await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_ca=cert_path)
+        await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
 
         try:
             assert client.connected
@@ -202,12 +212,61 @@ class TestAsyncClientV2WithTLS:
             await client.disconnect()
 
     @pytest.mark.asyncio
+    async def test_connect_with_pinned_certificate(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """A matching fingerprint authorizes the connection without a CA file."""
+        srv, cert_path, _ = tls_server
+        pin = _certificate_sha256_hex(cert_path)
+
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_cert_fingerprint=pin)
+
+        try:
+            assert client.connected
+            assert client.peer_certificate_fingerprint() == bytes.fromhex(pin)
+        finally:
+            await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connect_rejects_a_wrong_pinned_certificate(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """A mismatching fingerprint refuses the connection and tears it down."""
+        srv, _, _ = tls_server
+        client = S7CommPlusAsyncClient()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_cert_fingerprint="00" * 32)
+        assert not client.connected
+
+    @pytest.mark.asyncio
+    async def test_peer_fingerprint_is_reported_with_a_ca(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """The observed fingerprint is reported even when a CA file verified it."""
+        srv, cert_path, _ = tls_server
+
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
+
+        try:
+            assert client.peer_certificate_fingerprint() == bytes.fromhex(_certificate_sha256_hex(cert_path))
+        finally:
+            await client.disconnect()
+        assert client.peer_certificate_fingerprint() is None
+
+    @pytest.mark.asyncio
+    async def test_a_ca_does_not_override_a_wrong_pin(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
+        """With tls_ca and tls_cert_fingerprint, both must match: a valid chain does not excuse the pin."""
+        srv, cert_path, _ = tls_server
+
+        client = S7CommPlusAsyncClient()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path, tls_cert_fingerprint="00" * 32)
+        assert not client.connected
+        assert client.peer_certificate_fingerprint() is None
+
+    @pytest.mark.asyncio
     async def test_integrity_id_tracking_enabled(self, tls_server: tuple[S7CommPlusServer, str, str]) -> None:
         """V2 connection should enable IntegrityId tracking."""
         srv, cert_path, key_path = tls_server
 
         client = S7CommPlusAsyncClient()
-        await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_ca=cert_path)
+        await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
 
         try:
             assert client._with_integrity_id is True
@@ -222,10 +281,10 @@ class TestAsyncClientV2WithTLS:
         self, tls_server: tuple[S7CommPlusServer, str, str]
     ) -> None:
         """Multiple V2 operations should succeed as both counters advance."""
-        _, cert_path, _ = tls_server
+        srv, cert_path, _ = tls_server
 
         client = S7CommPlusAsyncClient()
-        await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_ca=cert_path)
+        await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
 
         try:
             initial_read_id = client._integrity_id_read
@@ -246,7 +305,7 @@ class TestAsyncClientV2WithTLS:
         srv, cert_path, key_path = tls_server
 
         client = S7CommPlusAsyncClient()
-        await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_ca=cert_path)
+        await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
 
         try:
             assert client.protocol_version == ProtocolVersion.V2
@@ -259,12 +318,295 @@ class TestAsyncClientV2WithTLS:
         srv, cert_path, key_path = tls_server
 
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT_V2_TLS, use_tls=True, tls_ca=cert_path)
+            await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
             assert client.connected
             assert client.tls_active
 
         assert not client.connected
         assert not client.tls_active
+
+
+# RFC 5705 exporter outputs computed by OpenSSL's SSL_export_keying_material,
+# one TLS 1.3 session per suite (OpenSSL 3.5.7, ephemeral keys on localhost):
+#   openssl s_client -tls1_3 -ciphersuites <suite> -keylogfile <log> \
+#     -keymatexport EXPERIMENTAL_OMS -keymatexportlen 32
+# The secret is the session's EXPORTER_SECRET key log line, the output is the
+# "Keying material" s_client prints.
+_OPENSSL_OMS_EXPORTER_VECTORS = [
+    pytest.param(
+        hashlib.sha256,
+        "84ef4579730fbf53a34f111902dec2a340ddd90d8105fac3809921e628913594",
+        "5a550e5a87a60cee1df5080a2577236918924aa49fda7f87a2b48ebd3c68d7d4",
+        id="TLS_AES_128_GCM_SHA256",
+    ),
+    pytest.param(
+        hashlib.sha384,
+        "7ceb100f83048162730c87eae280ff4522eda9774de0a8d28938bd13187cb16f6e7561d9f77ca98e23528f55ca24bac4",
+        "fdaba7e3ee8bb486805a51ce274b6f1611674c2017b75bfffe2d23a891cb8c7d",
+        id="TLS_AES_256_GCM_SHA384",
+    ),
+]
+
+_LEGITIMATION_CHALLENGE = bytes(range(0x10, 0x20))
+
+
+def _record_key_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the paths of the TLS key logs the clients create."""
+    paths: list[str] = []
+    mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        fd, path = mkstemp(*args, **kwargs)
+        if os.path.basename(path).startswith("s7-tls-keylog-"):
+            paths.append(path)
+        return fd, path
+
+    monkeypatch.setattr(tempfile, "mkstemp", recording_mkstemp)
+    return paths
+
+
+@pytest.mark.parametrize(("hashmod", "exporter_master_secret", "expected"), _OPENSSL_OMS_EXPORTER_VECTORS)
+def test_oms_exporter_matches_openssl(hashmod: Any, exporter_master_secret: str, expected: str) -> None:
+    secret = connection._tls13_exporter(bytes.fromhex(exporter_master_secret), b"EXPERIMENTAL_OMS", 32, hashmod)
+    assert secret.hex() == expected
+
+
+@pytest.mark.skipif(not _has_cryptography, reason="requires cryptography package")
+class TestOMSExporterSecret:
+    """Both clients derive the OMS exporter secret that new legitimation encrypts with.
+
+    The emulator's TLS context writes its side of each session to a key log, so
+    a test can derive the secret the PLC side of the same session holds.
+    """
+
+    @pytest.fixture()
+    def oms_server(self, tmp_path: Path) -> Generator[tuple[str, str, int], None, None]:
+        """Start a V2 TLS server that logs its TLS secrets; yield the CA path, that key log and the port."""
+        cert_path, key_path = _generate_self_signed_cert()
+
+        srv = S7CommPlusServer(protocol_version=ProtocolVersion.V2, session_challenge=_LEGITIMATION_CHALLENGE)
+        srv.register_raw_db(1, bytearray(16))
+        srv.start(port=0, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+        assert srv._ssl_context is not None
+        server_key_log = str(tmp_path / "server-keylog.txt")
+        srv._ssl_context.keylog_filename = server_key_log
+        time.sleep(0.1)
+
+        yield cert_path, server_key_log, srv.port
+
+        srv.stop()
+        srv._ssl_context.keylog_filename = None  # type: ignore[assignment]
+        os.unlink(cert_path)
+        os.unlink(key_path)
+
+    @pytest.fixture()
+    def wrong_ca(self) -> Generator[str, None, None]:
+        """Yield a CA that did not sign the server's certificate."""
+        cert_path, key_path = _generate_self_signed_cert()
+        yield cert_path
+        os.unlink(cert_path)
+        os.unlink(key_path)
+
+    def test_sync_handshake_derives_session_oms_secret(self, oms_server: tuple[str, str, int]) -> None:
+        cert_path, server_key_log, port = oms_server
+        conn = S7CommPlusConnection("127.0.0.1", port)
+        conn.connect(use_tls=True, tls_ca=cert_path)
+        try:
+            assert conn.oms_secret is not None
+            assert conn._ssl_object is not None
+            assert conn.oms_secret == connection._derive_oms_secret(conn._ssl_object, server_key_log)
+            assert len(conn.oms_secret) == 32
+        finally:
+            conn.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_async_handshake_derives_session_oms_secret(self, oms_server: tuple[str, str, int]) -> None:
+        """The async client derives the same secret as the sync derivation does for its session.
+
+        It used to call SSLObject.export_keying_material, which CPython does
+        not have, so oms_secret stayed None.
+        """
+        cert_path, server_key_log, port = oms_server
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=cert_path)
+        try:
+            assert client.oms_secret is not None
+            assert client._ssl_object is not None
+            assert client.oms_secret == connection._derive_oms_secret(client._ssl_object, server_key_log)
+            assert len(client.oms_secret) == 32
+        finally:
+            await client.disconnect()
+
+    def test_sync_key_log_removed_after_handshake(
+        self, oms_server: tuple[str, str, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The key log holds the session's TLS secrets, so it must not outlive the handshake.
+
+        The SSL context keeps the file open, and Windows cannot delete an open
+        file, so the sync client used to leave one behind per TLS connection.
+        """
+        cert_path, _, port = oms_server
+        key_logs = _record_key_logs(monkeypatch)
+        conn = S7CommPlusConnection("127.0.0.1", port)
+        conn.connect(use_tls=True, tls_ca=cert_path)
+        try:
+            assert key_logs
+            assert not [path for path in key_logs if os.path.exists(path)]
+        finally:
+            conn.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_async_key_log_removed_after_handshake(
+        self, oms_server: tuple[str, str, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cert_path, _, port = oms_server
+        key_logs = _record_key_logs(monkeypatch)
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=cert_path)
+        try:
+            assert key_logs
+            assert not [path for path in key_logs if os.path.exists(path)]
+        finally:
+            await client.disconnect()
+
+    def test_sync_key_log_removed_after_failed_handshake(
+        self, oms_server: tuple[str, str, int], wrong_ca: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, _, port = oms_server
+        key_logs = _record_key_logs(monkeypatch)
+        conn = S7CommPlusConnection("127.0.0.1", port)
+        try:
+            # The test is about the key log, not how the failure is reported.
+            with pytest.raises((ssl.SSLError, S7ConnectionError)):
+                conn.connect(use_tls=True, tls_ca=wrong_ca)
+            assert key_logs
+            assert not [path for path in key_logs if os.path.exists(path)]
+        finally:
+            conn.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_async_key_log_removed_after_failed_handshake(
+        self, oms_server: tuple[str, str, int], wrong_ca: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, _, port = oms_server
+        key_logs = _record_key_logs(monkeypatch)
+        client = S7CommPlusAsyncClient()
+        try:
+            # The test is about the key log, not how the failure is reported.
+            with pytest.raises((ssl.SSLError, S7ConnectionError)):
+                await client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=wrong_ca)
+            assert key_logs
+            assert not [path for path in key_logs if os.path.exists(path)]
+        finally:
+            await client.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_async_new_legitimation_encrypts_with_session_secret(
+        self, oms_server: tuple[str, str, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """authenticate() with new legitimation over TLS used to raise for want of the OMS secret.
+
+        The emulator serves the challenge and accepts the response. It models
+        neither protection levels nor new-legitimation firmware, so those are
+        stubbed.
+        """
+        cert_path, server_key_log, port = oms_server
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=cert_path)
+        try:
+            sent: list[bytes] = []
+            send = client._send_legitimation_new
+
+            async def recording_send(encrypted_response: bytes) -> None:
+                sent.append(encrypted_response)
+                await send(encrypted_response)
+
+            async def full_access() -> int:
+                return AccessLevel.FULL_ACCESS
+
+            client._protection_level = AccessLevel.NO_ACCESS
+            monkeypatch.setattr(client, "_decide_legitimation_mode", lambda: LegitimationType.NEW)
+            monkeypatch.setattr(client, "_send_legitimation_new", recording_send)
+            monkeypatch.setattr(client, "_get_effective_protection_level", full_access)
+
+            await client.authenticate("secret")
+
+            assert client._ssl_object is not None
+            session_secret = connection._derive_oms_secret(client._ssl_object, server_key_log)
+            assert session_secret is not None
+            assert sent == [build_new_response("secret", _LEGITIMATION_CHALLENGE, session_secret)]
+            assert client.oms_secret == derive_legitimation_key(session_secret)
+            assert client.protection_level == AccessLevel.FULL_ACCESS
+        finally:
+            await client.disconnect()
+
+
+class _KeyLogRefusingContext:
+    """An SSL context stand-in whose key log cannot be enabled."""
+
+    def __init__(self) -> None:
+        self.disabled = False
+
+    @property
+    def keylog_filename(self) -> None:
+        return None
+
+    @keylog_filename.setter
+    def keylog_filename(self, path: str | None) -> None:
+        if path is not None:
+            raise OSError("key log not supported")
+        self.disabled = True
+
+
+class TestTlsKeyLog:
+    """The key log holds the session's TLS secrets: it must not outlive the handshake on any platform."""
+
+    def test_removed_and_disabled_when_the_handshake_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        key_logs = _record_key_logs(monkeypatch)
+
+        with pytest.raises(ssl.SSLError, match="handshake failed"):
+            with connection._tls_key_log(ctx) as keylog_path:
+                assert ctx.keylog_filename == keylog_path
+                assert os.path.exists(keylog_path)
+                raise ssl.SSLError("handshake failed")
+
+        assert key_logs == [keylog_path]
+        assert not os.path.exists(keylog_path)
+        assert ctx.keylog_filename is None
+
+    def test_removed_when_the_key_log_cannot_be_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = _KeyLogRefusingContext()
+        key_logs = _record_key_logs(monkeypatch)
+
+        with pytest.raises(OSError, match="key log not supported"):
+            with connection._tls_key_log(ctx):  # type: ignore[arg-type]
+                pytest.fail("the key log was not enabled")
+
+        assert len(key_logs) == 1
+        assert not os.path.exists(key_logs[0])
+        assert ctx.disabled
+
+    def test_unremovable_key_log_is_logged_by_path_only(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        secret_line = "EXPORTER_SECRET " + "00" * 32 + " " + "11" * 32
+
+        def refuse_unlink(path: str) -> None:
+            raise PermissionError(13, "Permission denied", path)
+
+        try:
+            with caplog.at_level(logging.WARNING, logger="s7commplus.connection"):
+                with connection._tls_key_log(ctx) as keylog_path:
+                    Path(keylog_path).write_bytes(secret_line.encode())
+                    monkeypatch.setattr(connection.os, "unlink", refuse_unlink)
+            assert f"Could not remove the TLS key log {keylog_path}" in caplog.text
+            assert "11" * 32 not in caplog.text
+            assert ctx.keylog_filename is None
+        finally:
+            monkeypatch.undo()
+            os.unlink(keylog_path)
 
 
 class TestSyncTLSBioPlumbing:
@@ -303,7 +645,7 @@ class TestSyncTLSBioPlumbing:
             def send_data(self, data: bytes) -> None:
                 server_in.write(data)
 
-            def receive_data(self) -> bytes:
+            def receive_data(self, timeout: float | None = None, *, idle_ok: bool = False) -> bytes:
                 return self.inbox.pop(0)
 
         conn._iso_conn = _Loop()  # type: ignore[assignment]
@@ -443,3 +785,61 @@ class TestTLSGroupSelection:
             "supported_groups was narrowed to secp256r1 alone - this is the ClientHello an S7-1500 answers with a TCP RST"
         )
         assert self.X25519 in groups, f"ClientHello must still offer x25519; offered {[hex(g) for g in groups]}"
+
+
+@pytest.fixture()
+def tls_server_sync() -> Generator[tuple[S7CommPlusServer, str, str], None, None]:
+    """A V2 TLS server for the synchronous client (separate port from the async fixture)."""
+    cert_path, key_path = _generate_self_signed_cert()
+
+    srv = S7CommPlusServer(protocol_version=ProtocolVersion.V2)
+    srv.register_raw_db(1, bytearray(256))
+    srv.start(port=0, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+    time.sleep(0.1)
+
+    yield srv, cert_path, key_path
+
+    srv.stop()
+
+    import os
+
+    os.unlink(cert_path)
+    os.unlink(key_path)
+
+
+@pytest.mark.skipif(not _has_cryptography, reason="requires cryptography package")
+class TestSyncClientV2WithTLS:
+    """The synchronous client's TLS activation pins the PLC certificate too."""
+
+    def test_sync_connect_with_pinned_certificate(self, tls_server_sync: tuple[S7CommPlusServer, str, str]) -> None:
+        from s7commplus import Client
+
+        srv, cert_path, _ = tls_server_sync
+        pin = _certificate_sha256_hex(cert_path)
+
+        client = Client()
+        client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_cert_fingerprint=pin)
+        try:
+            assert client.connected
+            assert client.peer_certificate_fingerprint() == bytes.fromhex(pin)
+        finally:
+            client.disconnect()
+
+    def test_sync_connect_rejects_a_wrong_pinned_certificate(self, tls_server_sync: tuple[S7CommPlusServer, str, str]) -> None:
+        from s7commplus import Client
+
+        srv, _, _ = tls_server_sync
+        client = Client()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_cert_fingerprint="00" * 32)
+        assert not client.connected
+
+    def test_sync_a_ca_does_not_override_a_wrong_pin(self, tls_server_sync: tuple[S7CommPlusServer, str, str]) -> None:
+        from s7commplus import Client
+
+        srv, cert_path, _ = tls_server_sync
+        client = Client()
+        with pytest.raises(S7CertificateError, match="does not match"):
+            client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path, tls_cert_fingerprint="00" * 32)
+        assert not client.connected
+        assert client.peer_certificate_fingerprint() is None

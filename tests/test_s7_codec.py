@@ -37,7 +37,9 @@ from s7commplus.codec import (
     encode_uint32,
     encode_uint64,
     encode_wstring,
+    parse_or_raise_for_return_value,
 )
+from s7commplus.error import S7ReturnValueError
 from s7commplus.protocol import PROTOCOL_ID, DataType, FunctionCode, Ids, Opcode, ProtocolVersion
 from s7commplus.vlq import encode_int32_vlq, encode_int64_vlq, encode_uint32_vlq, encode_uint64_vlq
 
@@ -763,3 +765,48 @@ class TestObjectQualifier:
     def test_encode_v1_uses_fixed_width_key_qualifier(self) -> None:
         result = encode_object_qualifier(2555, ProtocolVersion.V1)
         assert result.endswith(bytes([0x00, DataType.UDINT]) + struct.pack(">I", 2555))
+
+
+class TestParseOrRaiseForReturnValue:
+    @pytest.mark.parametrize(
+        "response, offset",
+        [
+            (b"\x00", 1),
+            (b"\x00\x00\x00\x00\x0e", 1),  # ExploreId follows; trailing bytes are left alone
+        ],
+    )
+    def test_success_returns_offset(self, response: bytes, offset: int) -> None:
+        assert parse_or_raise_for_return_value(response, "EXPLORE") == offset
+
+    @pytest.mark.parametrize(
+        "return_value, code",
+        [
+            (0x8020AB001992FFF4, -12),
+            (0x8020AB001A2BFFF4, -12),
+            (0x80208100217BFFC1, -63),
+            (0xA025AB000109FFFD, -3),
+            (0x8318890001E1FFFE, -2),
+            (0xA201BE000162FF79, -135),
+            (0xA201BB002C27FF88, -120),
+        ],
+    )
+    def test_error_raises_with_signed_code(self, return_value: int, code: int) -> None:
+        response = encode_uint64_vlq(return_value) + b"\x00\x00\x00\x00"
+        message = f"^EXPLORE failed: PLC returned 0x{return_value:016X} \\(error {code}\\)$"
+        with pytest.raises(S7ReturnValueError, match=message) as excinfo:
+            parse_or_raise_for_return_value(response, "EXPLORE")
+        assert excinfo.value.error_code == code
+        assert excinfo.value.return_value == return_value
+        assert excinfo.value.response == response
+
+    def test_real_missing_object_reply_bytes(self) -> None:
+        # The -12 reply an S7-1500 (6ES7 512-1CK01, V2.9) sent for a missing RID
+        response = bytes.fromhex("c08895b080e6a5fff4000000000e00000000")
+        with pytest.raises(S7ReturnValueError) as excinfo:
+            parse_or_raise_for_return_value(response, "EXPLORE")
+        assert excinfo.value.return_value == 0x8020AB001992FFF4
+
+    @pytest.mark.parametrize("response", [b"", b"\x80", b"\xc0\x88\x95", bytes.fromhex("c08895b080e6a5ff")])
+    def test_truncated_return_value(self, response: bytes) -> None:
+        with pytest.raises(ValueError, match="^EXPLORE: truncated ReturnValue$"):
+            parse_or_raise_for_return_value(response, "EXPLORE")

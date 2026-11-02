@@ -1,4 +1,4 @@
-"""Typed tag values: per-type conversion and struct/array assembly.
+"""Typed tag values: per-type conversion, struct/array assembly, and the read_value/write_value API.
 
 Known-answer vectors are the raw bytes PLCSIM Advanced (CPU 1511, FW V2.9) returned for the
 "Types DB" test block (one member per datatype) and the layouts it accepted on write.
@@ -7,14 +7,21 @@ Known-answer vectors are the raw bytes PLCSIM Advanced (CPU 1511, FW V2.9) retur
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import math
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from s7commplus import values
-from s7commplus.catalog import SymbolCatalog, SymbolicTag
+from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.catalog import SymbolCatalog, SymbolicTag, TagResult
+from s7commplus.client import _AUTO_REFRESH_MIN_INTERVAL, S7CommPlusClient
+from s7commplus.codec import encode_pvalue_blob
+from s7commplus.protocol import ProtocolVersion
 from s7commplus.typeinfo import Softdatatype as T
+from s7commplus.vlq import decode_uint32_vlq, encode_uint32_vlq, encode_uint64_vlq
 
 UTC_PLUS_2 = dt.timezone(dt.timedelta(hours=2))
 
@@ -403,3 +410,351 @@ def test_split_rejects_mismatched_values(value: Any, error: type[Exception], mat
 def test_split_rejects_a_wrong_multi_dimensional_shape() -> None:
     with pytest.raises(ValueError, match="dimension 2 has 3 elements"):
         values.split("T.m", [[1, 2], [3, 4]], ARRAY_NAMES)
+
+
+# --- read_value / write_value ------------------------------------------------------------
+
+BROWSE = [
+    {"name": "T.i", "access_sequence": "8A0E0004.1", "data_type": "INT"},
+    {"name": "T.s", "access_sequence": "8A0E0004.2", "data_type": "STRING", "string_length": 4},
+    {"name": "T.d", "access_sequence": "8A0E0004.3", "data_type": "DATE"},
+    {"name": "T.a[0]", "access_sequence": "8A0E0004.4.0", "data_type": "INT", "array_dimensions": [(0, 2)]},
+    {"name": "T.a[1]", "access_sequence": "8A0E0004.4.1", "data_type": "INT", "array_dimensions": [(0, 2)]},
+    {"name": "T.u.x", "access_sequence": "8A0E0004.5.1", "data_type": "REAL"},
+    {"name": "T.u.y", "access_sequence": "8A0E0004.5.2", "data_type": "BBOOL"},
+]
+
+RAW = {
+    "T.i": bytes.fromhex("fb2e"),
+    "T.s": bytes.fromhex("0402686900000000")[:6],
+    "T.d": bytes.fromhex("346f"),
+    "T.a[0]": b"\x00\x01",
+    "T.a[1]": b"\x00\x02",
+    "T.u.x": bytes.fromhex("40600000"),
+    "T.u.y": b"\x01",
+}
+
+
+def _results(catalog: SymbolCatalog, names: list[str]) -> list[TagResult]:
+    return [TagResult(tag=catalog.resolve(name), value=RAW[name]) for name in names]
+
+
+def _sync_client() -> tuple[S7CommPlusClient, SymbolCatalog]:
+    client = S7CommPlusClient()
+    client._connection = MagicMock()
+    catalog = SymbolCatalog.from_browse(BROWSE)
+    client._symbol_catalog = catalog
+    client.read_tags = MagicMock(side_effect=lambda names: _results(catalog, list(names)))  # type: ignore[method-assign]
+    client.write_tags = MagicMock(side_effect=lambda raw: [TagResult(tag=catalog.resolve(n)) for n in raw])  # type: ignore[method-assign]
+    return client, catalog
+
+
+def test_read_value_decodes_leaves_and_containers_in_one_request() -> None:
+    client, _ = _sync_client()
+
+    assert client.read_value("T.i") == -1234
+    assert client.read_values(["T.s", "T.d", "T.a", "T.u"]) == ["hi", dt.date(2026, 10, 2), [1, 2], {"x": 3.5, "y": True}]
+    assert client.read_tags.call_args.args[0] == ["T.s", "T.d", "T.a[0]", "T.a[1]", "T.u.x", "T.u.y"]
+
+
+def test_read_value_unknown_name_raises_key_error() -> None:
+    client, _ = _sync_client()
+    with pytest.raises(KeyError):
+        client.read_value("T.nope")
+    with pytest.raises(KeyError):
+        client.read_value("T.u.x.y")
+
+
+def test_read_value_reports_failed_items() -> None:
+    client, catalog = _sync_client()
+    client.read_tags.side_effect = lambda names: [TagResult(tag=catalog.resolve(n), error=RuntimeError("boom")) for n in names]
+    with pytest.raises(RuntimeError, match=r"2 of 2 reads failed: 'T.a\[0\]', 'T.a\[1\]'"):
+        client.read_value("T.a")
+
+
+def test_write_values_encodes_every_leaf_into_one_request() -> None:
+    client, _ = _sync_client()
+
+    client.write_values({"T.i": -1234, "T.s": "hi", "T.a": [1, 2], "T.u": {"y": False}})
+
+    (raw,) = client.write_tags.call_args.args
+    assert raw == {
+        "T.i": bytes.fromhex("fb2e"),
+        "T.s": bytes.fromhex("040268690000"),
+        "T.a[0]": b"\x00\x01",
+        "T.a[1]": b"\x00\x02",
+        "T.u.y": b"\x00",
+    }
+
+
+def test_write_value_names_the_leaf_in_a_conversion_error() -> None:
+    client, _ = _sync_client()
+    with pytest.raises(ValueError, match=r"'T.s': STRING\[4\] holds at most 4 characters"):
+        client.write_value("T.s", "hello")
+    with pytest.raises(TypeError, match="'T.u.x': REAL takes a float"):
+        client.write_value("T.u", {"x": "1"})
+    with pytest.raises(ValueError, match=r"'T.u.x': 1e\+40 does not fit a REAL"):
+        client.write_value("T.u", {"x": 1e40})
+    client.write_tags.assert_not_called()
+
+
+def test_write_value_checks_the_catalog_string_length_before_sending() -> None:
+    client, _ = _sync_client()
+    client._symbol_catalog = SymbolCatalog.from_browse(
+        [{"name": "T.s", "access_sequence": "8A0E0004.2", "data_type": "STRING", "string_length": 300}]
+    )
+    with pytest.raises(ValueError, match="'T.s': A STRING is declared with 1 to 254 characters, got 300"):
+        client.write_value("T.s", "x")
+    client.write_tags.assert_not_called()
+
+
+def test_write_values_rejects_a_leaf_given_twice_and_empty_writes() -> None:
+    client, _ = _sync_client()
+    with pytest.raises(ValueError, match="written twice"):
+        client.write_values({"T.u": {"x": 1.0}, "T.u.x": 2.0})
+    with pytest.raises(ValueError, match="Nothing to write"):
+        client.write_value("T.u", {})
+
+
+def test_write_value_reports_rejected_items() -> None:
+    client, catalog = _sync_client()
+    client.write_tags.side_effect = lambda raw: [TagResult(tag=catalog.resolve(n), error=RuntimeError("PLC error")) for n in raw]
+    with pytest.raises(RuntimeError, match="1 of 1 writes failed: 'T.i'"):
+        client.write_value("T.i", 5)
+
+
+@pytest.mark.asyncio
+async def test_async_read_and_write_values() -> None:
+    client = S7CommPlusAsyncClient()
+    catalog = SymbolCatalog.from_browse(BROWSE)
+    client._symbol_catalog = catalog
+    client.read_tags = AsyncMock(side_effect=lambda names: _results(catalog, list(names)))  # type: ignore[method-assign]
+    client.write_tags = AsyncMock(side_effect=lambda raw: [TagResult(tag=catalog.resolve(n)) for n in raw])  # type: ignore[method-assign]
+
+    assert await client.read_value("T.u") == {"x": 3.5, "y": True}
+    assert await client.read_values(["T.i", "T.a"]) == [-1234, [1, 2]]
+    await client.write_value("T.d", dt.date(2026, 10, 3))
+    assert client.write_tags.await_args.args[0] == {"T.d": bytes.fromhex("3470")}
+    with pytest.raises(KeyError):
+        await client.read_value("T.nope")
+
+
+def _read_answer(raw_values: list[bytes]) -> bytes:
+    """A GetMultiVariables answer with every item read."""
+    answer = encode_uint64_vlq(0)
+    for number, raw in enumerate(raw_values, 1):
+        answer += encode_uint32_vlq(number) + encode_pvalue_blob(raw)
+    return answer + b"\x00\x00"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_values_of_a_large_array_are_split_like_any_batch(asynchronous: bool) -> None:
+    # The leaves of one array are one batch, which read_tags/write_tags split per request.
+    browse = [
+        {"name": f"T.a[{index}]", "access_sequence": f"8A0E0004.4.{index}", "data_type": "INT", "array_dimensions": [(0, 5)]}
+        for index in range(5)
+    ]
+    write_answer = encode_uint64_vlq(0) + b"\x00"
+    answers = [
+        _read_answer([b"\x00\x01", b"\x00\x02"]),
+        _read_answer([b"\x00\x03", b"\x00\x04"]),
+        _read_answer([b"\x00\x05"]),
+        *[write_answer] * 3,
+    ]
+    send: MagicMock
+    if asynchronous:
+        async_client = S7CommPlusAsyncClient()
+        async_client._connected = True
+        async_client._send_request = send = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
+        async_client._symbol_catalog = SymbolCatalog.from_browse(browse)
+        async_client.max_items_per_request = 2
+        assert await async_client.read_value("T.a") == [1, 2, 3, 4, 5]
+        await async_client.write_value("T.a", [5, 4, 3, 2, 1])
+    else:
+        client = S7CommPlusClient()
+        client._connection = MagicMock(
+            object_qualifier_version=0, requires_substreamed=False, _with_integrity_id=True, _session_key=None
+        )
+        send = client._connection.send_request
+        send.side_effect = answers
+        client._symbol_catalog = SymbolCatalog.from_browse(browse)
+        client.max_items_per_request = 2
+        assert client.read_value("T.a") == [1, 2, 3, 4, 5]
+        client.write_value("T.a", [5, 4, 3, 2, 1])
+
+    payloads = [call.args[1] for call in send.call_args_list]
+    assert [decode_uint32_vlq(payload, 4)[0] for payload in payloads] == [2, 2, 1, 2, 2, 1]
+    assert bytes.fromhex("01000700050200070004") in payloads[3]  # item 1 = 5, item 2 = 4, as INTs
+
+
+# --- Unknown names with auto_refresh_tags ------------------------------------------------
+
+GROWN = [*BROWSE, {"name": "T.new", "access_sequence": "8A0E0004.9", "data_type": "INT"}]
+GROWN_RAW = {**RAW, "T.new": b"\x00\x63"}
+
+kinds = pytest.mark.parametrize("asynchronous", [False, True])
+
+
+async def _call(result: Any) -> Any:
+    return await result if inspect.isawaitable(result) else result
+
+
+def _refreshing_client(asynchronous: bool, monkeypatch: pytest.MonkeyPatch, *, changed: bool = True) -> Any:
+    """A client with BROWSE cached; its program-change check finds GROWN when ``changed``."""
+    client: S7CommPlusClient | S7CommPlusAsyncClient = S7CommPlusAsyncClient() if asynchronous else S7CommPlusClient()
+    client._symbol_catalog = SymbolCatalog.from_browse(BROWSE)
+
+    def catalog() -> SymbolCatalog:
+        assert client._symbol_catalog is not None
+        return client._symbol_catalog
+
+    def check() -> bool:
+        if changed:
+            client._symbol_catalog = SymbolCatalog.from_browse(GROWN)
+        return changed
+
+    mock = AsyncMock if asynchronous else MagicMock
+    monkeypatch.setattr(
+        client,
+        "read_tags",
+        mock(side_effect=lambda names: [TagResult(tag=catalog().resolve(n), value=GROWN_RAW[n]) for n in names]),
+    )
+    monkeypatch.setattr(client, "write_tags", mock(side_effect=lambda raw: [TagResult(tag=catalog().resolve(n)) for n in raw]))
+    monkeypatch.setattr(client, "refresh_caches_if_program_changed", mock(side_effect=check))
+    return client
+
+
+@kinds
+async def test_read_value_of_an_unknown_name_reloads_stale_tags_once(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _refreshing_client(asynchronous, monkeypatch)
+    check = client.refresh_caches_if_program_changed
+    with pytest.raises(KeyError):
+        await _call(client.read_value("T.new"))  # auto_refresh_tags is off by default
+    check.assert_not_called()
+
+    client.auto_refresh_tags = True
+    assert await _call(client.read_value("T.new")) == 99
+    assert check.call_count == 1
+
+
+@kinds
+async def test_write_value_of_an_unknown_name_reloads_stale_tags_once(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _refreshing_client(asynchronous, monkeypatch)
+    client.auto_refresh_tags = True
+
+    await _call(client.write_values({"T.i": 1, "T.new": 5}))
+
+    assert client.write_tags.call_args.args[0] == {"T.i": b"\x00\x01", "T.new": b"\x00\x05"}
+    assert client.refresh_caches_if_program_changed.call_count == 1
+
+
+@kinds
+async def test_value_lookups_honour_the_auto_refresh_interval(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A misspelt name must not cost a program-change check on every poll.
+    client = _refreshing_client(asynchronous, monkeypatch, changed=False)
+    client.auto_refresh_tags = True
+    check = client.refresh_caches_if_program_changed
+
+    with pytest.raises(KeyError):
+        await _call(client.read_value("T.typo"))
+    with pytest.raises(KeyError):
+        await _call(client.write_value("T.typo", 1))
+    assert check.call_count == 1  # the second lookup came within the interval
+
+    assert client._last_auto_refresh_check is not None
+    client._last_auto_refresh_check -= _AUTO_REFRESH_MIN_INTERVAL  # the interval has passed
+    with pytest.raises(KeyError):
+        await _call(client.read_values(["T.i", "T.typo"]))
+    assert check.call_count == 2
+    client.read_tags.assert_not_called()
+    client.write_tags.assert_not_called()
+
+
+@kinds
+async def test_a_conversion_error_does_not_reload_tags(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the catalog lookup is retried after a check; encoding errors are the caller's.
+    client = _refreshing_client(asynchronous, monkeypatch)
+    client.auto_refresh_tags = True
+
+    with pytest.raises(TypeError, match="'T.i': INT takes an int"):
+        await _call(client.write_value("T.i", "x"))
+    with pytest.raises(ValueError, match="no member or element 'typo'"):
+        await _call(client.write_value("T.u", {"typo": 1}))
+
+    client.refresh_caches_if_program_changed.assert_not_called()
+    client.write_tags.assert_not_called()
+
+
+@kinds
+async def test_no_check_when_the_value_call_browsed_the_catalog(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _refreshing_client(asynchronous, monkeypatch)
+    client.auto_refresh_tags = True
+    client._symbol_catalog = None
+    fresh = SymbolCatalog.from_browse(BROWSE)
+
+    def browse() -> SymbolCatalog:
+        client._symbol_catalog = fresh
+        return fresh
+
+    monkeypatch.setattr(client, "refresh_tag_catalog", (AsyncMock if asynchronous else MagicMock)(side_effect=browse))
+    with pytest.raises(KeyError):
+        await _call(client.read_value("T.new"))  # the catalog is fresh, so a check cannot help
+    client.refresh_caches_if_program_changed.assert_not_called()
+
+
+# --- Typed writes in the write forms (catalog._WRITE_FORMS) ------------------------------
+
+FORMS_BROWSE = [
+    {"name": "T.c", "access_sequence": "8A0E0004.1", "data_type": "CHAR"},
+    {"name": "T.s", "access_sequence": "8A0E0004.2", "data_type": "STRING", "string_length": 4},
+    {"name": "T.w", "access_sequence": "8A0E0004.3", "data_type": "WSTRING", "string_length": 2},
+    {"name": "T.dt", "access_sequence": "8A0E0004.4", "data_type": "DATEANDTIME"},
+]
+CHAR_AND_DT = {"T.c": "Z", "T.dt": dt.datetime(2026, 10, 2, 12, 34, 56, 123000)}
+# The item values of the request write_values(CHAR_AND_DT) sends: a USINT; a USINT array of the eight BCD bytes.
+CHAR_AND_DT_ITEMS = "01 00025a 02 1002082610021234561236 00"
+WRITE_ANSWER = encode_uint64_vlq(0) + encode_uint32_vlq(0)
+
+
+def _forms_client(asynchronous: bool) -> tuple[Any, AsyncMock | MagicMock]:
+    """A client with FORMS_BROWSE cached and a mocked transport; returns it and the send mock."""
+    if asynchronous:
+        async_client = S7CommPlusAsyncClient()
+        async_client._connected = True
+        async_client._protocol_version = ProtocolVersion.V2
+        async_client._symbol_catalog = SymbolCatalog.from_browse(FORMS_BROWSE)
+        async_client._send_request = send = AsyncMock(return_value=WRITE_ANSWER)  # type: ignore[method-assign]
+        return async_client, send
+    client = S7CommPlusClient()
+    client._connection = MagicMock(protocol_version=ProtocolVersion.V2, object_qualifier_version=ProtocolVersion.V2)
+    client._connection.send_request.return_value = WRITE_ANSWER
+    client._symbol_catalog = SymbolCatalog.from_browse(FORMS_BROWSE)
+    return client, client._connection.send_request
+
+
+def _sent_payload(send: AsyncMock | MagicMock) -> bytes:
+    call = send.await_args if isinstance(send, AsyncMock) else send.call_args
+    assert call is not None
+    payload: bytes = call.args[1]
+    return payload
+
+
+@kinds
+async def test_write_values_sends_char_and_date_and_time_in_the_write_forms(asynchronous: bool) -> None:
+    client, send = _forms_client(asynchronous)
+
+    await _call(client.write_values(CHAR_AND_DT))
+
+    assert bytes.fromhex(CHAR_AND_DT_ITEMS) in _sent_payload(send)
+
+
+@kinds
+async def test_write_value_sends_strings_as_arrays(asynchronous: bool) -> None:
+    client, send = _forms_client(asynchronous)
+
+    await _call(client.write_values({"T.s": "hi", "T.w": "ä"}))
+
+    # STRING[4] "hi": USINT array [4, 2, h, i, 0, 0]; WSTRING[2] "ä": UINT array [2, 1, ä, 0]
+    assert bytes.fromhex("01 100206040268690000 02 1003040002000100e40000 00") in _sent_payload(send)

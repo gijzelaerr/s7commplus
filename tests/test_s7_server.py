@@ -6,16 +6,18 @@ import hmac
 import struct
 import time
 from collections.abc import Generator
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
-from s7commplus.error import S7ConnectionError, S7IntegrityError
+from s7commplus.error import S7ConnectionError, S7IntegrityError, S7ReturnValueError
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import (
+    ProgramObject,
     S7CommPlusClient,
     _build_multi_symbolic_read_payload,
     _build_symbolic_write_payload,
+    _parse_program_objects,
     _parse_explore_datablocks,
 )
 from s7commplus.connection import _parse_get_var_substreamed_response, _verify_v3_hmac
@@ -29,11 +31,8 @@ from s7commplus.server import (
 )
 from s7commplus.vlq import decode_uint64_vlq, encode_uint32_vlq
 
-# Use a high port to avoid conflicts
-TEST_PORT = 11120
-
-# SessionKey handshake tests use a separate port
-SESSION_KEY_PORT = 11121
+# Every emulator starts on port 0, so the OS picks a free port at bind time and
+# parallel test runs never share one; tests connect to the fixture's .port.
 
 # A known S7-1200 public key fingerprint from the bundled key store
 TEST_FINGERPRINT = "01:BD426B091F08731A"
@@ -71,7 +70,7 @@ def server() -> Generator[S7CommPlusServer, None, None]:
     db1.data[8] = 1  # running = True
     struct.pack_into(">i", db1.data, 10, 42)  # count
 
-    srv.start(port=TEST_PORT)
+    srv.start(port=0)
     time.sleep(0.1)  # Let server start
 
     yield srv
@@ -89,11 +88,40 @@ class TestServer:
         assert "temp" in db.variables
         assert db.variables["temp"].byte_offset == 0
 
+    def test_second_server_cannot_take_a_listening_port(self) -> None:
+        # On Windows SO_REUSEADDR let a second emulator bind the same port, so
+        # clients of parallel test runs could reach the wrong one.
+        first = S7CommPlusServer()
+        first.register_raw_db(1, bytearray(b"\x11\x22\x33\x44"))
+        first.start(port=0)
+        port = first.port
+        try:
+            second = S7CommPlusServer()
+            with pytest.raises(OSError):
+                second.start(port=port)
+            assert second._server_socket is None
+            client = S7CommPlusClient()
+            client.connect("127.0.0.1", port=port)
+            try:
+                assert client.db_read(1, 0, 4) == b"\x11\x22\x33\x44"
+            finally:
+                client.disconnect()
+        finally:
+            first.stop()
+
     def test_register_raw_db(self) -> None:
         srv = S7CommPlusServer()
         data = bytearray(b"\x01\x02\x03\x04")
         db = srv.register_raw_db(10, data)
         assert db.read(0, 4) == b"\x01\x02\x03\x04"
+
+    @pytest.mark.parametrize("rid", [Ids.DB_ACCESS_AREA_BASE | 1, 0x8A120001])
+    def test_register_program_object_refuses_data_blocks(self, rid: int) -> None:
+        # A DataBlock registered here would also be listed by list_datablocks() next to the ones from register_db()
+        srv = S7CommPlusServer()
+        with pytest.raises(ValueError, match="register_db"):
+            srv.register_program_object(rid, Ids.DB_CLASS_RID, "DB1")
+        assert srv._program_objects == {}
 
     def test_cpu_state(self) -> None:
         srv = S7CommPlusServer()
@@ -148,22 +176,46 @@ class TestClientServerIntegration:
 
     def test_connect_disconnect(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         assert client.connected
         assert client.session_id != 0
         assert client.protocol_version == ProtocolVersion.V1
         client.disconnect()
         assert not client.connected
 
+    def test_set_plc_operating_state_refuses_without_sending(self, server: S7CommPlusServer) -> None:
+        """The unvalidated state change (issue #8) raises and sends nothing."""
+        with S7CommPlusClient() as client:
+            client.connect("127.0.0.1", port=server.port)
+            assert client._connection is not None
+            sent = client._connection._sequence_number
+            with pytest.raises(NotImplementedError, match="issues/8"):
+                client.set_plc_operating_state(1)
+            assert client._connection._sequence_number == sent
+            assert client.get_cpu_state() in ("RUN", "STOP", "UNKNOWN")
+
+    def test_set_plc_operating_state_refuses_when_not_connected(self) -> None:
+        with pytest.raises(NotImplementedError):
+            S7CommPlusClient().set_plc_operating_state(3)
+
     def test_context_manager(self, server: S7CommPlusServer) -> None:
         with S7CommPlusClient() as client:
-            client.connect("127.0.0.1", port=TEST_PORT)
+            client.connect("127.0.0.1", port=server.port)
             assert client.connected
         assert not client.connected
 
+    @pytest.mark.parametrize(
+        ("cpu_state", "expected"), [(CPUState.RUN, "RUN"), (CPUState.STOP, "STOP"), (CPUState.UNKNOWN, "UNKNOWN")]
+    )
+    def test_get_cpu_state(self, server: S7CommPlusServer, cpu_state: CPUState, expected: str) -> None:
+        server.cpu_state = cpu_state
+        with S7CommPlusClient() as client:
+            client.connect("127.0.0.1", port=server.port)
+            assert client.get_cpu_state() == expected
+
     def test_read_real(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             data = client.db_read(1, 0, 4)
             value = struct.unpack(">f", data)[0]
@@ -173,7 +225,7 @@ class TestClientServerIntegration:
 
     def test_read_multiple_values(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             # Read temperature and pressure
             data = client.db_read(1, 0, 8)
@@ -186,7 +238,7 @@ class TestClientServerIntegration:
 
     def test_read_symbolic_multi(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             # Raw byte access uses (ClassicBlob marker, zero-based offset, size).
             results = client.read_symbolic_multi(
@@ -201,7 +253,7 @@ class TestClientServerIntegration:
 
     def test_write_and_read_back(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             # Write a new temperature
             client.db_write(1, 0, struct.pack(">f", 99.9))
@@ -215,7 +267,7 @@ class TestClientServerIntegration:
 
     def test_write_dint(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             # Write count
             client.db_write(1, 10, struct.pack(">i", 12345))
@@ -229,7 +281,7 @@ class TestClientServerIntegration:
 
     def test_read_db2_raw(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             # DB2 should be all zeros
             data = client.db_read(2, 0, 10)
@@ -239,7 +291,7 @@ class TestClientServerIntegration:
 
     def test_multi_read(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             results = client.db_read_multi(
                 [
@@ -257,7 +309,7 @@ class TestClientServerIntegration:
 
     def test_multi_write(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             client.db_write_multi(
                 [
@@ -285,7 +337,7 @@ class TestClientServerIntegration:
     )
     def test_explore(self, server: S7CommPlusServer, attributes: list[int] | None, expected_hex: str) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             assert client._connection is not None
             with patch.object(client._connection, "send_request", wraps=client._connection.send_request) as send:
@@ -293,25 +345,99 @@ class TestClientServerIntegration:
 
             expected_payload = bytes.fromhex(expected_hex)
             send.assert_called_once_with(FunctionCode.EXPLORE, expected_payload, integrity_tail=5, reassemble=True)
-            assert [db["number"] for db in _parse_explore_datablocks(response)] == [1, 2]
+            assert [db.number for db in _parse_explore_datablocks(response)] == [1, 2]
         finally:
             client.disconnect()
 
     def test_explore_missing_object(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
-            response = client.explore(0x12345678)
-            return_value, consumed = decode_uint64_vlq(response, 0)
-            # The ReturnValue a real S7-1500 sends for an object that does not exist: error code -12
-            assert return_value == 0x8020AB001992FFF4
-            assert response[consumed : consumed + 4] == b"\x00\x00\x00\x00"  # ExploreId echoed as 0
+            # The emulator replies with the ReturnValue a real S7-1500 sends for an object that does not exist
+            with pytest.raises(S7ReturnValueError, match="0x8020AB001992FFF4") as excinfo:
+                client.explore(0x12345678)
+            assert excinfo.value.error_code == -12
+            assert excinfo.value.return_value == 0x8020AB001992FFF4
+            _, consumed = decode_uint64_vlq(excinfo.value.response, 0)
+            assert excinfo.value.response[consumed : consumed + 4] == b"\x00\x00\x00\x00"  # ExploreId echoed as 0
+        finally:
+            client.disconnect()
+
+    def test_explore_truncated_return_value(self, server: S7CommPlusServer) -> None:
+        client = S7CommPlusClient()
+        client.connect("127.0.0.1", port=server.port)
+        try:
+            assert client._connection is not None
+            # The first 3 bytes of the -12 reply a real S7-1500 sends for a missing object
+            with patch.object(client._connection, "send_request", return_value=b"\xc0\x88\x95"):
+                with pytest.raises(ValueError, match="truncated ReturnValue"):
+                    client.explore(0x12345678)
+        finally:
+            client.disconnect()
+
+    def test_program_objects(self, server: S7CommPlusServer) -> None:
+        # One object per block class besides DB, and PLCProgramChange, which a PLC sends as object 0x38 without a name
+        registered = [
+            ProgramObject(0x8A120001, Ids.FB_CLASS_RID, "FB1"),
+            ProgramObject(0x8A130001, Ids.FC_CLASS_RID, "FC1"),
+            ProgramObject(0x8A320001, Ids.PROGRAM_CYCLE_OB_CLASS_RID, "Main"),
+            ProgramObject(0x8A320020, Ids.CYCLIC_OB_CLASS_RID, "Cyclic interrupt"),
+            ProgramObject(0x89FD0001, Ids.UDT_CLASS_RID, "UDT1"),
+            ProgramObject(0x38, Ids.PLC_PROGRAM_CHANGE_CLASS_RID, ""),
+        ]
+        for obj in registered:
+            server.register_program_object(obj.rid, obj.class_id, obj.name or None)
+        client = S7CommPlusClient()
+        client.connect("127.0.0.1", port=server.port)
+        try:
+            assert client._connection is not None
+            with patch.object(client._connection, "send_request", wraps=client._connection.send_request) as send:
+                objects = client.program_objects()
+                datablocks = client.list_datablocks()
+            # Both send thePLCProgram with ObjectVariableTypeName (233) and Block.BlockNumber (2521) as VLQ
+            payload = bytes.fromhex("00000003000101000002816993590000000000")
+            request = call(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            assert send.call_args_list == [request, request]
+            # Children close before their parent, so PLCProgram comes last, as in a live S7-1500 reply
+            assert objects == [
+                ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1"),
+                ProgramObject(0x8A0E0002, Ids.DB_CLASS_RID, "DB2"),
+                *registered,
+                ProgramObject(Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram"),
+            ]
+            assert [db.number for db in datablocks] == [1, 2]
+            # Exploring FB1 returns FB1 alone, without the data blocks or the other registered objects
+            assert _parse_program_objects(client.explore(0x8A120001)) == [registered[0]]
+        finally:
+            client.disconnect()
+
+    @pytest.mark.parametrize(
+        "method, replies, operation",
+        [
+            # The hex reply is what a real S7-1500 sends for a missing object (ReturnValue -12)
+            ("get_cpu_state", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "CPU state read"),
+            ("list_datablocks", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
+            ("program_objects", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
+            # browse() lists the data blocks first: b"\x00" is an empty list, so only the type-info explore fails
+            ("browse", [b"\x00", bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Type-info browse"),
+        ],
+    )
+    def test_explore_endpoints_raise_on_plc_error(
+        self, server: S7CommPlusServer, method: str, replies: list[bytes], operation: str
+    ) -> None:
+        client = S7CommPlusClient()
+        client.connect("127.0.0.1", port=server.port)
+        try:
+            assert client._connection is not None
+            with patch.object(client._connection, "send_request", side_effect=replies):
+                with pytest.raises(S7ReturnValueError, match=f"^{operation} failed"):
+                    getattr(client, method)()
         finally:
             client.disconnect()
 
     def test_explore_xml(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=server.port)
         try:
             result = client.explore_xml()
             # Emulated server doesn't send zlib preset-dict blobs,
@@ -323,13 +449,13 @@ class TestClientServerIntegration:
     def test_server_data_persists_across_clients(self, server: S7CommPlusServer) -> None:
         # Client 1 writes
         c1 = S7CommPlusClient()
-        c1.connect("127.0.0.1", port=TEST_PORT)
+        c1.connect("127.0.0.1", port=server.port)
         c1.db_write(2, 0, b"\xde\xad\xbe\xef")
         c1.disconnect()
 
         # Client 2 reads
         c2 = S7CommPlusClient()
-        c2.connect("127.0.0.1", port=TEST_PORT)
+        c2.connect("127.0.0.1", port=server.port)
         data = c2.db_read(2, 0, 4)
         c2.disconnect()
 
@@ -339,7 +465,7 @@ class TestClientServerIntegration:
         clients = []
         for _ in range(3):
             c = S7CommPlusClient()
-            c.connect("127.0.0.1", port=TEST_PORT)
+            c.connect("127.0.0.1", port=server.port)
             clients.append(c)
 
         # All should have different session IDs
@@ -356,7 +482,7 @@ class TestAsyncClientServerIntegration:
 
     async def test_connect_disconnect(self, server: S7CommPlusServer) -> None:
         client = S7CommPlusAsyncClient()
-        await client.connect("127.0.0.1", port=TEST_PORT)
+        await client.connect("127.0.0.1", port=server.port)
         assert client.connected
         assert client.session_id != 0
         await client.disconnect()
@@ -364,20 +490,20 @@ class TestAsyncClientServerIntegration:
 
     async def test_async_context_manager(self, server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             assert client.connected
         assert not client.connected
 
     async def test_read_real(self, server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             data = await client.db_read(1, 0, 4)
             value = struct.unpack(">f", data)[0]
             assert abs(value - 23.5) < 0.001
 
     async def test_write_and_read_back(self, server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             await client.db_write(1, 0, struct.pack(">f", 77.7))
             data = await client.db_read(1, 0, 4)
             value = struct.unpack(">f", data)[0]
@@ -385,7 +511,7 @@ class TestAsyncClientServerIntegration:
 
     async def test_multi_read(self, server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             results = await client.db_read_multi(
                 [
                     (1, 0, 4),
@@ -398,7 +524,7 @@ class TestAsyncClientServerIntegration:
 
     async def test_multi_write(self, server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             await client.write_multi(
                 [
                     (1, 0, b"alpha", DataType.BLOB),
@@ -423,27 +549,89 @@ class TestAsyncClientServerIntegration:
     )
     async def test_explore(self, server: S7CommPlusServer, attributes: list[int] | None, expected_hex: str) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             with patch.object(client, "_send_request", wraps=client._send_request) as send:
                 response = await client.explore(attributes=attributes)
 
             expected_payload = bytes.fromhex(expected_hex)
             send.assert_awaited_once_with(FunctionCode.EXPLORE, expected_payload, integrity_tail=5, reassemble=True)
-            assert [db["number"] for db in _parse_explore_datablocks(response)] == [1, 2]
+            assert [db.number for db in _parse_explore_datablocks(response)] == [1, 2]
 
     async def test_explore_missing_object(self, server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
-            response = await client.explore(0x12345678)
-            return_value, consumed = decode_uint64_vlq(response, 0)
-            # The ReturnValue a real S7-1500 sends for an object that does not exist: error code -12
-            assert return_value == 0x8020AB001992FFF4
-            assert response[consumed : consumed + 4] == b"\x00\x00\x00\x00"  # ExploreId echoed as 0
+            await client.connect("127.0.0.1", port=server.port)
+            # The emulator replies with the ReturnValue a real S7-1500 sends for an object that does not exist
+            with pytest.raises(S7ReturnValueError, match="0x8020AB001992FFF4") as excinfo:
+                await client.explore(0x12345678)
+            assert excinfo.value.error_code == -12
+            assert excinfo.value.return_value == 0x8020AB001992FFF4
+            _, consumed = decode_uint64_vlq(excinfo.value.response, 0)
+            assert excinfo.value.response[consumed : consumed + 4] == b"\x00\x00\x00\x00"  # ExploreId echoed as 0
+
+    async def test_explore_truncated_return_value(self, server: S7CommPlusServer) -> None:
+        async with S7CommPlusAsyncClient() as client:
+            await client.connect("127.0.0.1", port=server.port)
+            # The first 3 bytes of the -12 reply a real S7-1500 sends for a missing object
+            with patch.object(client, "_send_request", return_value=b"\xc0\x88\x95"):
+                with pytest.raises(ValueError, match="truncated ReturnValue"):
+                    await client.explore(0x12345678)
+
+    async def test_program_objects(self, server: S7CommPlusServer) -> None:
+        # One object per block class besides DB, and PLCProgramChange, which a PLC sends as object 0x38 without a name
+        registered = [
+            ProgramObject(0x8A120001, Ids.FB_CLASS_RID, "FB1"),
+            ProgramObject(0x8A130001, Ids.FC_CLASS_RID, "FC1"),
+            ProgramObject(0x8A320001, Ids.PROGRAM_CYCLE_OB_CLASS_RID, "Main"),
+            ProgramObject(0x8A320020, Ids.CYCLIC_OB_CLASS_RID, "Cyclic interrupt"),
+            ProgramObject(0x89FD0001, Ids.UDT_CLASS_RID, "UDT1"),
+            ProgramObject(0x38, Ids.PLC_PROGRAM_CHANGE_CLASS_RID, ""),
+        ]
+        for obj in registered:
+            server.register_program_object(obj.rid, obj.class_id, obj.name or None)
+        async with S7CommPlusAsyncClient() as client:
+            await client.connect("127.0.0.1", port=server.port)
+            with patch.object(client, "_send_request", wraps=client._send_request) as send:
+                objects = await client.program_objects()
+                datablocks = await client.list_datablocks()
+            # Both send thePLCProgram with ObjectVariableTypeName (233) and Block.BlockNumber (2521) as VLQ
+            payload = bytes.fromhex("00000003000101000002816993590000000000")
+            request = call(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            assert send.await_args_list == [request, request]
+            # Children close before their parent, so PLCProgram comes last, as in a live S7-1500 reply
+            assert objects == [
+                ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1"),
+                ProgramObject(0x8A0E0002, Ids.DB_CLASS_RID, "DB2"),
+                *registered,
+                ProgramObject(Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram"),
+            ]
+            assert [db.number for db in datablocks] == [1, 2]
+            # Exploring FB1 returns FB1 alone, without the data blocks or the other registered objects
+            assert _parse_program_objects(await client.explore(0x8A120001)) == [registered[0]]
+
+    @pytest.mark.parametrize(
+        "method, replies, operation",
+        [
+            # The hex reply is what a real S7-1500 sends for a missing object (ReturnValue -12)
+            ("get_cpu_state", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "CPU state read"),
+            ("list_datablocks", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
+            ("program_objects", [bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Program object list"),
+            # browse() lists the data blocks first: b"\x00" is an empty list, so only the type-info explore fails
+            ("browse", [b"\x00", bytes.fromhex("c08895b080e6a5fff4000000000e00000000")], "Type-info browse"),
+        ],
+    )
+    async def test_explore_endpoints_raise_on_plc_error(
+        self, server: S7CommPlusServer, method: str, replies: list[bytes], operation: str
+    ) -> None:
+        async with S7CommPlusAsyncClient() as client:
+            await client.connect("127.0.0.1", port=server.port)
+            with patch.object(client, "_send_request", side_effect=replies):
+                with pytest.raises(S7ReturnValueError, match=f"^{operation} failed"):
+                    await getattr(client, method)()
 
     async def test_concurrent_reads(self, server: S7CommPlusServer) -> None:
         """Test that asyncio.Lock prevents interleaved requests."""
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
 
             async def read_temp() -> float:
                 data = await client.db_read(1, 0, 4)
@@ -457,7 +645,7 @@ class TestAsyncClientServerIntegration:
     async def test_write_symbolic(self, server: S7CommPlusServer) -> None:
         """Test write_symbolic sends a SetMultiVariables request."""
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             # Write 4 bytes to DB1 via symbolic access (access_area for DB1)
             access_area = 0x8A0E0001
             await client.write_symbolic(
@@ -470,29 +658,31 @@ class TestAsyncClientServerIntegration:
             value = struct.unpack(">f", data)[0]
             assert abs(value - 55.5) < 0.1
 
-    async def test_get_cpu_state(self, server: S7CommPlusServer) -> None:
-        """Test get_cpu_state returns a valid state string."""
+    @pytest.mark.parametrize(
+        ("cpu_state", "expected"), [(CPUState.RUN, "RUN"), (CPUState.STOP, "STOP"), (CPUState.UNKNOWN, "UNKNOWN")]
+    )
+    async def test_get_cpu_state(self, server: S7CommPlusServer, cpu_state: CPUState, expected: str) -> None:
+        server.cpu_state = cpu_state
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
-            state = await client.get_cpu_state()
-            assert state in ("RUN", "STOP", "UNKNOWN")
+            await client.connect("127.0.0.1", port=server.port)
+            assert await client.get_cpu_state() == expected
 
-    async def test_set_plc_operating_state(self, server: S7CommPlusServer) -> None:
-        """Test set_plc_operating_state sends an INVOKE request."""
+    async def test_set_plc_operating_state_refuses_without_sending(self, server: S7CommPlusServer) -> None:
+        """The unvalidated state change (issue #8) raises and sends nothing."""
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
-            # state 1 = STOP — the emulated server accepts INVOKE requests
-            await client.set_plc_operating_state(1)
+            await client.connect("127.0.0.1", port=server.port)
+            sent = client._sequence_number
+            with pytest.raises(NotImplementedError, match="issues/8"):
+                await client.set_plc_operating_state(1)
+            assert client._sequence_number == sent
+            assert await client.get_cpu_state() in ("RUN", "STOP", "UNKNOWN")
 
     async def test_explore_xml(self, server: S7CommPlusServer) -> None:
         """Test explore_xml returns None on emulated server (no zlib blobs)."""
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=server.port)
             result = await client.explore_xml()
             assert result is None
-
-
-RST_PORT = 11122
 
 
 class TestRstAfterSymbolicRead:
@@ -511,7 +701,7 @@ class TestRstAfterSymbolicRead:
         db1 = srv.get_db(1)
         assert db1 is not None
         struct.pack_into(">f", db1.data, 0, 23.5)
-        srv.start(port=RST_PORT)
+        srv.start(port=0)
         time.sleep(0.1)
         yield srv
         srv.stop()
@@ -523,7 +713,7 @@ class TestRstAfterSymbolicRead:
         but a second call on the same client hits a dead socket.
         """
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=RST_PORT)
+        client.connect("127.0.0.1", port=rst_server.port)
         try:
             data = client.db_read(1, 0, 4)
             value = struct.unpack(">f", data)[0]
@@ -537,12 +727,36 @@ class TestRstAfterSymbolicRead:
         session.
         """
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=RST_PORT)
+        client.connect("127.0.0.1", port=rst_server.port)
         try:
             variables = client.browse()
             assert isinstance(variables, list)
         finally:
             client.disconnect()
+
+    async def test_async_peer_close_raises_connection_error(self, rst_server: S7CommPlusServer) -> None:
+        """A peer that closed the socket is an S7ConnectionError and ends the session, as in the sync client."""
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=rst_server.port)
+        try:
+            await client.db_read(1, 0, 4)  # answered, then the server closes the socket
+            with pytest.raises(S7ConnectionError):
+                await client.db_read(1, 0, 4)
+            assert not client.connected
+            with pytest.raises(S7ConnectionError, match="Not connected"):
+                await client.db_read(1, 0, 4)
+        finally:
+            await client.disconnect()
+
+    async def test_async_browse_reconnects_on_rst(self, rst_server: S7CommPlusServer) -> None:
+        """AsyncClient.browse() recovers from the RST like the sync client does."""
+        client = S7CommPlusAsyncClient()
+        await client.connect("127.0.0.1", port=rst_server.port)
+        try:
+            variables = await client.browse()
+            assert isinstance(variables, list)
+        finally:
+            await client.disconnect()
 
 
 class TestSessionKeyServer:
@@ -683,7 +897,7 @@ class TestSessionKeyIntegration:
         db1 = srv.get_db(1)
         assert db1 is not None
         struct.pack_into(">f", db1.data, 0, 23.5)
-        srv.start(port=SESSION_KEY_PORT)
+        srv.start(port=0)
         time.sleep(0.1)
         yield srv
         srv.stop()
@@ -691,7 +905,7 @@ class TestSessionKeyIntegration:
     def test_client_session_setup_with_struct_version(self, session_key_server: S7CommPlusServer) -> None:
         """Client parses Struct-type ServerSessionVersion and completes session setup."""
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=SESSION_KEY_PORT)
+        client.connect("127.0.0.1", port=session_key_server.port)
         assert client.connected
         assert client.session_id != 0
         assert client.session_setup_ok
@@ -706,12 +920,12 @@ class TestSessionKeyIntegration:
             session_challenge=TEST_CHALLENGE,
             session_key=TEST_SESSION_KEY,
         )
-        srv.start(port=SESSION_KEY_PORT)
+        srv.start(port=0)
         time.sleep(0.1)
         client = S7CommPlusClient()
         try:
             with pytest.raises(S7ConnectionError, match="session setup was rejected"):
-                client.connect("127.0.0.1", port=SESSION_KEY_PORT)
+                client.connect("127.0.0.1", port=srv.port)
             assert client._connection is not None
             assert client._connection._session_key is None
             assert not client.session_setup_ok
@@ -723,7 +937,7 @@ class TestSessionKeyIntegration:
     def test_read_write_after_session_setup(self, session_key_server: S7CommPlusServer) -> None:
         """Read/write works after successful session setup with SessionKey server."""
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=SESSION_KEY_PORT)
+        client.connect("127.0.0.1", port=session_key_server.port)
         try:
             data = client.db_read(1, 0, 4)
             value = struct.unpack(">f", data)[0]
@@ -739,18 +953,9 @@ class TestSessionKeyIntegration:
     def test_explore_after_session_setup(self, session_key_server: S7CommPlusServer) -> None:
         """Explore reassembly verifies V3 HMAC and removes the response IntegrityId."""
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=SESSION_KEY_PORT)
+        client.connect("127.0.0.1", port=session_key_server.port)
         try:
-            assert client.list_datablocks() == [
-                {
-                    "name": "DB1",
-                    "number": 1,
-                    "rid": 0x8A0E0001,
-                    "language": None,
-                    "knowhow_protected": False,
-                    "unlinked": False,
-                }
-            ]
+            assert client.list_datablocks() == [ProgramObject(0x8A0E0001, Ids.DB_CLASS_RID, "DB1")]
         finally:
             client.disconnect()
 
@@ -794,7 +999,7 @@ def small_db_server() -> Generator[S7CommPlusServer, None, None]:
     place cannot look like a read from the right one."""
     srv = S7CommPlusServer()
     srv.register_raw_db(1, bytearray(range(0x10, 0x20)))
-    srv.start(port=TEST_PORT)
+    srv.start(port=0)
     time.sleep(0.1)
     yield srv
     srv.stop()
@@ -816,7 +1021,7 @@ class TestServerRefusesItemsItCannotServe:
 
     def test_classic_blob_paths_are_still_served(self, small_db_server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             assert client.read_symbolic(DB1_AREA, [BLOB, 0, 2]) == bytes.fromhex("1011")
             assert client.read_symbolic(DB1_AREA, [BLOB, 4, 4]) == bytes.fromhex("14151617")
@@ -828,7 +1033,7 @@ class TestServerRefusesItemsItCannotServe:
     @pytest.mark.parametrize("lids", UNRESOLVABLE_PATHS)
     def test_read_with_an_unresolvable_path_is_an_item_error(self, small_db_server: S7CommPlusServer, lids: list[int]) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             with pytest.raises(RuntimeError, match="Symbolic read failed"):
                 client.read_symbolic(DB1_AREA, lids)
@@ -838,7 +1043,7 @@ class TestServerRefusesItemsItCannotServe:
     @pytest.mark.parametrize(("offset", "size"), OUTSIDE_THE_BLOCK)
     def test_read_outside_the_block_is_an_item_error(self, small_db_server: S7CommPlusServer, offset: int, size: int) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             with pytest.raises(RuntimeError, match="Symbolic read failed"):
                 client.read_symbolic(DB1_AREA, [BLOB, offset, size])
@@ -849,7 +1054,7 @@ class TestServerRefusesItemsItCannotServe:
 
     def test_multi_read_answers_each_item_on_its_own(self, small_db_server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             results = client.read_symbolic_multi(
                 [
@@ -868,7 +1073,7 @@ class TestServerRefusesItemsItCannotServe:
     def test_write_with_an_unresolvable_path_writes_nothing(self, small_db_server: S7CommPlusServer, lids: list[int]) -> None:
         before = _db1(small_db_server)
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             with pytest.raises(RuntimeError, match="Write failed"):
                 client.write_symbolic(DB1_AREA, lids, b"\xaa\xbb")
@@ -880,7 +1085,7 @@ class TestServerRefusesItemsItCannotServe:
     def test_write_outside_the_block_writes_nothing(self, small_db_server: S7CommPlusServer, offset: int, size: int) -> None:
         before = _db1(small_db_server)
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             with pytest.raises(RuntimeError, match="Write failed"):
                 client.db_write(1, offset, b"\xaa" * size)
@@ -897,7 +1102,7 @@ class TestServerRefusesItemsItCannotServe:
     ) -> None:
         before = _db1(small_db_server)
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             with pytest.raises(RuntimeError, match="Write failed"):
                 client.write_symbolic(DB1_AREA, [BLOB, offset, size], value)
@@ -907,7 +1112,7 @@ class TestServerRefusesItemsItCannotServe:
 
     def test_write_inside_the_block_still_lands(self, small_db_server: S7CommPlusServer) -> None:
         client = S7CommPlusClient()
-        client.connect("127.0.0.1", port=TEST_PORT)
+        client.connect("127.0.0.1", port=small_db_server.port)
         try:
             client.write_symbolic(DB1_AREA, [BLOB, 14, 2], b"\xaa\xbb")
             assert client.db_read(1, 12, 4) == bytes.fromhex("1c1daabb")
@@ -921,7 +1126,7 @@ class TestServerRefusesItemsItCannotServeAsync:
 
     async def test_read_with_an_unresolvable_path_is_an_item_error(self, small_db_server: S7CommPlusServer) -> None:
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=small_db_server.port)
             assert await client.read_symbolic(DB1_AREA, [BLOB, 4, 4]) == bytes.fromhex("14151617")
             with pytest.raises(RuntimeError):
                 await client.read_symbolic(DB1_AREA, [1, 2])
@@ -931,7 +1136,7 @@ class TestServerRefusesItemsItCannotServeAsync:
     async def test_write_it_cannot_serve_writes_nothing(self, small_db_server: S7CommPlusServer) -> None:
         before = _db1(small_db_server)
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=small_db_server.port)
             with pytest.raises(RuntimeError):
                 await client.write_symbolic(DB1_AREA, [1, 2], b"\xaa\xbb")
             with pytest.raises(RuntimeError):
@@ -941,7 +1146,7 @@ class TestServerRefusesItemsItCannotServeAsync:
     async def test_write_of_a_value_that_is_not_the_address_size_writes_nothing(self, small_db_server: S7CommPlusServer) -> None:
         before = _db1(small_db_server)
         async with S7CommPlusAsyncClient() as client:
-            await client.connect("127.0.0.1", port=TEST_PORT)
+            await client.connect("127.0.0.1", port=small_db_server.port)
             with pytest.raises(RuntimeError):
                 await client.write_symbolic(DB1_AREA, [BLOB, 4, 4], b"\xaa\xbb")
         assert _db1(small_db_server) == before

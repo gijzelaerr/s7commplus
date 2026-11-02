@@ -80,8 +80,14 @@ class SubscriptionItem:
 
     @classmethod
     def from_tag(cls, tag: "SymbolicTag", *, reference_id: int = 0) -> "SubscriptionItem":
-        """Build an item that retains a catalog tag for typed notifications."""
-        return cls(tag.access_area, tag.lids, symbol_crc=tag.symbol_crc, reference_id=reference_id, tag=tag)
+        """Build an item that retains a catalog tag for typed notifications.
+
+        The item carries SymbolCRC 0, like named reads and writes: the browsed
+        per-entry CRC is not the value the PLC validates. PLCSIM Advanced (CPU
+        1511, FW V2.9) answers an item with the browsed CRC with error 0x13 and
+        never sends it a value.
+        """
+        return cls(tag.access_area, tag.lids, reference_id=reference_id, tag=tag)
 
 
 @dataclass(frozen=True)

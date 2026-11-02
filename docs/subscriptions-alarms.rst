@@ -33,8 +33,34 @@ array elements and the members of struct-array elements included; values
 without a conversion, and bytes that are not a valid value of the type, remain
 bytes. Since 0.3.0 this also decodes STRING and WSTRING (by their length
 header), CHAR, WCHAR, the date and time types, and array elements, which 0.2.0
-left as bytes. Explicit ``SubscriptionItem`` values can set symbol CRCs,
-sub-areas, and stable reference IDs.
+left as bytes. Catalog tags and access sequences subscribe with SymbolCRC 0,
+as named reads and writes do (see :doc:`data-access`): the ``symbol_crc``
+reported by a browse is per-entry type metadata, and PLCSIM Advanced answered a
+subscription item that carried it with item error 0x13 and no values. Explicit
+``SubscriptionItem`` values can set symbol CRCs, sub-areas, and stable
+reference IDs.
+
+One subscription request must fit ``client.max_request_bytes``, the request
+frame limit described in :doc:`data-access` (default 900; ``0`` disables the
+check). At the default that is about 40 to 46 items with a one-level LID path,
+fewer with longer paths. ``create_subscription`` raises ``ValueError`` before
+sending a larger request, which the PLC would answer by dropping the
+connection. For more items, call ``create_subscriptions``: it spreads them, in
+order, over as many subscriptions as needed and returns their IDs. Reference
+IDs stay unique across the group (an item without one gets its 1-based
+position), so a value can be matched to its item whichever subscription
+delivered it:
+
+.. code-block:: python
+
+   subscription_ids = client.create_subscriptions(list(catalog), cycle_ms=500)
+
+If creating a subscription after the first fails, ``create_subscriptions``
+raises :class:`~s7commplus.error.S7SubscriptionError` from that failure; its
+``created`` lists the subscriptions already created, which stay active.
+``delete_subscription`` and ``delete_alarm_subscription`` delete the session's
+whole subscription container, so either removes every data and alarm
+subscription of the session, not only the one named.
 
 The synchronous client also provides ``iter_subscription_notifications`` and
 callbacks. The async client provides an async iterator and a queue-like view:
@@ -64,8 +90,10 @@ old ID to its new one (fetch queues and iterators again for the new IDs), and
 ``result.failed`` holds the error for every subscription the PLC rejected, for
 example because a tag was renamed. Those stay pending, so another call retries
 them, and ``forget_lost_subscriptions()`` drops them. Notifications from the
-gap are not replayed, and alarm subscriptions are not restored. The
-synchronous receiver blocks; arrange cancellation by closing the connection.
+gap are not replayed, and alarm subscriptions are not restored. Automatic
+reconnect stands down while subscriptions are live or await ``resubscribe()``
+(see :doc:`connections`). The synchronous receiver blocks until a
+notification arrives or its timeout runs out (see :doc:`connections`).
 
 .. code-block:: python
 
@@ -108,11 +136,13 @@ Alarm notifications
    finally:
        client.delete_alarm_subscription(subscription_id)
 
-The asyncio alarm receiver additionally accepts a timeout:
+Both alarm receivers take a per-call ``timeout`` in seconds; without one they
+wait for the ``notification_timeout`` passed to ``connect()``, else the request
+timeout, and raise ``S7TimeoutError`` when it runs out:
 
 .. code-block:: python
 
-   notification = await client.receive_alarm_notification(timeout=10.0)
+   notification = client.receive_alarm_notification(timeout=600.0)
 
 Alarm and data notifications are routed to their respective receivers when
 the client encounters them on the same connection. Keep one active receive

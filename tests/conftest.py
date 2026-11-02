@@ -18,27 +18,46 @@ def get_free_tcp_port() -> int:
     """Return a TCP port that ``S7CommPlusServer.start()`` can bind *right now*.
 
     Bind a throwaway socket to port 0, let the OS pick an ephemeral port,
-    read it back, then close the socket. Preferred over ``random.randint``
-    for test servers: the OS guarantees the port is currently unused, and
-    the collision window is vanishingly small (the ephemeral range is tens
-    of thousands of ports wide) instead of 1-in-5000 from a random pick
-    that drifts toward collision under pytest-xdist or repeated reruns.
+    read it back, then close the socket.
+
+    To run an emulator, prefer ``start(port=0)`` and ``S7CommPlusServer.port``:
+    the OS then picks the port at bind time and no other socket can take it
+    in between. Ports from here come from the ephemeral range that outgoing
+    connections also use, and a port picked long before it is bound has been
+    seen taken (#132). Use this helper for a port that nothing should listen
+    on, or for a non-emulator listener.
 
     The probe binds the way the emulator does: the wildcard address with
     ``SO_REUSEADDR``. A port that is free on 127.0.0.1 alone can still be
     taken on another interface, and the emulator's wildcard bind then fails
     with "Address already in use" (seen on a macOS CI runner).
 
-    There is a tiny TOCTOU race between closing this socket and the test
-    server binding, but the pool is large enough that it is not observed
-    in practice. Servers that set ``SO_REUSEADDR`` tolerate lingering
-    TIME_WAIT sockets too.
+    There is a TOCTOU race between closing this socket and binding the port
+    again, which grows with the time in between. Servers that set
+    ``SO_REUSEADDR`` tolerate lingering TIME_WAIT sockets.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("0.0.0.0", 0))
         port: int = s.getsockname()[1]
         return port
+
+
+def get_free_tcp_ports(count: int) -> list[int]:
+    """Return ``count`` distinct ports, each free like `get_free_tcp_port`.
+
+    The probes stay bound until all ports are picked, so the OS cannot hand
+    out the same port twice.
+    """
+    probes = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(count)]
+    try:
+        for probe in probes:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("0.0.0.0", 0))
+        return [probe.getsockname()[1] for probe in probes]
+    finally:
+        for probe in probes:
+            probe.close()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

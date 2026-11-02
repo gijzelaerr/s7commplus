@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its previous run; master runs to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: test (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -19,6 +24,13 @@ jobs:
         # Oldest and newest supported GitHub-hosted image per platform.
         os: [ubuntu-22.04, ubuntu-26.04, macos-15, macos-26, windows-2022, windows-2025]
         python-version: ["3.10", "3.14"]
+        # GitHub runs few macOS jobs at a time, so each macOS image tests one
+        # Python: the oldest image the oldest Python, the newest the newest.
+        exclude:
+          - os: macos-15
+            python-version: "3.14"
+          - os: macos-26
+            python-version: "3.10"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

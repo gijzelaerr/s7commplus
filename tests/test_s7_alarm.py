@@ -15,6 +15,7 @@ from s7commplus.alarm import (
 )
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
+from s7commplus.error import S7ReturnValueError
 from s7commplus.protocol import DataType, ElementID, FunctionCode, Ids, Opcode, ProtocolVersion
 from s7commplus.subscription import SubscriptionItem
 from s7commplus.vlq import encode_uint32_vlq, encode_uint64_vlq
@@ -157,6 +158,20 @@ def test_parse_alarm_explore_response_with_language_filter() -> None:
     assert alarm.texts == {1031: AlarmText(1031, "Info", "Alarm 4 =F6+S2-G1", ("",) * 9)}
 
 
+def test_parse_alarm_explore_response_error_return_value() -> None:
+    # Synthetic ReturnValue: error flag set, signed code -1 in the low 16 bits
+    response = encode_uint64_vlq(0x800000000000FFFF) + struct.pack(">I", 0)
+    with pytest.raises(S7ReturnValueError, match="Alarm browse failed") as excinfo:
+        parse_alarm_explore_response(response)
+    assert excinfo.value.error_code == -1
+    assert excinfo.value.return_value == 0x800000000000FFFF
+
+
+def test_parse_alarm_explore_response_truncated_explore_id() -> None:
+    with pytest.raises(ValueError, match="truncated"):
+        parse_alarm_explore_response(b"\x00\x00")
+
+
 def test_parse_alarm_notification() -> None:
     notification = parse_alarm_notification(_notification_frame())
     assert notification.subscription_id == 0x11223344
@@ -215,6 +230,32 @@ async def test_async_alarm_client_apis() -> None:
     assert (await client.receive_alarm_notification(timeout=1)).sequence_number == 12
     client._recv_cotp_dt.assert_awaited_once()
     await client.delete_alarm_subscription(0x55667788)
+
+
+def test_sync_read_alarms_raises_on_plc_error() -> None:
+    client = S7CommPlusClient()
+    connection = MagicMock()
+    connection.protocol_version = ProtocolVersion.V2
+    connection.send_request.return_value = bytes.fromhex("c08895b080e6a5fff4000000000e00000000")
+    client._connection = connection
+
+    with pytest.raises(S7ReturnValueError, match="^Alarm browse failed") as excinfo:
+        client.read_alarms([1031])
+    assert excinfo.value.error_code == -12
+    assert excinfo.value.return_value == 0x8020AB001992FFF4
+
+
+@pytest.mark.asyncio
+async def test_async_read_alarms_raises_on_plc_error() -> None:
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    client._protocol_version = ProtocolVersion.V2
+    client._send_request = AsyncMock(return_value=bytes.fromhex("c08895b080e6a5fff4000000000e00000000"))
+
+    with pytest.raises(S7ReturnValueError, match="^Alarm browse failed") as excinfo:
+        await client.read_alarms([1031])
+    assert excinfo.value.error_code == -12
+    assert excinfo.value.return_value == 0x8020AB001992FFF4
 
 
 def test_sync_alarm_receive_routes_interleaved_data_notification() -> None:

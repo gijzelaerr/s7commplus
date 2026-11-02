@@ -3,18 +3,22 @@
 import asyncio
 import hashlib
 import hmac
+import importlib.util
 import struct
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from s7commplus.client import (
+    ProgramObject,
     S7CommPlusClient,
     _build_read_payload,
     _parse_read_response,
     _build_write_payload,
     _parse_write_response,
     _build_explore_request,
+    _parse_program_objects,
     _parse_cpu_state,
     _parse_explore_datablocks,
     _build_area_read_payload,
@@ -202,16 +206,109 @@ def test_area_byte_offset_uses_classic_blob_marker_and_zero_based_offset(payload
     assert lids == [Ids.LID_OMS_STB_CLASSIC_BLOB, 12, 4]
 
 
+_PLCSIM_FIXTURE = Path(__file__).parent / "fixtures" / "plcsim_cpu_exec_unit_20261008.py"
+_plcsim_spec = importlib.util.spec_from_file_location("plcsim_cpu_exec_unit_20261008", _PLCSIM_FIXTURE)
+assert _plcsim_spec is not None and _plcsim_spec.loader is not None
+plcsim = importlib.util.module_from_spec(_plcsim_spec)
+_plcsim_spec.loader.exec_module(plcsim)
+
+
+def _operating_state_attribute(code: bytes, struct_id: bytes = bytes.fromhex("00000d99")) -> bytes:
+    """Attribute 0x8BD with OperatingState (0xD9E) between two other members, as PLCSIM sends it."""
+    return bytes.fromhex("a3913d0017") + struct_id + bytes.fromhex("9b1a000800") + bytes.fromhex("9b1e0008") + code + b"\x00"
+
+
 class TestParseCpuState:
     # Exact attribute sequence isolated by the hardware RUN/STOP capture in #878.
     RUN_ATTRIBUTES = bytes.fromhex("a3bf0000030001a3bf0100030007a3be5400030000")
     STOP_ATTRIBUTES = bytes.fromhex("a3bf0000030000a3bf0100030000a3be540003ffff")
+    # The operating-state struct exactly as the PLCSIM captures carry it.
+    PLCSIM_STATE_RUN = bytes.fromhex(
+        "a3913d001700000d999b1a0008009b1b000c000000009b1c000b00019b1d000c000080009b1e0008089b1f0014000000"
+    )
+    PLCSIM_STATE_STOP = PLCSIM_STATE_RUN.replace(bytes.fromhex("9b1e000808"), bytes.fromhex("9b1e000804"))
 
     def test_run_capture(self) -> None:
         assert _parse_cpu_state(b"\x00\x00" + self.RUN_ATTRIBUTES + b"\xa2") == "RUN"
 
     def test_stop_capture(self) -> None:
         assert _parse_cpu_state(b"\x00\x00" + self.STOP_ATTRIBUTES + b"\xa2") == "STOP"
+
+    @pytest.mark.parametrize(
+        ("response", "expected"),
+        [
+            (plcsim.explore_cpu_exec_unit_run, "RUN"),
+            (plcsim.explore_cpu_exec_unit_run_after_restart, "RUN"),
+            (plcsim.explore_cpu_exec_unit_stop, "STOP"),
+        ],
+        ids=["run", "run-after-restart", "stop"],
+    )
+    def test_plcsim_capture(self, response: bytes, expected: str) -> None:
+        # PLCSIM Advanced in RUN reports 0x1F80/0x1F81 as 0/10 or 0/8, which the
+        # hardware-derived pair check alone read as UNKNOWN.
+        assert _parse_cpu_state(response) == expected
+
+    def test_plcsim_captures_carry_the_state_struct(self) -> None:
+        assert self.PLCSIM_STATE_RUN in plcsim.explore_cpu_exec_unit_run
+        assert self.PLCSIM_STATE_RUN in plcsim.explore_cpu_exec_unit_run_after_restart
+        assert self.PLCSIM_STATE_STOP in plcsim.explore_cpu_exec_unit_stop
+
+    def test_state_struct_alone(self) -> None:
+        assert _parse_cpu_state(self.PLCSIM_STATE_RUN) == "RUN"
+        assert _parse_cpu_state(self.PLCSIM_STATE_STOP) == "STOP"
+
+    def test_state_code_decides_over_load_attributes(self) -> None:
+        # 0x1F80/0x1F81 are cycle-load values; the state code wins when present.
+        assert _parse_cpu_state(self.PLCSIM_STATE_RUN + self.STOP_ATTRIBUTES) == "RUN"
+        assert _parse_cpu_state(self.STOP_ATTRIBUTES + self.PLCSIM_STATE_RUN) == "RUN"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            _operating_state_attribute(b"\x00"),  # no state
+            _operating_state_attribute(b"\x06"),  # startup-family code, not pinned
+            _operating_state_attribute(b"\x08") + _operating_state_attribute(b"\x04"),  # conflicting duplicate
+            # An unpinned code is not overridden by the fallback attributes.
+            _operating_state_attribute(b"\x06") + bytes.fromhex("a3bf0000030001a3bf0100030007"),
+        ],
+    )
+    def test_unknown_state_code(self, response: bytes) -> None:
+        assert _parse_cpu_state(response) == "UNKNOWN"
+
+    def test_state_code_is_signed_vlq(self) -> None:
+        # DINT values are signed VLQs; 0x7f is -1, not 127, and a multi-byte 8 is still 8.
+        assert _parse_cpu_state(_operating_state_attribute(b"\x7f")) == "UNKNOWN"
+        assert _parse_cpu_state(_operating_state_attribute(b"\x80\x08")) == "RUN"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            bytes.fromhex("a3913d00170000"),  # truncated struct id
+            bytes.fromhex("a3913d0003000008"),  # attribute is not a struct
+            bytes.fromhex("a3913d001700000d999b1e000208"),  # member is USINT, not DINT
+            bytes.fromhex("a3913d001700000d999b1e001008"),  # member flagged as an array
+            bytes.fromhex("a3913d001700000d999b1e0008"),  # value missing
+            bytes.fromhex("a3913d001700000d99009b1e000808"),  # member after the terminator
+            bytes.fromhex("a3913d001700000d99812000ff009b1e000808"),  # unwalkable member type
+        ],
+    )
+    def test_malformed_state_struct_is_unknown(self, response: bytes) -> None:
+        assert _parse_cpu_state(response) == "UNKNOWN"
+
+    def test_state_struct_with_another_id_is_not_read(self) -> None:
+        # Every capture carries struct id 0xD99; a struct with another id is ignored.
+        other_id = bytes.fromhex("00000d9a")
+        assert _parse_cpu_state(_operating_state_attribute(b"\x08", struct_id=other_id)) == "UNKNOWN"
+        assert _parse_cpu_state(_operating_state_attribute(b"\x08", struct_id=other_id) + self.STOP_ATTRIBUTES) == "STOP"
+
+    def test_malformed_state_struct_falls_back_to_load_attributes(self) -> None:
+        assert _parse_cpu_state(bytes.fromhex("a3913d001700000d999b1e000208") + self.STOP_ATTRIBUTES) == "STOP"
+
+    @pytest.mark.parametrize("capture", ["explore_cpu_exec_unit_run", "explore_cpu_exec_unit_stop"])
+    def test_truncated_capture_never_raises(self, capture: str) -> None:
+        response = getattr(plcsim, capture)
+        for end in range(len(response) + 1):
+            assert _parse_cpu_state(response[:end]) in ("RUN", "STOP", "UNKNOWN")
 
     @pytest.mark.parametrize(
         "response",
@@ -828,6 +925,44 @@ class TestClientErrorPaths:
 class TestExploreDatablocks:
     """Test the EXPLORE(thePLCProgram) request format and DB-list parser."""
 
+    # Live S7-1500 (6ES7 512-1CK01-0AB0, FW V2.9) reply to the request list_datablocks()
+    # sends, cut down to DB1 and DB2:
+    #   _build_explore_request(Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER])
+    # The data blocks are children of PLCProgram (RID 3), and the reply carries 5 bytes
+    # after the ReturnValue and a 4-byte trailer that the walk has to skip.
+    _REAL_PROGRAM_TREE = bytes.fromhex(
+        "00000000010ca10000000393583000a3816900150a504c4350726f6772616da18a0e0001940e2000a38169001509526561"
+        "645f6f6e6c79a3935900030001a2a18a0e0002940e2000a3816900150c446174615f626c6f636b5f32a3935900030002a2"
+        "a200000000"
+    )
+
+    # The same PLC's reply with the language and auto numbering added to the filter, cut down to
+    # DB1 and DB2:
+    #   _build_explore_request(
+    #       Ids.NATIVE_THE_PLC_PROGRAM_RID,
+    #       [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER, Ids.BLOCK_AUTO_NUMBERING, Ids.BLOCK_BLOCK_LANGUAGE],
+    #   )
+    # Each DB carries the language as a UINT, ``a3 93 5b 00 03 00 05`` (5 = DB), then auto
+    # numbering as a BOOL, ``a3 93 5a 00 01 00`` (both DBs were numbered by hand).
+    _REAL_PROGRAM_TREE_WITH_LANGUAGE = bytes.fromhex(
+        "00000000010aa10000000393583000a3816900150a504c4350726f6772616da18a0e0001940e2000a38169001509526561"
+        "645f6f6e6c79a3935900030001a3935b00030005a3935a000100a2a18a0e0002940e2000a3816900150c446174615f626c"
+        "6f636b5f32a3935900030002a3935b00030005a3935a000100a2a200000000"
+    )
+
+    def test_parse_real_program_tree(self) -> None:
+        objects = _parse_program_objects(self._REAL_PROGRAM_TREE)
+        assert [(obj.rid, obj.class_id, obj.name, obj.block_number, obj.language) for obj in objects] == [
+            (0x8A0E0001, Ids.DB_CLASS_RID, "Read_only", 1, None),
+            (0x8A0E0002, Ids.DB_CLASS_RID, "Data_block_2", 2, None),
+            (Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram", None, None),
+        ]
+        assert [db.number for db in _parse_explore_datablocks(self._REAL_PROGRAM_TREE)] == [1, 2]
+
+    def test_parse_real_program_tree_language(self) -> None:
+        dbs = _parse_explore_datablocks(self._REAL_PROGRAM_TREE_WITH_LANGUAGE)
+        assert [(db.number, db.name, db.language) for db in dbs] == [(1, "Read_only", "DB"), (2, "Data_block_2", "DB")]
+
     def test_build_explore_request_format(self) -> None:
         # ExploreId as a fixed UInt32, then the marker bytes, address count + ids,
         # and a 5-byte trailer (UInt32 fill + filler byte) for the IntegrityId splice.
@@ -865,8 +1000,43 @@ class TestExploreDatablocks:
 
         dbs = _parse_explore_datablocks(bytes(r))
         assert len(dbs) == 1
-        assert dbs[0]["number"] == 42
-        assert dbs[0]["rid"] == Ids.DB_ACCESS_AREA_BASE | 42
+        assert dbs[0].number == 42
+        assert dbs[0].rid == Ids.DB_ACCESS_AREA_BASE | 42
+
+    def test_program_objects_take_their_number_from_block_number(self) -> None:
+        # Block.BlockNumber as a lab S7-1500 sends it: flags 0, UINT, two bytes big-endian
+        fb = (
+            bytearray([ElementID.START_OF_OBJECT])
+            + struct.pack(">I", 0x8A120005)
+            + encode_uint32_vlq(Ids.FB_CLASS_RID)
+            + b"\x00\x00"
+        )
+        fb += (
+            bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.BLOCK_BLOCK_NUMBER) + bytes([0x00, DataType.UINT]) + b"\x00\x05"
+        )
+        fb += bytes([ElementID.TERMINATING_OBJECT])
+        program = bytearray([ElementID.START_OF_OBJECT]) + struct.pack(">I", Ids.NATIVE_THE_PLC_PROGRAM_RID)
+        program += encode_uint32_vlq(Ids.PLC_PROGRAM_CLASS_RID) + b"\x00\x00" + fb + bytes([ElementID.TERMINATING_OBJECT])
+        objects = _parse_program_objects(encode_uint64_vlq(0) + bytes(program))
+        assert [(obj.rid, obj.block_number, obj.number) for obj in objects] == [
+            (0x8A120005, 5, 5),
+            (Ids.NATIVE_THE_PLC_PROGRAM_RID, None, None),  # not a block, so no number, not 3
+        ]
+        # A data block without the attribute keeps the number from its RelationId
+        assert _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(7))[0].number == 7
+
+    def test_parse_explore_datablocks_warns_on_an_undecodable_attribute(self, caplog: pytest.LogCaptureFixture) -> None:
+        # Attribute 0x9DF with datatype 0xFF, which the codec does not know
+        r = encode_uint64_vlq(0) + self._db_object(7, extra_attributes=bytes([ElementID.ATTRIBUTE, 0x93, 0x5F, 0x00, 0xFF]))
+        with caplog.at_level("WARNING", logger="s7commplus.client"):
+            assert _parse_explore_datablocks(r) == []
+        assert "undecodable value of attribute 2527" in caplog.text
+
+    def test_parse_explore_datablocks_warns_when_the_reply_ends_inside_an_object(self, caplog: pytest.LogCaptureFixture) -> None:
+        r = encode_uint64_vlq(0) + self._db_object(7)[:-1]  # without the TerminatingObject
+        with caplog.at_level("WARNING", logger="s7commplus.client"):
+            assert _parse_explore_datablocks(r) == []
+        assert "ends inside 1 open object(s)" in caplog.text
 
     @staticmethod
     def _db_object(db_number: int, name: bytes = b"DataBlock_1", extra_attributes: bytes = b"") -> bytes:
@@ -888,16 +1058,29 @@ class TestExploreDatablocks:
     def test_parse_explore_datablocks_defaults_without_block_metadata(self) -> None:
         r = encode_uint64_vlq(0) + self._db_object(7)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs == [
-            {
-                "name": "DataBlock_1",
-                "number": 7,
+        assert dbs == [ProgramObject(Ids.DB_ACCESS_AREA_BASE | 7, Ids.DB_CLASS_RID, "DataBlock_1")]
+        assert dbs[0].number == 7
+
+    def test_program_object_keeps_the_dict_interface_list_datablocks_used_to_return(self) -> None:
+        block = ProgramObject(Ids.DB_ACCESS_AREA_BASE | 7, Ids.DB_CLASS_RID, "DataBlock_1")
+        with pytest.warns(DeprecationWarning, match=r'block\["\w+"\] is deprecated; read block\.\w+ instead'):
+            assert (block["number"], block["name"]) == (7, "DataBlock_1")
+            assert (block.get("number"), block.get("size"), block.get("size", 0)) == (7, None, 0)
+            assert "number" in block
+            assert "size" not in block
+            assert dict(block) == {
                 "rid": Ids.DB_ACCESS_AREA_BASE | 7,
+                "class_id": Ids.DB_CLASS_RID,
+                "name": "DataBlock_1",
                 "language": None,
                 "knowhow_protected": False,
                 "unlinked": False,
+                "block_number": None,
+                "number": 7,
             }
-        ]
+        assert list(block) == list(block.keys())
+        assert len(block) == 8
+        assert {block} == {ProgramObject(Ids.DB_ACCESS_AREA_BASE | 7, Ids.DB_CLASS_RID, "DataBlock_1")}
 
     def test_parse_explore_datablocks_reports_knowhow_protection(self) -> None:
         # KnowhowProtected (0x9DC) is struct 0xD77; its presence marks the block.
@@ -914,8 +1097,8 @@ class TestExploreDatablocks:
         )
         r = encode_uint64_vlq(0) + self._db_object(8, extra_attributes=knowhow)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["knowhow_protected"] is True
-        assert dbs[0]["language"] is None
+        assert dbs[0].knowhow_protected is True
+        assert dbs[0].language is None
 
     def test_parse_explore_datablocks_reports_language(self) -> None:
         from s7commplus.protocol import Ids
@@ -925,8 +1108,8 @@ class TestExploreDatablocks:
         )
         r = encode_uint64_vlq(0) + self._db_object(9, extra_attributes=language)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["language"] == "SCL"
-        assert dbs[0]["knowhow_protected"] is False
+        assert dbs[0].language == "SCL"
+        assert dbs[0].knowhow_protected is False
 
     def test_parse_explore_datablocks_reports_unknown_language(self) -> None:
         language = (
@@ -934,7 +1117,7 @@ class TestExploreDatablocks:
         )
         r = encode_uint64_vlq(0) + self._db_object(10, extra_attributes=language)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["language"] == "language 123"
+        assert dbs[0].language == "language 123"
 
     def test_parse_explore_datablocks_language_codes_at_and_above_128(self) -> None:
         # A USINT code of 0x80+ would look like a VLQ continuation if decoded
@@ -944,7 +1127,7 @@ class TestExploreDatablocks:
             bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.BLOCK_BLOCK_LANGUAGE) + bytes([0x00, DataType.USINT, 201])
         )
         dbs = _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(12, extra_attributes=motion_db))
-        assert dbs[0]["language"] == "MOTION_DB"
+        assert dbs[0].language == "MOTION_DB"
 
         as_uint = (
             bytes([ElementID.ATTRIBUTE])
@@ -953,7 +1136,7 @@ class TestExploreDatablocks:
             + struct.pack(">H", 300)
         )
         dbs = _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(13, extra_attributes=as_uint))
-        assert dbs[0]["language"] == "GRAPH_ACTIONS"  # 300 is a defined code
+        assert dbs[0].language == "GRAPH_ACTIONS"  # 300 is a defined code
 
         unknown_uint = (
             bytes([ElementID.ATTRIBUTE])
@@ -962,13 +1145,13 @@ class TestExploreDatablocks:
             + struct.pack(">H", 1234)
         )
         dbs = _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(14, extra_attributes=unknown_uint))
-        assert dbs[0]["language"] == "language 1234"
+        assert dbs[0].language == "language 1234"
 
     def test_parse_explore_datablocks_reports_unlinked(self) -> None:
         unlinked = bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.BLOCK_UNLINKED) + bytes([0x00, DataType.BOOL, 1])
         r = encode_uint64_vlq(0) + self._db_object(11, extra_attributes=unlinked)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["unlinked"] is True
+        assert dbs[0].unlinked is True
 
 
 class TestBlockLanguage:
@@ -1005,7 +1188,7 @@ class TestReassembledPayload:
         conn = S7CommPlusConnection("127.0.0.1", 102)
         it = iter(chunks)
 
-        def fake_recv() -> bytes:
+        def fake_recv(timeout: float | None = None) -> bytes:
             return next(it, b"")
 
         conn._recv_s7_data = fake_recv  # type: ignore[method-assign]

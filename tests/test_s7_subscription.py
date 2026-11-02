@@ -75,7 +75,8 @@ class TestSubscriptionItem:
 
         assert item.tag is tag
         assert item.reference_id == 4
-        assert item.symbol_crc == 7
+        # Regression: the browsed CRC made PLCSIM Advanced reject the item (error 0x13).
+        assert item.symbol_crc == 0
 
 
 class TestSubscriptionRequest:

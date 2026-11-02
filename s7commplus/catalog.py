@@ -7,10 +7,13 @@ from collections.abc import Iterator
 from typing import Any, Optional
 
 from . import values
+from .codec import PValueArray
 from .protocol import DataType
 from .typeinfo import Softdatatype
 
 
+# The scalar PValue type of each softdatatype (``SymbolicTag.datatype``). write_tags()
+# sends it, except for the types in _WRITE_FORMS.
 _WIRE_TYPES: dict[Softdatatype, DataType] = {
     Softdatatype.BOOL: DataType.BOOL,
     Softdatatype.BBOOL: DataType.BOOL,
@@ -40,6 +43,19 @@ _WIRE_TYPES: dict[Softdatatype, DataType] = {
     Softdatatype.LTIME: DataType.TIMESPAN,
     Softdatatype.LTOD: DataType.ULINT,
     Softdatatype.LDT: DataType.TIMESTAMP,
+}
+
+# The forms write_tags() sends for four types: a CHAR as a USINT, a STRING and a WSTRING
+# as USINT and UINT arrays of [max length, length, characters...], and a DATE_AND_TIME as
+# an array of its eight BCD bytes. An S7-1500 (CPU 1512SP-1 PN, FW V2.9, TLS; #105) and
+# PLCSIM Advanced V8 (CPU 1511, FW V2.9 with TLS and FW V2.8 without) accept these and
+# read them back, and refuse the scalar forms 0.3.0 and earlier sent, the _WIRE_TYPES entries. Not
+# checked on an S7-1200.
+_WRITE_FORMS: dict[Softdatatype, DataType | PValueArray] = {
+    Softdatatype.CHAR: DataType.USINT,
+    Softdatatype.STRING: PValueArray(DataType.USINT),
+    Softdatatype.WSTRING: PValueArray(DataType.UINT),
+    Softdatatype.DATEANDTIME: PValueArray(DataType.USINT),
 }
 
 
@@ -112,7 +128,8 @@ class SymbolicTag:
     def encode_value(self, value: Any) -> bytes:
         """Encode a Python value to this tag's raw bytes (see :func:`s7commplus.values.encode`).
 
-        The result is in the layout :meth:`Client.read_tags` returns for this tag.
+        The result is in the layout :meth:`Client.read_tags` returns for this tag,
+        which :meth:`Client.write_tags` takes.
 
         Raises:
             TypeError: ``value`` has the wrong Python type for the tag.
@@ -121,6 +138,11 @@ class SymbolicTag:
                 unknown or out of range.
         """
         return values.encode(self.softdatatype, value, string_length=self.string_length)
+
+
+def _write_type(tag: SymbolicTag) -> DataType | PValueArray | None:
+    """The PValue type ``write_tags`` sends ``tag`` as (``None`` if unsupported); see ``_WRITE_FORMS``."""
+    return _WRITE_FORMS.get(tag.softdatatype, tag.datatype)
 
 
 @dataclass(frozen=True)

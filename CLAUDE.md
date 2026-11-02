@@ -212,6 +212,10 @@ server emulator or captured byte fixtures when possible.
 - Exercise both sync and async clients when shared user-visible behavior changes.
 - Use `S7CommPlusServer` for end-to-end client/server behavior that does not
   require actual firmware.
+- Start emulators on ports from `get_free_tcp_port()` or `get_free_tcp_ports(n)`
+  in `tests/conftest.py`, never on a fixed port: two test runs at once would share
+  an emulator and fail at random. `tests/test_no_fixed_test_ports.py` fails on
+  any four- or five-digit port literal under `tests/`.
 - Keep binary fixtures immutable unless intentionally replacing their known
   source/expected pair; do not reformat or normalize `.bin` data.
 - Tests of authentication transformations should retain known-answer vectors.

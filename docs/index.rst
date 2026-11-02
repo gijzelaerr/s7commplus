@@ -30,6 +30,7 @@ choose the guide that matches the PLC operation you need.
    :caption: User guide
 
    getting-started
+   cli
    connections
    data-access
    subscriptions-alarms

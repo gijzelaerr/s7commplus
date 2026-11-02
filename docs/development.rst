@@ -35,6 +35,32 @@ Real-PLC tests are opt-in and require an explicitly selected, disposable test
 DB. Follow :doc:`real-plc-testing` for TLS configuration, the safe runner, and
 sanitized evidence collection.
 
+``pip install -e '.[test]'`` keeps an installed dependency that still satisfies
+the new requirements, so after a test dependency changes, add ``--upgrade`` to
+pick up its newest allowed release (for example the ``gherkin-official`` that
+``pytest-bdd`` 9 allows, which no longer emits a ``DeprecationWarning``).
+
+Emulator tests
+--------------
+
+Tests that start ``S7CommPlusServer`` take their port from
+``get_free_tcp_port()`` or ``get_free_tcp_ports(n)`` in ``tests/conftest.py``.
+A fixed port lets two test runs at once, such as two checkouts or several
+branches tested in parallel, start emulators on the same port, so a client can
+reach the other run's emulator. ``tests/test_no_fixed_test_ports.py`` fails on
+any four- or five-digit port literal under ``tests/``. Port 102, the S7 default
+for real PLCs, is allowed.
+
+Continuous integration
+----------------------
+
+Every pull request runs ``quality`` (type checks, lint, docs, build and
+package checks) and the test matrix: Python 3.10 and 3.14 on two Ubuntu and two
+Windows images, and on macOS one Python per image (``macos-15`` with 3.10,
+``macos-26`` with 3.14), because GitHub runs few macOS jobs at a time. Branch
+protection on ``master`` requires all of these checks, so auto-merge waits
+for them. A new push to a pull request cancels its previous run.
+
 Build the documentation
 -----------------------
 

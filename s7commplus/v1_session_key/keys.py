@@ -40,6 +40,9 @@ class UnknownPublicKeyError(LookupError):
         super().__init__(f"No public key for fingerprint {fingerprint!r}")
         self.fingerprint = fingerprint
 
+    def __reduce__(self) -> tuple[type["UnknownPublicKeyError"], tuple[str]]:
+        return type(self), (self.fingerprint,)
+
 
 # Public keys, keyed by (family, key_id). Vendored verbatim from
 # bonk-dev/HarpoS7/HarpoS7.PublicKeys/Keys/{family}/{key_id}.bin.

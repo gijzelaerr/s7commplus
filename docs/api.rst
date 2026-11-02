@@ -12,6 +12,9 @@ Clients
    :members:
    :undoc-members:
 
+.. autoclass:: s7commplus.ProgramObject
+   :members:
+
 Symbolic tags
 -------------
 
@@ -76,4 +79,4 @@ Exceptions
 ----------
 
 .. automodule:: s7commplus.error
-   :members: S7Error, S7ConnectionError, S7ProtocolError, S7TimeoutError, S7AuthenticationError, S7RateLimitError
+   :members: S7Error, S7ConnectionError, S7CertificateError, S7TlsHandshakeError, S7ProtocolError, S7ReturnValueError, S7TimeoutError, S7AuthenticationError, S7RateLimitError, S7WriteError, S7SubscriptionError

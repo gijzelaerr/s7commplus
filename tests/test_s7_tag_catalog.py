@@ -61,10 +61,10 @@ class TestSymbolCatalog:
 class TestNamedTagIO:
     def test_resolve_catalog_is_cached(self) -> None:
         client = S7CommPlusClient()
-        client.browse = MagicMock(return_value=[_browse_item()])  # type: ignore[method-assign]
+        client._browse_layout = MagicMock(return_value=([_browse_item()], [], {}))  # type: ignore[method-assign]
 
         assert client.resolve_tag("DB1.Motor.Speed") is client.resolve_tag("DB1.Motor.Speed")
-        client.browse.assert_called_once()
+        client._browse_layout.assert_called_once()
 
     def test_read_tags_returns_per_item_results(self) -> None:
         client = S7CommPlusClient()
@@ -104,13 +104,13 @@ class TestNamedTagIO:
 
     def test_failed_read_is_reported_without_refresh_or_retry(self) -> None:
         client = S7CommPlusClient()
-        client.browse = MagicMock(return_value=[_browse_item(crc=1)])  # type: ignore[method-assign]
+        client._browse_layout = MagicMock(return_value=([_browse_item(crc=1)], [], {}))  # type: ignore[method-assign]
         client.read_symbolic_multi = MagicMock(return_value=[None])  # type: ignore[method-assign]
 
         with pytest.raises(RuntimeError, match="Symbolic read failed"):
             client.read_tag("DB1.Motor.Speed")
         client.read_symbolic_multi.assert_called_once()
-        client.browse.assert_called_once()
+        client._browse_layout.assert_called_once()
 
     def test_write_uses_resolved_datatype_and_reports_item_errors(self) -> None:
         client = S7CommPlusClient()
@@ -157,13 +157,13 @@ class TestNamedTagIO:
 @pytest.mark.asyncio
 async def test_async_read_tag_sends_zero_crc_without_retry() -> None:
     client = S7CommPlusAsyncClient()
-    client.browse = AsyncMock(return_value=[_browse_item(crc=0x12345678)])  # type: ignore[method-assign]
+    client._browse_layout = AsyncMock(return_value=([_browse_item(crc=0x12345678)], [], {}))  # type: ignore[method-assign]
     client.read_symbolic_multi = AsyncMock(return_value=[None])  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="Symbolic read failed"):
         await client.read_tag("DB1.Motor.Speed")
     client.read_symbolic_multi.assert_awaited_once_with([(0x8A0E0001, [0xA, 0x2], 0)])
-    client.browse.assert_awaited_once()
+    client._browse_layout.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -13,9 +13,11 @@ Reference: thomas-v2/S7CommPlusDriver/Core/S7p.cs
 """
 
 import struct
+from dataclasses import dataclass
 from typing import Any, Optional
 
-from .protocol import PROTOCOL_ID, DataType, ElementID, Ids, ObjectId, ProtocolVersion
+from .error import S7ReturnValueError
+from .protocol import PROTOCOL_ID, DataType, ElementID, Ids, ObjectId, ProtocolVersion, service_result_code
 from .vlq import (
     decode_uint32_vlq,
     decode_uint64_vlq,
@@ -147,6 +149,32 @@ def decode_response_header(data: bytes, offset: int = 0) -> dict[str, Any]:
         "transport_flags": transport_flags,
         "bytes_consumed": 14,
     }
+
+
+def parse_or_raise_for_return_value(response: bytes, operation: str) -> int:
+    """Raise if a response's leading ReturnValue is truncated or non-zero.
+
+    The low 16 bits of an error ReturnValue hold a signed error code (see `service_result_code`).
+
+    Args:
+        response: Raw response payload, starting with the ReturnValue.
+        operation: Operation named in the error message, e.g. "EXPLORE of 0x00000003".
+
+    Returns:
+        Offset of the first byte after the ReturnValue.
+
+    Raises:
+        ValueError: If the ReturnValue is truncated.
+        S7ReturnValueError: If the ReturnValue is non-zero.
+    """
+    try:
+        return_value, offset = decode_uint64_vlq(response, 0)
+    except ValueError as error:
+        raise ValueError(f"{operation}: truncated ReturnValue") from error
+    if return_value != 0:
+        code = service_result_code(return_value)
+        raise S7ReturnValueError(f"{operation} failed: PLC returned 0x{return_value:016X} (error {code})", return_value, response)
+    return offset
 
 
 # -- Fixed-width encoding (big-endian) --
@@ -391,6 +419,29 @@ def encode_pvalue_blob(data: bytes) -> bytes:
     return bytes(result)
 
 
+@dataclass(frozen=True)
+class PValueArray:
+    """A write type sent as an array PValue of ``element``.
+
+    PLCs take some types this way: a STRING as a USINT array of
+    ``[max length, length, characters...]``, a WSTRING as a UINT array of the
+    same shape, and a DATE_AND_TIME as its eight BCD bytes (see
+    ``catalog._WRITE_FORMS``).
+    """
+
+    element: DataType
+
+
+def encode_pvalue_array(element: DataType, data: bytes) -> bytes:
+    """Encode raw big-endian elements as an array PValue of fixed-size ``element``."""
+    size = _pvalue_element_size(element)
+    if size == 0:
+        raise ValueError(f"{DataType(element).name} arrays are not supported for writing")
+    if len(data) % size:
+        raise ValueError(f"{DataType(element).name} array data must be a multiple of {size} bytes, got {len(data)}")
+    return bytes((0x10, element)) + encode_uint32_vlq(len(data) // size) + data
+
+
 def encode_pvalue_typed(datatype: DataType, data: bytes) -> bytes:
     """Encode already-serialized value bytes with an explicit PValue type.
 
@@ -445,6 +496,18 @@ def encode_pvalue_typed(datatype: DataType, data: bytes) -> bytes:
     return bytes(result)
 
 
+def _pack_decoded(fmt: str, value: int) -> bytes:
+    """Pack a value decoded from a VLQ, refusing one too large for ``fmt``.
+
+    A VLQ can carry more bits than the fixed-width type it stands for, so a
+    malformed PValue would otherwise surface as ``struct.error``.
+    """
+    try:
+        return struct.pack(fmt, value)
+    except struct.error as exc:
+        raise ValueError(f"PValue value {value} does not fit {fmt}") from exc
+
+
 def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     """Decode a PValue from S7CommPlus response to raw bytes.
 
@@ -497,7 +560,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     elif datatype == DataType.UDINT:
         val, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">I", val), consumed
+        return _pack_decoded(">I", val), consumed
     elif datatype == DataType.DWORD:
         # ValueDWord is a fixed 4-byte big-endian value, not VLQ.
         return data[offset + consumed : offset + consumed + 4], consumed + 4
@@ -507,7 +570,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
         val, c = decode_int32_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">i", val), consumed
+        return _pack_decoded(">i", val), consumed
     elif datatype == DataType.REAL:
         return data[offset + consumed : offset + consumed + 4], consumed + 4
     elif datatype == DataType.LREAL:
@@ -515,7 +578,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     elif datatype == DataType.ULINT:
         val, c = decode_uint64_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">Q", val), consumed
+        return _pack_decoded(">Q", val), consumed
     elif datatype == DataType.LWORD:
         # ValueLWord is a fixed 8-byte big-endian value, not VLQ.
         return data[offset + consumed : offset + consumed + 8], consumed + 8
@@ -524,7 +587,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">q", val), consumed
+        return _pack_decoded(">q", val), consumed
     elif datatype == DataType.TIMESTAMP:
         return data[offset + consumed : offset + consumed + 8], consumed + 8
     elif datatype == DataType.TIMESPAN:
@@ -532,13 +595,13 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">q", val), consumed
+        return _pack_decoded(">q", val), consumed
     elif datatype == DataType.RID:
         return data[offset + consumed : offset + consumed + 4], consumed + 4
     elif datatype == DataType.AID:
         val, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c
-        return struct.pack(">I", val), consumed
+        return _pack_decoded(">I", val), consumed
     elif datatype == DataType.BLOB:
         _blob_root_id, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c
