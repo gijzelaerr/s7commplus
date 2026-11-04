@@ -22,6 +22,7 @@ import zlib
 from dataclasses import dataclass
 
 from .blob_decompressor import find_preset_stream, decompress_blob
+from .blob_decompressor import find_preset_stream as _find_preset_stream  # noqa: F401  # its name here up to v0.3.0
 from .block_interface import SOFTDATATYPE, Member, block_interface_from_explore, parse_block_interface
 
 __all__ = [
