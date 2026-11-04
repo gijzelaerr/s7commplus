@@ -163,7 +163,7 @@ def iter_preset_streams(data: bytes) -> Iterator[PresetStream]:
         yield PresetStream(preset, text)
 
 
-def find_preset_stream(data: bytes, kinds: tuple[str, ...]) -> int | None:
+def find_preset_stream(data: bytes, kinds: str | tuple[str, ...]) -> int | None:
     """Return the offset of the first preset-dict stream of the most preferred kind in `kinds`.
 
     A block EXPLORE response contains several preset-dict streams; callers need
@@ -176,12 +176,16 @@ def find_preset_stream(data: bytes, kinds: tuple[str, ...]) -> int | None:
 
     Args:
         data: The EXPLORE response payload.
-        kinds: Preset-dictionary kinds to look for, most preferred first.
+        kinds: Preset-dictionary kinds to look for, most preferred first, or a
+            single kind.
 
     Returns:
         The offset to pass to :func:`decompress_blob`, or None if no stream of
         any of the kinds is present.
     """
+    if isinstance(kinds, str):
+        # `in` on a str would test for a substring
+        kinds = (kinds,)
     offsets: dict[str, int] = {}
     for offset, preset in iter_preset_headers(data):
         if preset.kind in kinds:

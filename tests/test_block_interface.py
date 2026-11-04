@@ -194,6 +194,36 @@ _NESTED_STRUCT_DB_INTERFACE_BLOB = base64.b64decode(
     "TMPIHrTdtPqdtpBpbGeGtWhNxmWag+FW+Szc1RCc/ncSOstv/BcCVaciAKIAAAAA"
 )
 
+# Live S7-1500 OB "Main", trimmed: Input members nested in their header in Root,
+# Temp in a regular TempSection. Its LineComm writes Path="51" and Path="53".
+_MAIN_OB = (
+    '<BlockInterface><Part Kind="BlockSource"><Payload><Root>'
+    '<Member ID="2" Name="Input" SubPartIndex="2" StdO="0">'
+    '<Member ID="51" Name="Initial_Call" RID="0x02000001" LID="9" />'
+    '<Member ID="52" Name="Remanence" RID="0x02000001" LID="10" />'
+    "</Member>"
+    '<Member ID="6" Name="Temp" SubPartIndex="0" StdO="0" />'
+    "</Root></Payload><SubParts>"
+    '<Part Kind="TempSection"><Payload><Member>'
+    '<Member ID="53" Name="Random_error" RID="0x02000001" StdO="0" LID="11" />'
+    "</Member></Payload></Part><Part /><Part />"
+    "</SubParts></Part></BlockInterface>"
+)
+
+# Live S7-1500 FB LGF_Impulse, trimmed: Input in an InputSection part, constants
+# nested in their Root header. Its LineComm comments ids 53 and 70.
+_LGF_IMPULSE_FB = (
+    '<BlockInterface><Part Kind="BlockSource"><Payload><Root>'
+    '<Member ID="2" Name="Input" SubPartIndex="0" StdO="0" />'
+    '<Member ID="8" Name="Constant" SubPartIndex="1" StdO="0">'
+    '<Member ID="70" Name="ZERO" RID="0x02000008" LID="30" />'
+    "</Member>"
+    "</Root></Payload><SubParts>"
+    '<Part Kind="InputSection"><Payload><Member>'
+    '<Member ID="53" Name="frequency" RID="0x02000008" StdO="0" LID="11" />'
+    "</Member></Payload></Part><Part />"
+    "</SubParts></Part></BlockInterface>"
+)
 
 _ARRAY_OF_UDT = (
     '<BlockInterface><Part Kind="DBSource" Block="DB1"><Payload><Root>'
@@ -221,13 +251,16 @@ def test_parse_block_interface_types():
     ]
 
 
-def test_parse_block_interface_member_without_id_defaults_to_zero():
+def test_member_without_id_matches_no_path_segment():
+    # regression: a missing ID defaulted to 0, so segment "0" resolved to this member
     xml = (
         "<BlockInterface><Part><Payload><Root>"
         '<Member Name="flag" RID="0x02000001" StdO="0" LID="9" />'
         "</Root></Payload></Part></BlockInterface>"
     )
-    assert parse_block_interface(xml) == [Member("flag", "Bool", 9, 0, 0x02000001, id=0)]
+    members = parse_block_interface(xml)
+    assert members == [Member("flag", "Bool", 9, 0, 0x02000001)]
+    assert resolve_id_path(members, "0") is None
 
 
 def test_parse_block_interface_fb_sections():
@@ -508,6 +541,19 @@ def test_block_interface_from_live_s7_1500_nested_struct_db():
     ]
 
 
+@pytest.mark.parametrize(
+    ("data_type", "element_type"),
+    [
+        ('"Array[1] of Thing"', "Array[1] of Thing"),
+        ('Array[0..3] of "Array[1] of Thing"', "Array[1] of Thing"),
+        ('Array[0.."N"] of Bool', "Bool"),
+    ],
+)
+def test_element_type_strips_only_a_leading_array_prefix(data_type: str, element_type: str):
+    # a UDT name may itself read like an array type
+    assert Member("m", data_type, 0, 0, 0).element_type == element_type
+
+
 def test_array_of_udt_member_names_its_udt():
     # the quoted element type of an array member is its element_type and a reference
     info = BlockInterface.from_xml(_ARRAY_OF_UDT)
@@ -526,6 +572,47 @@ def test_resolve_id_path_rejects_malformed_or_unknown(id_path: str):
 def test_resolve_id_path_stops_at_a_type_that_is_not_embedded():
     # arr is typed with "Motor", but the interface carries no definition of it
     assert resolve_id_path(BlockInterface.from_xml(_ARRAY_OF_UDT).members, "60[0]:51") is None
+
+
+def test_parse_block_interface_reads_members_nested_in_their_section_header():
+    # regression: OB/FC/library FB members inside the Root header were dropped
+    assert [(m.section, m.name) for m in parse_block_interface(_MAIN_OB)] == [
+        ("Input", "Initial_Call"),
+        ("Input", "Remanence"),
+        ("Temp", "Random_error"),
+    ]
+
+
+def test_parse_block_interface_leaves_out_constants():
+    # constants have LIDs, but the PLC refuses to read them
+    assert [(m.section, m.name) for m in parse_block_interface(_LGF_IMPULSE_FB)] == [("Input", "frequency")]
+
+
+def test_parse_block_interface_leaves_out_a_constant_section_part():
+    xml = (
+        '<BlockInterface><Part Kind="BlockSource"><Payload><Root>'
+        '<Member ID="8" Name="Constant" SubPartIndex="0" StdO="0" />'
+        "</Root></Payload><SubParts>"
+        '<Part Kind="ConstantSection"><Payload><Member>'
+        '<Member ID="70" Name="ZERO" RID="0x02000008" LID="30" />'
+        "</Member></Payload></Part>"
+        "</SubParts></Part></BlockInterface>"
+    )
+    assert parse_block_interface(xml) == []
+
+
+@pytest.mark.parametrize(
+    ("xml", "id_path", "name"),
+    [
+        (_MAIN_OB, "51", "Initial_Call"),
+        (_MAIN_OB, "53", "Random_error"),
+        (_MAIN_OB, "2:51", None),  # a section header id is never part of a path
+        (_LGF_IMPULSE_FB, "53", "frequency"),
+        (_LGF_IMPULSE_FB, "70", None),  # a constant is not in the member tree
+    ],
+)
+def test_resolve_id_path_fb_and_ob_paths_have_no_section_prefix(xml: str, id_path: str, name: str | None):
+    assert resolve_id_path(parse_block_interface(xml), id_path) == name
 
 
 def test_resolve_id_path_does_not_look_up_an_empty_struct_in_types():

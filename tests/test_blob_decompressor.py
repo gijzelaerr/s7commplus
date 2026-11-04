@@ -142,6 +142,14 @@ def test_find_preset_stream_matches_kind_across_versions():
     assert find_preset_stream(payload, ("IntfDesc",)) is None
 
 
+def test_find_preset_stream_accepts_a_single_kind():
+    # "IntfDesc" is a substring of "DebugInfo IntfDesc", but a single kind must match whole
+    payload = bytes.fromhex("787d 79b2bda3 787d 66052b13")
+    assert find_preset_stream(payload, "LineComm") == 0
+    assert find_preset_stream(payload, "IntfDesc") is None
+    assert find_preset_stream(payload, "Comm") is None
+
+
 def test_find_preset_stream_prefers_debuginfo_intfdesc():
     # IntfDesc then DebugInfo IntfDesc: the optimized interface wins although it comes second.
     payload = bytes.fromhex("787d 4b8416f0 787d 66052b13")
