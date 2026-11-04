@@ -10,7 +10,7 @@ import zlib
 
 import pytest
 
-from s7commplus.block_interface import _INTFDESC_KINDS, _find_preset_stream
+from s7commplus.block_interface import _INTFDESC_KINDS
 from s7commplus.tag_browser import (
     DataBlock,
     Tag,
@@ -72,14 +72,6 @@ def test_tags_from_explore_raises_on_corrupt_stream():
     with pytest.raises(ValueError) as caught:
         tags_from_explore(payload)
     assert isinstance(caught.value.__cause__, zlib.error)
-
-
-def test_find_preset_stream_matches_kind_across_versions():
-    # LineComm 0x90000001 then 0x98000001: the first stream of the kind wins, whatever its version.
-    # Only headers are read, so the streams need no body.
-    payload = bytes.fromhex("787d 79b2bda3 787d 3c55436a")
-    assert _find_preset_stream(payload, ("LineComm",)) == 0
-    assert _find_preset_stream(payload, ("IntfDesc",)) is None
 
 
 @pytest.mark.parametrize("kind", [_IDENT_KIND, *_INTFDESC_KINDS])

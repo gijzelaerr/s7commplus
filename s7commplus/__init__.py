@@ -16,7 +16,15 @@ Usage::
 from .async_client import AsyncSubscriptionQueue
 from .async_client import S7CommPlusAsyncClient as AsyncClient
 from .alarm import Alarm, AlarmNotification, AlarmText, LanguageId
-from .blob_decompressor import PresetStream, decompress_blob, find_and_decompress, iter_preset_headers, iter_preset_streams
+from .blob_decompressor import (
+    PresetStream,
+    decompress_blob,
+    find_and_decompress,
+    find_preset_stream,
+    iter_preset_headers,
+    iter_preset_streams,
+)
+from .block_interface import BlockInterface, Member, block_interface_from_explore, resolve_id_path
 from .catalog import ArrayDimension, SymbolCatalog, SymbolicTag, TagResult
 from .client import DBWriteItem, ProgramObject, SymbolicReadItem
 from .client import S7CommPlusClient as Client
@@ -30,9 +38,7 @@ from .tag_browser import (
     DataBlock as ExploreDataBlock,
 )
 from .tag_browser import (
-    Member,
     Tag,
-    block_interface_from_explore,
     datablocks_from_explore,
     tags_from_explore,
 )
@@ -45,6 +51,7 @@ __all__ = [
     "ArrayDimension",
     "AsyncClient",
     "AsyncSubscriptionQueue",
+    "BlockInterface",
     "CPUState",
     "Client",
     "DBWriteItem",
@@ -75,7 +82,9 @@ __all__ = [
     "device_family",
     "device_name",
     "find_and_decompress",
+    "find_preset_stream",
     "iter_preset_headers",
     "iter_preset_streams",
+    "resolve_id_path",
     "tags_from_explore",
 ]

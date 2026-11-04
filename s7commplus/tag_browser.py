@@ -21,8 +21,8 @@ import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass
 
-from .blob_decompressor import decompress_blob
-from .block_interface import SOFTDATATYPE, Member, _find_preset_stream, block_interface_from_explore, parse_block_interface
+from .blob_decompressor import find_preset_stream, decompress_blob
+from .block_interface import SOFTDATATYPE, Member, block_interface_from_explore, parse_block_interface
 
 __all__ = [
     "AREA_RID",
@@ -37,12 +37,10 @@ __all__ = [
     "tags_from_explore",
 ]
 
-# ---------------------------------------------------------------------------
-# I/Q/M symbolic tags (<IdentContainer>)
-# ---------------------------------------------------------------------------
-
 # EXPLORE relation IDs per area (S7-1200 V3 / FW V4.x).
 AREA_RID = {"I": 80, "Q": 81, "M": 82}
+# Preset-dict kind of the I/Q/M symbols.
+_IDENT_KIND = "IntfDescTag"
 
 # <SimpleAccess Range="..."> -> TIA area letter.
 _RANGE_LETTER = {"Input": "I", "Output": "Q", "Memory": "M"}
@@ -100,22 +98,13 @@ def tags_from_explore(explore_payload: bytes) -> list[Tag]:
     Raises:
         ValueError: If the stream does not decompress or is not well-formed XML.
     """
-    pos = _find_preset_stream(explore_payload, (_IDENT_KIND,))
+    pos = find_preset_stream(explore_payload, (_IDENT_KIND,))
     if pos is None:
         return []
     try:
         return parse_ident_container(decompress_blob(explore_payload, offset=pos))
     except (zlib.error, ET.ParseError) as exc:
         raise ValueError(f"Tag EXPLORE payload is corrupt: {exc}") from exc
-
-
-# Preset-dict kind of the I/Q/M symbols.
-_IDENT_KIND = "IntfDescTag"
-
-
-# ---------------------------------------------------------------------------
-# shared helpers
-# ---------------------------------------------------------------------------
 
 
 def _find_zlib_stream(data: bytes) -> int | None:

@@ -10,13 +10,16 @@ instance of a library FB, which is referenced, not embedded).
 """
 
 import base64
+import zlib
 
 import pytest
 
 from s7commplus.block_interface import (
+    BlockInterface,
     Member,
     block_interface_from_explore,
     parse_block_interface,
+    resolve_id_path,
 )
 
 # Live S7-1200 G2 EXPLORE response for optimized DB "Data_block_1" (DB25), from
@@ -189,6 +192,13 @@ _NESTED_STRUCT_DB_INTERFACE_BLOB = base64.b64decode(
     "alWlBWTtCEtCVkBMSqosYEa38KBATmTx8fxghNQzM0z9StjIBh7KT8D8JG1YbFDITW9jUqGcynZH"
     "0N3xYjfpiLFIDPbrusxUBTv6UV1GpVqN1g9aq49V59ajAzOob4TezzeMMizR9ZWlT1Vap0JplXav"
     "TMPIHrTdtPqdtpBpbGeGtWhNxmWag+FW+Szc1RCc/ncSOstv/BcCVaciAKIAAAAA"
+)
+
+
+_ARRAY_OF_UDT = (
+    '<BlockInterface><Part Kind="DBSource" Block="DB1"><Payload><Root>'
+    '<Member Name="arr" Type=\'Array[0..1] of "Motor"\' RID="0x02010011" ID="60" LID="1" StdO="0" />'
+    "</Root></Payload></Part></BlockInterface>"
 )
 
 
@@ -496,3 +506,132 @@ def test_block_interface_from_live_s7_1500_nested_struct_db():
             ],
         ),
     ]
+
+
+def test_array_of_udt_member_names_its_udt():
+    # the quoted element type of an array member is its element_type and a reference
+    info = BlockInterface.from_xml(_ARRAY_OF_UDT)
+    assert info.members[0].element_type == "Motor"
+    assert info.references == {"Motor"}
+
+
+# an 11-digit id exceeds the \d{1,10} segment pattern; an index list holds integers only
+@pytest.mark.parametrize(
+    "id_path", ["", "60:", "x", "60[0", "99", "60:99", "60:12345678901", "60[]", "60[x,y]", "60[0,]", "60[0]]"]
+)
+def test_resolve_id_path_rejects_malformed_or_unknown(id_path: str):
+    assert resolve_id_path(BlockInterface.from_xml(_ARRAY_OF_UDT).members, id_path) is None
+
+
+def test_resolve_id_path_stops_at_a_type_that_is_not_embedded():
+    # arr is typed with "Motor", but the interface carries no definition of it
+    assert resolve_id_path(BlockInterface.from_xml(_ARRAY_OF_UDT).members, "60[0]:51") is None
+
+
+def test_resolve_id_path_does_not_look_up_an_empty_struct_in_types():
+    # an inline Struct is always embedded, so "Struct" in types must not supply its fields
+    xml = (
+        '<BlockInterface><Part Kind="DBSource"><Payload><Root>'
+        '<Member ID="60" Name="s" RID="0x00000000" SubPartIndex="0" />'
+        '</Root></Payload><SubParts><Part Kind="Structure"><Payload /></Part></SubParts></Part></BlockInterface>'
+    )
+    members = BlockInterface.from_xml(xml).members
+    assert members[0].data_type == "Struct"
+    assert resolve_id_path(members, "60:51", types={"Struct": [Member("wrong", "Int", 0, 0, 0, id=51)]}) is None
+
+
+def test_instance_db_names_its_fb():
+    # Live S7-1500 LGF_SinusCI_DB: the FB sits below the Values part
+    assert BlockInterface.from_explore(_SINUS_INSTANCE_DB_INTERFACE_BLOB).source == "LGF_SinusCI"
+
+
+def test_udt_db_has_no_source():
+    # A DataTypeSource below Values is a DB of a UDT, not an instance
+    assert BlockInterface.from_explore(_UDT_DB_INTERFACE_BLOB).source is None
+
+
+def test_info_from_explore_without_stream_is_empty():
+    assert BlockInterface.from_explore(b"no zlib stream here") == BlockInterface([], None, frozenset())
+
+
+def test_from_xml_rejects_malformed_xml():
+    # ElementTree's ParseError must not leak out of the public API
+    with pytest.raises(ValueError, match="not well-formed"):
+        BlockInterface.from_xml("not xml")
+
+
+def test_from_xml_without_part_is_empty():
+    assert BlockInterface.from_xml("<Other />") == BlockInterface([], None, frozenset())
+
+
+def test_from_xml_values_part_with_empty_block_has_no_source():
+    # an empty Block attribute must not become the source name ""
+    xml = '<BlockInterface><Part Kind="Values"><SubParts><Part Kind="BlockSource" Block="" /></SubParts></Part></BlockInterface>'
+    assert BlockInterface.from_xml(xml).source is None
+
+
+def test_from_xml_references_skip_empty_names():
+    xml = (
+        '<BlockInterface><Part Kind="DBSource" Block=""><Payload><Root>'
+        '<Member Name="a" RID="0x02010001" Type=\'Array[0..1] of "Motor"\' />'
+        '</Root></Payload></Part><ExternalType /><ExternalType Name="Ext" /></BlockInterface>'
+    )
+    assert BlockInterface.from_xml(xml).references == {"Motor", "Ext"}
+
+
+def test_from_explore_raises_on_corrupt_stream():
+    # a DebugInfo IntfDesc header followed by an invalid deflate block,
+    # which find_preset_stream selects and decompress_blob rejects
+    payload = bytes.fromhex("787d 66052b13") + b"\xff" * 8
+    with pytest.raises(ValueError, match="corrupt") as caught:
+        BlockInterface.from_explore(payload)
+    assert isinstance(caught.value.__cause__, zlib.error)
+
+
+def test_from_xml_references_skip_array_bound_constants():
+    xml = (
+        '<BlockInterface><Part Kind="DBSource" Block="DB1"><Payload><Root>'
+        '<Member Name="a" RID="0x02010011" Type=\'Array[1.."c_max"] of "Motor"\' />'
+        "</Root></Payload></Part></BlockInterface>"
+    )
+    assert BlockInterface.from_xml(xml).references == {"Motor"}
+
+
+def test_from_xml_references_leave_out_the_block_itself():
+    # Synthetic: the captured DBs leave Block off their primary Part, but a UDT or FB explored on its own
+    # may name itself there. Only the UDT its member is typed with is a reference.
+    xml = (
+        '<BlockInterface><Part Kind="DataTypeSource" Block="Motor"><Payload><Root>'
+        '<Member ID="51" Name="valve" RID="0x02000005" Type=\'"Valve"\' />'
+        "</Root></Payload></Part></BlockInterface>"
+    )
+    assert BlockInterface.from_xml(xml).references == {"Valve"}
+
+
+@pytest.mark.parametrize(
+    ("data_type", "expected"),
+    [
+        ("Int", "Int"),
+        ("IEC_TIMER", "IEC_TIMER"),
+        ('"Motor"', "Motor"),
+        ("Array[0..5] of IEC_TIMER", "IEC_TIMER"),
+        ('Array[1.."c_max"] of "Motor"', "Motor"),
+        ('Array[0.."N"] of Bool', "Bool"),
+    ],
+)
+def test_member_element_type(data_type: str, expected: str):
+    # a UDT, a library type and an elementary type are all named
+    assert Member("m", data_type, 0, 0, 0).element_type == expected
+
+
+def test_resolve_id_path_follows_types_into_array_element_udt():
+    members = BlockInterface.from_xml(_ARRAY_OF_UDT).members
+    motor = [Member("speed", "Int", 1, 0, 0x02000005, id=51)]
+    assert resolve_id_path(members, "60[0]:51", types={"Motor": motor}) == "arr[0].speed"
+
+
+def test_resolve_id_path_follows_types_into_library_type():
+    # IEC_TIMER is a library type, quoted nowhere, and is still found by its element_type
+    timer = Member("t", "Array[0..5] of IEC_TIMER", 1, 0, 0x02010011, id=7)
+    pt = [Member("PT", "Time", 1, 0, 0x0200000B, id=3)]
+    assert resolve_id_path([timer], "7[2]:3", types={"IEC_TIMER": pt}) == "t[2].PT"
