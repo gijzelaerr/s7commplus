@@ -457,8 +457,8 @@ class S7CommPlusAsyncClient:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
 

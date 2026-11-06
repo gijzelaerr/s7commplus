@@ -1541,10 +1541,10 @@ class TestPlcsimResponseLayout:
 
 
 class TestWriteDeleteQualifierVersion:
-    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM only.
+    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM and the S7-1200.
 
-    A real S7-1200/1500 V1 SessionKey session keeps the negotiated V1 layout of
-    these two requests, as before #66; every other data path already sends V2.
+    An S7-1500 V1 SessionKey session keeps the negotiated V1 layout of these two
+    requests, as before #66; every other data path already sends V2.
     """
 
     _WRITE_ARGS = (0x8A0E0001, [1], b"\x00\x2a", 0)
@@ -1562,7 +1562,7 @@ class TestWriteDeleteQualifierVersion:
 
         return build_delete_subscription_request(0x70000F90, version)
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_sync_client(self, family: str, version: int) -> None:
         from s7commplus.client import S7CommPlusClient
         from s7commplus.v1_session_key.keys import KeyFamily
@@ -1582,7 +1582,7 @@ class TestWriteDeleteQualifierVersion:
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_async_client(self, family: str, version: int) -> None:
         from s7commplus.async_client import S7CommPlusAsyncClient
         from s7commplus.v1_session_key.keys import KeyFamily

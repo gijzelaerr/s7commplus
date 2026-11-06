@@ -1063,12 +1063,17 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
 def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_version: int, object_qualifier_version: int) -> int:
     """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-    PLCSIM Advanced V8 (key family 03) needs the layout of the session's other
-    data requests there too (V2 on a V1 SessionKey session, #66). Other PLCs keep
-    the negotiated protocol version these two requests have always used: neither
-    layout of them has been checked on a hardware PLC.
+    PLCSIM Advanced V8 (key family 03) and the S7-1200 (key family 01) need the
+    layout of the session's other data requests there too, V2 on a V1 SessionKey
+    session. PLCSIM was found in #66. A CPU 1214C FW V4.2 resets the connection on
+    a V1 delete and accepts a V2 one (#136); ``write_symbolic`` is the same
+    SetMultiVariables request as ``write_tags``, which that CPU accepts with V2.
+    The S7-1500 keeps the negotiated protocol version, which these two requests
+    have always used and which hasn't been checked on hardware.
     """
-    return object_qualifier_version if family == KeyFamily.PLCSIM else protocol_version
+    if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200):
+        return object_qualifier_version
+    return protocol_version
 
 
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
@@ -1400,8 +1405,8 @@ class S7CommPlusConnection:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
 
