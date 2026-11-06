@@ -1207,11 +1207,11 @@ class S7CommPlusAsyncClient:
 
         from .v1_session_key.handshake import authenticate_session_key
 
-        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
-        challenge_payload = _build_v1_get_var_substreamed_payload(
-            self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
-        )
-        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail)
+        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        # one, after which the renewal completes (#169).
+        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4)
         challenge = _parse_get_var_substreamed_response(challenge_response)
         if len(challenge) != 20:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
