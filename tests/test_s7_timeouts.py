@@ -631,8 +631,8 @@ def test_sync_every_part_of_an_explore_reply_gets_the_explore_timeout() -> None:
 
     assert not parts and None not in waits
     first, second, other_first, other_second = waits
-    assert 4.5 < first <= 9.0 and second == 9.0
-    assert 0.25 < other_first <= 0.5 and other_second == 0.5
+    assert 4.5 < first <= 9.0 + 1e-9 and second == 9.0
+    assert 0.25 < other_first <= 0.5 + 1e-9 and other_second == 0.5
 
 
 async def test_async_every_part_of_an_explore_reply_gets_the_explore_timeout() -> None:
@@ -869,8 +869,9 @@ def test_sync_per_call_timeout_applies_to_that_call_only() -> None:
         with pytest.raises(S7TimeoutError):
             getattr(client, receiver)()
     waits = [call.args[0] for call in connection.receive_notification.call_args_list]
-    assert 0 < waits[0] <= 0.5 and 6.5 < waits[1] <= 7.0
-    assert 0 < waits[2] <= 0.5 and 6.5 < waits[3] <= 7.0
+    # The waits are "deadline - now", which rounding can leave a hair above the timeout.
+    assert 0 < waits[0] <= 0.5 + 1e-9 and 6.5 < waits[1] <= 7.0 + 1e-9
+    assert 0 < waits[2] <= 0.5 + 1e-9 and 6.5 < waits[3] <= 7.0 + 1e-9
 
 
 async def test_async_notification_wait_defaults_to_the_request_timeout(emulator: int) -> None:

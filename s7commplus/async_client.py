@@ -95,6 +95,7 @@ from .connection import (
     FamilyOnlyFingerprintError,
     SessionKeyAuthenticationDependencyError,
     SessionKeyCandidateRejectedError,
+    _alarm_texts_and_domain_filter,
     _build_get_var_substreamed_payload,
     _build_session_activate_payload,
     _build_session_setup_frame,
@@ -348,6 +349,7 @@ class S7CommPlusAsyncClient:
         # V1 SessionKey state (non-TLS V1 sessions only), as in S7CommPlusConnection.
         self._legacy_s7_1500: bool | None = None
         self._last_raw_response_payload: bytes | None = None
+        self._last_response_function: int | None = None
         self._public_key_fingerprint: Optional[str] = None
         self._session_challenge: Optional[bytes] = None
         # ServerSession.Role from the CreateObject response; the
@@ -457,10 +459,15 @@ class S7CommPlusAsyncClient:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
+
+    @property
+    def alarm_texts_and_domain_filter(self) -> bool:
+        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family)
 
     def _frame_overhead(self) -> int:
         """Bytes this session's request frames add to a payload."""
@@ -1009,7 +1016,7 @@ class S7CommPlusAsyncClient:
         value += encrypted_response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
         resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     async def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR)."""
@@ -1020,7 +1027,7 @@ class S7CommPlusAsyncClient:
         value += response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
         resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     @property
     def connection_generation(self) -> int:
@@ -1207,11 +1214,11 @@ class S7CommPlusAsyncClient:
 
         from .v1_session_key.handshake import authenticate_session_key
 
-        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
-        challenge_payload = _build_v1_get_var_substreamed_payload(
-            self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
-        )
-        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail)
+        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        # one, after which the renewal completes (#169).
+        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4)
         challenge = _parse_get_var_substreamed_response(challenge_response)
         if len(challenge) != 20:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
@@ -1220,7 +1227,8 @@ class S7CommPlusAsyncClient:
             self._v1_session_key_public_key, self._v1_session_key_family, blob, new_session_key
         )
         renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
-        _check_set_variable_response(await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4))
+        renewal_response = await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4)
+        _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")
 
@@ -1754,10 +1762,21 @@ class S7CommPlusAsyncClient:
         domains: Optional[list[int]] = None,
         credit_limit: int = 10,
     ) -> int:
-        """Subscribe to PLC alarm events and return the subscription ID."""
+        """Subscribe to PLC alarm events and return the subscription ID.
+
+        See :meth:`S7CommPlusClient.create_alarm_subscription`: on an S7-1200
+        without TLS (key family 01), ``language_ids`` and ``domains`` must be
+        ``None`` (#173).
+        """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
-        payload = build_alarm_subscription_request(self._subscription_container_id, language_ids, domains, credit_limit)
+        payload = build_alarm_subscription_request(
+            self._subscription_container_id,
+            language_ids,
+            domains,
+            credit_limit,
+            texts_and_domain_filter=self.alarm_texts_and_domain_filter,
+        )
         response = await self._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=len(payload) - 11)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
@@ -2443,7 +2462,7 @@ class S7CommPlusAsyncClient:
             data = await self._recv_reassembled_payload(response_data, reply_timeout)
             if len(data) < 10:
                 raise S7ConnectionError("Response too short")
-            _validate_response_header(data, function_code, seq_num)
+            self._last_response_function = _validate_response_header(data, function_code, seq_num)
             return self._response_payload(function_code, bytes(data[10:]))
 
         version, data_length, consumed = decode_header(response_data)
@@ -2451,14 +2470,16 @@ class S7CommPlusAsyncClient:
             await self._invalidate_integrity_failure()
             raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
         response = response_data[consumed : consumed + data_length]
-        if self._session_key is not None:
+        if version == ProtocolVersion.V3:
+            if self._session_key is None:
+                raise S7ConnectionError("V3 response received without a session key")
             try:
                 response = _verify_v3_hmac(response, self._session_key)
             except S7IntegrityError:
                 await self._invalidate_integrity_failure()
                 raise
 
-        _validate_response_header(response, function_code, seq_num)
+        self._last_response_function = _validate_response_header(response, function_code, seq_num)
 
         # RESPONSE header is 10 bytes (opcode+res+func+res+seqnr+transport) — responses
         # carry no SessionId field (requests do, hence their 14-byte header). For V2+ the
@@ -2642,7 +2663,9 @@ class S7CommPlusAsyncClient:
             await ensure(frag_len)
             fragment_data = bytes(buf[:frag_len])
             del buf[:frag_len]
-            if digest_state is not None:
+            if fragment_version == ProtocolVersion.V3:
+                if digest_state is None:
+                    raise S7ConnectionError("V3 response received without a session key")
                 try:
                     fragment_data = (
                         legacy_verifier.verify(fragment_data)
@@ -2897,6 +2920,10 @@ class S7CommPlusAsyncClient:
         async with self._lock:
             payload = _build_session_activate_payload(self._session_id, self._sequence_number)
             await self._send_request_locked(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
+        if self._last_response_function == FunctionCode.ERROR:
+            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
+            logger.warning("Session activation answered with the generic error function")
+            return
         logger.info("Session activation completed")
 
     async def _post_auth_legitimation(self, password: str = "") -> None:

@@ -849,6 +849,9 @@ class S7CommPlusServer:
         elif function_code == FunctionCode.SET_VAR_SUBSTREAMED:
             response = self._handle_set_var_substreamed(seq_num, req_session_id, request_data)
             rst = False
+        elif function_code == FunctionCode.SET_VARIABLE:
+            response = self._handle_set_variable(seq_num, req_session_id, request_data)
+            rst = False
         else:
             response = self._build_error_response(seq_num, req_session_id, function_code)
             rst = False
@@ -985,7 +988,7 @@ class S7CommPlusServer:
         """Build a minimal ServerSessionVersion Struct(314) typed value.
 
         Matches the wire format a real V1-initial S7-1200 PLC emits:
-        flags=0x00, type=STRUCT, structId=VLQ(314), elements..., terminator=0x00.
+        flags=0x00, type=STRUCT, structId=UInt32(314), elements..., terminator=0x00.
 
         Element 319 is the PAOM device string. The client strips it before
         echoing — here we include a short placeholder so the stripping logic
@@ -993,7 +996,7 @@ class S7CommPlusServer:
         """
         buf = bytearray()
         buf += bytes([0x00, DataType.STRUCT])
-        buf += encode_uint32_vlq(314)  # Struct ID
+        buf += struct.pack(">I", 314)  # Struct ID, a fixed 4-byte word
 
         # Element 315: protocol version as UDINT
         buf += encode_uint32_vlq(315)
@@ -1444,6 +1447,25 @@ class S7CommPlusServer:
         response = bytearray()
         response += self._build_response_header(FunctionCode.SET_VAR_SUBSTREAMED, seq_num)
         response += encode_uint64_vlq(0)  # ReturnValue: success
+        response += struct.pack(">I", 0)
+        return bytes(response)
+
+    def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
+        """Handle SetVariable: accept the session activation and legitimation writes.
+
+        A SessionKey renewal stays refused: the emulator cannot derive the new
+        key from the blob, so accepting it would break the next signed request.
+        """
+        try:
+            _count, consumed = decode_uint32_vlq(request_data, 4)
+            address, _ = decode_uint32_vlq(request_data, 4 + consumed)
+        except ValueError:
+            return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        if address == LegitimationId.SESSION_SETUP_LEGITIMATION:
+            return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        response = bytearray()
+        response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
+        response += encode_uint32_vlq(0)  # Return code: success
         response += struct.pack(">I", 0)
         return bytes(response)
 
