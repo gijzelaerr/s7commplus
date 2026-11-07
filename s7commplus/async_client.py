@@ -18,6 +18,7 @@ from typing import Any, Awaitable, Callable, Concatenate, Literal, Optional, Par
 from .error import (
     S7CertificateError,
     S7ConnectionError,
+    S7NotConnectedError,
     S7Error,
     S7IntegrityError,
     S7ProtocolError,
@@ -825,13 +826,14 @@ class S7CommPlusAsyncClient:
             username: Username for the new-mode exchange (leave empty for legacy)
 
         Raises:
-            S7ConnectionError: If not connected, TLS is not active, the firmware
-                does not support legitimation, or the password was refused
+            S7NotConnectedError: If not connected.
+            S7ConnectionError: If TLS is not active, the firmware does not
+                support legitimation, or the password was refused.
         """
         from .error import S7ConnectionError
 
         if not self._connected:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if not self._tls_active:
             raise S7ConnectionError("Legitimation requires TLS. Connect with use_tls=True.")
@@ -1065,7 +1067,7 @@ class S7CommPlusAsyncClient:
                 cleared its parameters.
         """
         if self._connect_params is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         logger.info("Reconnecting to the PLC")
         await self._reconnect()
 
@@ -1108,7 +1110,7 @@ class S7CommPlusAsyncClient:
 
         The socket is aborted without a DeleteSession exchange, so no unread
         rest of a reply can be taken for the next message, and the next request
-        raises ``S7ConnectionError("Not connected")``. The connect parameters
+        raises ``S7NotConnectedError("Not connected")``. The connect parameters
         and the subscription and alarm bookkeeping are kept, as after a
         connection the PLC dropped, so a reconnect can restore them.
         """
@@ -1246,7 +1248,7 @@ class S7CommPlusAsyncClient:
         instead of interleaving with the handshake.
         """
         if self._connect_params is None:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
         self._rebuild_task = asyncio.current_task()
         try:
             await self._close()
@@ -1603,7 +1605,7 @@ class S7CommPlusAsyncClient:
             The subscription object IDs, one per group, in item order.
         """
         if not self._connected:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not items:
             raise ValueError("a subscription requires at least one item")
         container_id = self._subscription_container_id
@@ -1648,7 +1650,7 @@ class S7CommPlusAsyncClient:
         while True:
             async with self._lock:
                 if not self._connected or self._blocked_by_rebuild():
-                    raise RuntimeError("Not connected")
+                    raise S7NotConnectedError("Not connected")
                 if self._notification_frames:
                     frame = self._notification_frames.popleft()
                 else:
@@ -1822,7 +1824,7 @@ class S7CommPlusAsyncClient:
             else:
                 async with self._lock:
                     if not self._connected or self._blocked_by_rebuild():
-                        raise RuntimeError("Not connected")
+                        raise S7NotConnectedError("Not connected")
                     if self._notification_frames:
                         frame = self._notification_frames.popleft()
                     else:
@@ -1967,7 +1969,7 @@ class S7CommPlusAsyncClient:
             S7ConnectionError: If not connected.
         """
         if not self._connected:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if _block_signature(await self.list_datablocks()) != self._block_layout_signature:
             logger.info("The PLC data-block list changed; refreshing the tag catalog")
             await self.refresh_tag_catalog()
@@ -2114,7 +2116,7 @@ class S7CommPlusAsyncClient:
                 nothing is sent.
         """
         if not self._connected:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not values:
             return []
         tags, _ = await self._resolve_tags(list(values))
@@ -2358,7 +2360,7 @@ class S7CommPlusAsyncClient:
         payload = _build_set_variable_payload(subscription_id, Ids.SUBSCRIPTION_CREDIT_LIMIT, value)
         async with self._lock:
             if not self._connected or self._writer is None or self._reader is None or self._blocked_by_rebuild():
-                raise S7ConnectionError("Not connected")
+                raise S7NotConnectedError("Not connected")
             sequence = self._next_sequence_number()
             header = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.SET_VARIABLE, 0, sequence, self._session_id, 0x74)
             integrity = encode_uint32_vlq(self._integrity_id_write) if self._with_integrity_id else b""
@@ -2404,10 +2406,10 @@ class S7CommPlusAsyncClient:
         if self._session_key_refresh_error is not None:
             raise self._session_key_refresh_error
         if not (self._connected or self._transport_connected) or self._writer is None or self._reader is None:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._blocked_by_rebuild():
             # Another task's reconnect owns the stream until its handshake is done.
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         seq_num = self._next_sequence_number()
 
@@ -2691,7 +2693,7 @@ class S7CommPlusAsyncClient:
     async def _cotp_connect(self, local_tsap: int, remote_tsap: bytes) -> None:
         """Perform COTP Connection Request / Confirm handshake."""
         if self._writer is None or self._reader is None:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         base_pdu = struct.pack(">BBHHB", 6, _COTP_CR, 0x0000, 0x0001, 0x00)
         calling_tsap = struct.pack(">BBH", 0xC1, 2, local_tsap)
@@ -3032,7 +3034,7 @@ class S7CommPlusAsyncClient:
         """Write one TPKT frame; a peer that closed or reset the stream is a dropped connection."""
         writer = self._writer
         if writer is None:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
         try:
             writer.write(tpkt)
             await asyncio.wait_for(writer.drain(), self._request_timeout)
@@ -3054,7 +3056,7 @@ class S7CommPlusAsyncClient:
         """
         reader, writer = self._reader, self._writer
         if reader is None:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
         try:
             # readexactly() consumes nothing until all its bytes are buffered, so a
             # cancelled header read loses nothing; after it, part of a frame is read.

@@ -30,6 +30,16 @@ class S7ConnectionError(S7Error):
     pass
 
 
+class S7NotConnectedError(S7ConnectionError, RuntimeError):
+    """Raised when a client call needs a connection and there is none.
+
+    Also a ``RuntimeError``, which the clients raised for this before, so code
+    catching that keeps working.
+    """
+
+    pass
+
+
 class S7ProtocolError(S7Error):
     """Raised when S7 protocol communication fails."""
 
