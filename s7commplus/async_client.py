@@ -95,6 +95,7 @@ from .connection import (
     FamilyOnlyFingerprintError,
     SessionKeyAuthenticationDependencyError,
     SessionKeyCandidateRejectedError,
+    _alarm_texts_and_domain_filter,
     _build_get_var_substreamed_payload,
     _build_session_activate_payload,
     _build_session_setup_frame,
@@ -461,6 +462,11 @@ class S7CommPlusAsyncClient:
         other PLCs the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
+
+    @property
+    def alarm_texts_and_domain_filter(self) -> bool:
+        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family)
 
     def _frame_overhead(self) -> int:
         """Bytes this session's request frames add to a payload."""
@@ -1754,10 +1760,21 @@ class S7CommPlusAsyncClient:
         domains: Optional[list[int]] = None,
         credit_limit: int = 10,
     ) -> int:
-        """Subscribe to PLC alarm events and return the subscription ID."""
+        """Subscribe to PLC alarm events and return the subscription ID.
+
+        See :meth:`S7CommPlusClient.create_alarm_subscription`: on an S7-1200
+        without TLS (key family 01), ``language_ids`` and ``domains`` must be
+        ``None`` (#173).
+        """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
-        payload = build_alarm_subscription_request(self._subscription_container_id, language_ids, domains, credit_limit)
+        payload = build_alarm_subscription_request(
+            self._subscription_container_id,
+            language_ids,
+            domains,
+            credit_limit,
+            texts_and_domain_filter=self.alarm_texts_and_domain_filter,
+        )
         response = await self._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=len(payload) - 11)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:

@@ -2213,15 +2213,28 @@ class S7CommPlusClient:
             credit_limit: Notification credit limit. The default of 10 matches
                 the working S7-1500 reference trace.
 
+        On an S7-1200 without TLS (key family 01) the request leaves out the
+        domain filter and the text attributes, which a CPU 1214C FW V4.2 refuses
+        (#173): ``language_ids`` and ``domains`` must be ``None`` there, and the
+        PLC is not asked to send alarm texts.
+
         Returns:
             Subscription object ID assigned by the PLC.
+
+        Raises:
+            ValueError: ``language_ids`` or ``domains`` were given on a PLC that
+                refuses them.
         """
         if self._connection is None:
             raise RuntimeError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_alarm_subscription_request(
-            self._connection.subscription_container_id, language_ids, domains, credit_limit
+            self._connection.subscription_container_id,
+            language_ids,
+            domains,
+            credit_limit,
+            texts_and_domain_filter=self._connection.alarm_texts_and_domain_filter,
         )
         response = self._connection.send_request(
             FunctionCode.CREATE_OBJECT,

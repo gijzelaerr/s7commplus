@@ -1071,6 +1071,17 @@ def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_versio
     return object_qualifier_version if family == KeyFamily.PLCSIM else protocol_version
 
 
+def _alarm_texts_and_domain_filter(family: Optional[KeyFamily]) -> bool:
+    """Whether an alarm subscription may send the domain filter and the text attributes.
+
+    A CPU 1214C FW V4.2 (key family 01, no TLS) refuses an alarm subscription
+    carrying ``AlarmDomainFilter`` (7731) and ``SendTexts``/``TextLanguages``
+    (8173/8181) with ``INVALID_AID``, and accepts it without them (#173). Every
+    other PLC keeps the S7-1500 reference layout.
+    """
+    return family != KeyFamily.S7_1200
+
+
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
     """Bytes a request frame adds to its payload, for sizing requests.
 
@@ -1404,6 +1415,11 @@ class S7CommPlusConnection:
         other PLCs the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
+
+    @property
+    def alarm_texts_and_domain_filter(self) -> bool:
+        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family)
 
     @property
     def requires_substreamed(self) -> bool:

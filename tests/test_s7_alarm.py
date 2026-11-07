@@ -30,7 +30,7 @@ def _blob(root_id: int, value: bytes) -> bytes:
     return encode_uint32_vlq(root_id) + metadata + encode_uint32_vlq(len(value)) + value
 
 
-def _alarm_object() -> bytes:
+def _alarm_object(with_texts: bool = True) -> bytes:
     result = bytearray([ElementID.START_OF_OBJECT])
     result += struct.pack(">I", 0x8A7E0001)
     result += encode_uint32_vlq(Ids.ALARM_DAI_CLASS_RID)
@@ -68,7 +68,8 @@ def _alarm_object() -> bytes:
         texts += encode_uint32_vlq((language_id << 16) | text_id)
         texts += encode_uint32_vlq(0) + encode_uint32_vlq(len(raw)) + raw
     texts += b"\x00"
-    result += _attribute(Ids.ALARM_DAI_TEXTS, DataType.BLOB, bytes(texts), flags=0x40)
+    if with_texts:
+        result += _attribute(Ids.ALARM_DAI_TEXTS, DataType.BLOB, bytes(texts), flags=0x40)
     result += bytes([ElementID.TERMINATING_OBJECT])
     return bytes(result)
 
@@ -77,12 +78,12 @@ def _explore_response() -> bytes:
     return encode_uint64_vlq(0) + struct.pack(">I", Ids.NATIVE_THE_ALARM_SUBSYSTEM_RID) + encode_uint32_vlq(4) + _alarm_object()
 
 
-def _notification_frame() -> bytes:
+def _notification_frame(with_texts: bool = True) -> bytes:
     body = bytearray([Opcode.NOTIFICATION])
     body += struct.pack(">IHHH", 0x11223344, 0, 0, 0)
     body += b"\x05" + encode_uint32_vlq(12) + b"\x01"
     body += b"\x00"  # end of data-change values
-    body += struct.pack(">IH", 0x11223344, 0) + b"\x81" + _alarm_object()
+    body += struct.pack(">IH", 0x11223344, 0) + b"\x81" + _alarm_object(with_texts)
     return struct.pack(">BBH", 0x72, ProtocolVersion.V2, len(body)) + body + struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
 
 
@@ -100,20 +101,129 @@ def test_alarm_models_are_public() -> None:
     assert LanguageId.ENGLISH_UNITED_STATES == 1033
 
 
-def test_alarm_subscription_matches_real_plc_reference_trace() -> None:
-    payload = build_alarm_subscription_request(0x70000CB8)
-    captured = bytes.fromhex(
-        "70000cb80004000000000002a17fffc00187690000a38169001517"
-        "537562736372697074696f6e5f32313437343637323635a3883a000202"
-        "a3876a00030000a3876b000900a38810000202a38811000101a388182004"
-        "0388808480000000a38819000400a3881a000400a3881b000200a3881c000200"
-        "a3881d0007000aa3881e0003ffffa15101000194660000a38169001512"
-        "5337704472697665725f416c61726d696e67a3876d000203a3946310030a"
-        "0000000000000000000000000000000000000000a3bc33200301ffff"
-        "a3bf75200400a3bf6d000101a4946400000008a2a200000000"
-    )
+# Alarm-subscription CreateObject from the S7-1500 reference trace.
+_REFERENCE_ALARM_SUBSCRIPTION = bytes.fromhex(
+    "70000cb80004000000000002a17fffc00187690000a38169001517"
+    "537562736372697074696f6e5f32313437343637323635a3883a000202"
+    "a3876a00030000a3876b000900a38810000202a38811000101a388182004"
+    "0388808480000000a38819000400a3881a000400a3881b000200a3881c000200"
+    "a3881d0007000aa3881e0003ffffa15101000194660000a38169001512"
+    "5337704472697665725f416c61726d696e67a3876d000203a3946310030a"
+    "0000000000000000000000000000000000000000a3bc33200301ffff"
+    "a3bf75200400a3bf6d000101a4946400000008a2a200000000"
+)
+# AlarmDomainFilter (7731) = [0xFFFF], TextLanguages (8181) = [], SendTexts (8173) = True.
+_TEXTS_AND_DOMAIN_FILTER = bytes.fromhex("a3bc33200301ffffa3bf75200400a3bf6d000101")
+
+
+def _reference_payload(texts_and_domain_filter: bool = True) -> bytes:
+    """The reference trace as the builder returns it, for container 0x70000CB8."""
     # The write IntegrityId 2 is inserted by _send_request at offset 11.
-    assert payload == captured[:11] + captured[12:]
+    payload = _REFERENCE_ALARM_SUBSCRIPTION[:11] + _REFERENCE_ALARM_SUBSCRIPTION[12:]
+    if not texts_and_domain_filter:
+        assert payload.count(_TEXTS_AND_DOMAIN_FILTER) == 1
+        payload = payload.replace(_TEXTS_AND_DOMAIN_FILTER, b"")
+    return payload
+
+
+def test_alarm_subscription_matches_real_plc_reference_trace() -> None:
+    assert build_alarm_subscription_request(0x70000CB8) == _reference_payload()
+
+
+def test_alarm_subscription_without_texts_and_domain_filter() -> None:
+    """The request a CPU 1214C FW V4.2 accepts: the reference without 7731, 8181 and 8173 (#173)."""
+    payload = build_alarm_subscription_request(0x70000CB8, texts_and_domain_filter=False)
+    assert payload == _reference_payload(texts_and_domain_filter=False)
+    for attribute_id in (
+        Ids.ALARM_SUBSCRIPTION_REF_ALARM_DOMAIN_FILTER,
+        Ids.ALARM_SUBSCRIPTION_REF_TEXT_LANGUAGES,
+        Ids.ALARM_SUBSCRIPTION_REF_SEND_TEXTS,
+    ):
+        assert bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(attribute_id) not in payload
+
+
+@pytest.mark.parametrize(("language_ids", "domains"), [([1033], None), (None, [256]), ([], None), (None, [])])
+def test_alarm_subscription_without_texts_refuses_languages_and_domains(
+    language_ids: list[int] | None, domains: list[int] | None
+) -> None:
+    with pytest.raises(ValueError, match="#173"):
+        build_alarm_subscription_request(1, language_ids, domains, texts_and_domain_filter=False)
+
+
+def _key_family_connection(family: str) -> object:
+    from s7commplus.connection import S7CommPlusConnection
+    from s7commplus.v1_session_key.keys import KeyFamily
+
+    conn = S7CommPlusConnection("127.0.0.1")
+    conn._session_key = b"k" * 24
+    conn._protocol_version = ProtocolVersion.V1
+    conn._v1_session_key_family = KeyFamily[family]
+    conn._subscription_container_id = 0x70000CB8
+    conn.send_request = MagicMock(  # type: ignore[method-assign]
+        return_value=encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x55667788)
+    )
+    return conn
+
+
+_FAMILY_SENDS_TEXTS = [("PLCSIM", True), ("S7_1200", False), ("S7_1500", True)]
+
+
+@pytest.mark.parametrize(("family", "sends_texts"), _FAMILY_SENDS_TEXTS)
+def test_sync_alarm_subscription_layout_per_key_family(family: str, sends_texts: bool) -> None:
+    conn = _key_family_connection(family)
+    client = S7CommPlusClient()
+    client._connection = conn  # type: ignore[assignment]
+    assert conn.alarm_texts_and_domain_filter is sends_texts  # type: ignore[attr-defined]
+
+    assert client.create_alarm_subscription() == 0x55667788
+    (_, payload), kwargs = conn.send_request.call_args  # type: ignore[attr-defined]
+    assert payload == _reference_payload(sends_texts)
+    assert kwargs["integrity_tail"] == len(payload) - 11
+
+
+@pytest.mark.parametrize(("family", "sends_texts"), _FAMILY_SENDS_TEXTS)
+@pytest.mark.asyncio
+async def test_async_alarm_subscription_layout_per_key_family(family: str, sends_texts: bool) -> None:
+    from s7commplus.v1_session_key.keys import KeyFamily
+
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    client._session_key = b"k" * 24
+    client._protocol_version = ProtocolVersion.V1
+    client._v1_session_key_family = KeyFamily[family]
+    client._subscription_container_id = 0x70000CB8
+    client._send_request = AsyncMock(  # type: ignore[method-assign]
+        return_value=encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x55667788)
+    )
+    assert client.alarm_texts_and_domain_filter is sends_texts
+
+    assert await client.create_alarm_subscription() == 0x55667788
+    (_, payload), kwargs = client._send_request.call_args
+    assert payload == _reference_payload(sends_texts)
+    assert kwargs["integrity_tail"] == len(payload) - 11
+
+
+def test_sync_s7_1200_alarm_subscription_refuses_domains_before_sending() -> None:
+    conn = _key_family_connection("S7_1200")
+    client = S7CommPlusClient()
+    client._connection = conn  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="#173"):
+        client.create_alarm_subscription(domains=[256])
+    conn.send_request.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_async_s7_1200_alarm_subscription_refuses_languages_before_sending() -> None:
+    from s7commplus.v1_session_key.keys import KeyFamily
+
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    client._v1_session_key_family = KeyFamily.S7_1200
+    client._subscription_container_id = 0x70000CB8
+    client._send_request = AsyncMock()  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="#173"):
+        await client.create_alarm_subscription(language_ids=[1033])
+    client._send_request.assert_not_awaited()
 
 
 def test_alarm_delete_matches_real_plc_reference_trace() -> None:
@@ -179,6 +289,15 @@ def test_parse_alarm_notification() -> None:
     assert notification.sequence_number == 12
     assert len(notification.alarms) == 1
     assert notification.alarms[0].texts[1033].alarm_text == "Alert"
+
+
+def test_parse_alarm_notification_without_texts() -> None:
+    """A subscription without SendTexts (#173) may get alarms with no text attribute."""
+    notification = parse_alarm_notification(_notification_frame(with_texts=False))
+    assert len(notification.alarms) == 1
+    alarm = notification.alarms[0]
+    assert alarm.cpu_alarm_id == 0x8A7E0001002A0000
+    assert alarm.texts == {}
 
 
 def test_sync_alarm_client_apis() -> None:
