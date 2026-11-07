@@ -17,6 +17,7 @@ from s7commplus.codec import encode_header
 from s7commplus.connection import (
     FamilyOnlyFingerprintError,
     SessionKeyCandidateRejectedError,
+    _build_get_var_substreamed_payload,
     _frame_request,
 )
 from s7commplus.error import S7ConnectionError, S7IntegrityError
@@ -311,6 +312,22 @@ async def test_async_renewal_installs_key_only_after_accepted_old_key_response()
     renewal_call = client._send_request_locked.call_args_list[1]
     assert renewal_call.args[0] == FunctionCode.SET_VARIABLE
     assert encode_uint32_vlq(LegitimationId.SESSION_SETUP_LEGITIMATION) in renewal_call.args[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", [KeyFamily.S7_1200, KeyFamily.S7_1500])
+async def test_async_renewal_reads_the_challenge_with_the_reference_layout(family: KeyFamily) -> None:
+    client = _authenticated_client()
+    client._v1_session_key_family = family
+    client._sequence_number = 7
+    challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
+    client._send_request_locked = AsyncMock(side_effect=[challenge_response, b"\x00"])  # type: ignore[method-assign]
+    with patch("s7commplus.v1_session_key.handshake.authenticate_session_key", return_value=(b"b" * 180, b"n" * 24)):
+        await client._renew_session_key_locked()
+
+    challenge_call = client._send_request_locked.call_args_list[0]
+    expected = _build_get_var_substreamed_payload(0x70000FDC, LegitimationId.SERVER_SESSION_REQUEST)
+    assert challenge_call.args == (FunctionCode.GET_VAR_SUBSTREAMED, expected, 4)
 
 
 @pytest.mark.asyncio

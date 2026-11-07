@@ -458,8 +458,8 @@ class S7CommPlusAsyncClient:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
 
@@ -1208,11 +1208,11 @@ class S7CommPlusAsyncClient:
 
         from .v1_session_key.handshake import authenticate_session_key
 
-        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
-        challenge_payload = _build_v1_get_var_substreamed_payload(
-            self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
-        )
-        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail)
+        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        # one, after which the renewal completes (#169).
+        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4)
         challenge = _parse_get_var_substreamed_response(challenge_response)
         if len(challenge) != 20:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
@@ -2453,7 +2453,9 @@ class S7CommPlusAsyncClient:
             await self._invalidate_integrity_failure()
             raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
         response = response_data[consumed : consumed + data_length]
-        if self._session_key is not None:
+        if version == ProtocolVersion.V3:
+            if self._session_key is None:
+                raise S7ConnectionError("V3 response received without a session key")
             try:
                 response = _verify_v3_hmac(response, self._session_key)
             except S7IntegrityError:
@@ -2644,7 +2646,9 @@ class S7CommPlusAsyncClient:
             await ensure(frag_len)
             fragment_data = bytes(buf[:frag_len])
             del buf[:frag_len]
-            if digest_state is not None:
+            if fragment_version == ProtocolVersion.V3:
+                if digest_state is None:
+                    raise S7ConnectionError("V3 response received without a session key")
                 try:
                     fragment_data = (
                         legacy_verifier.verify(fragment_data)

@@ -1070,12 +1070,17 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
 def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_version: int, object_qualifier_version: int) -> int:
     """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-    PLCSIM Advanced V8 (key family 03) needs the layout of the session's other
-    data requests there too (V2 on a V1 SessionKey session, #66). Other PLCs keep
-    the negotiated protocol version these two requests have always used: neither
-    layout of them has been checked on a hardware PLC.
+    PLCSIM Advanced V8 (key family 03) and the S7-1200 (key family 01) need the
+    layout of the session's other data requests there too, V2 on a V1 SessionKey
+    session. PLCSIM was found in #66. A CPU 1214C FW V4.2 resets the connection on
+    a V1 delete and accepts a V2 one (#136); ``write_symbolic`` is the same
+    SetMultiVariables request as ``write_tags``, which that CPU accepts with V2.
+    The S7-1500 keeps the negotiated protocol version, which these two requests
+    have always used and which hasn't been checked on hardware.
     """
-    return object_qualifier_version if family == KeyFamily.PLCSIM else protocol_version
+    if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200):
+        return object_qualifier_version
+    return protocol_version
 
 
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
@@ -1106,12 +1111,18 @@ def _strip_response_integrity_id(function_code: int, payload: bytes, session_key
     """Remove the IntegrityId that leads SessionKey response payloads.
 
     The legacy S7-1500 profile keeps GET_MULTI_VARIABLES and EXPLORE payloads
-    whole, because there the IntegrityId follows the body.
+    whole, because there the IntegrityId follows the body. A leading value too
+    large for an IntegrityId is the return value of a PLC that sends it first,
+    as a rejected S7-1215C legitimation does, so that payload stays whole too.
     """
     if legacy_s7_1500 and function_code in (FunctionCode.GET_MULTI_VARIABLES, FunctionCode.EXPLORE):
         return payload
     if session_key_active and len(payload) > 1:
-        resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        try:
+            resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        except ValueError:
+            logger.debug("  Response starts with a value that is not an IntegrityId; keeping it whole")
+            return payload
         logger.debug("  Response IntegrityId: %d (%d bytes)", resp_iid, consumed)
         return payload[consumed:]
     return payload
@@ -1408,8 +1419,8 @@ class S7CommPlusConnection:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
 
@@ -1945,9 +1956,11 @@ class S7CommPlusConnection:
 
         from .v1_session_key.handshake import authenticate_session_key
 
-        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
-        challenge_payload = self._build_get_var_substreamed(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
-        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail, False)
+        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        # one, after which the renewal completes (#169).
+        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4, False)
         challenge = _parse_get_var_substreamed_response(challenge_response)
         if len(challenge) != 20:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")

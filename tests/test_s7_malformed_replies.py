@@ -118,10 +118,10 @@ def test_known_crashing_input_raises_value_error(name: str, parser: Callable[[by
 
 
 def test_read_response_with_a_huge_item_number_raises_instead_of_allocating() -> None:
-    # ReturnValue 0, then item number 0xA3A3A3A3 (a 5-byte VLQ) and a NULL value.
-    # The parser used to build a list as long as that number: about 2.7 billion
-    # entries from 15 bytes, which hung the caller and exhausted memory.
-    reply = bytes.fromhex("0000a3a3a3a3a3a3a3a30500000000")
+    # ReturnValue 0, then item number 0xF468D1A3 (a 5-byte VLQ) and a NULL value.
+    # The parser used to build a list as long as that number: about 4.1 billion
+    # entries from 12 bytes, which hung the caller and exhausted memory.
+    reply = bytes.fromhex("00008fa3a3a3230500000000")
     with pytest.raises(ValueError, match="answers only"):
         _parse_read_response(reply)
 
