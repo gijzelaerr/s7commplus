@@ -12,13 +12,14 @@ Provides serialization for the S7CommPlus wire format including:
 Reference: thomas-v2/S7CommPlusDriver/Core/S7p.cs
 """
 
+import logging
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from .error import S7ReturnValueError
-from .protocol import PROTOCOL_ID, DataType, ElementID, Ids, ObjectId, ProtocolVersion, service_result_code
+from .protocol import PROTOCOL_ID, DataType, ElementID, Ids, ObjectId, ProtocolVersion, ReturnValue
 from .vlq import (
     decode_int32_vlq,
     decode_int64_vlq,
@@ -29,6 +30,8 @@ from .vlq import (
     encode_uint32_vlq,
     encode_uint64_vlq,
 )
+
+logger = logging.getLogger(__name__)
 
 # ServerSession.Role (attribute 299): the roles the session may take. The
 # bit below was observed set on PLCs running a secured (SessionKey-protected)
@@ -155,9 +158,10 @@ def decode_response_header(data: bytes, offset: int = 0) -> dict[str, Any]:
 
 
 def parse_or_raise_for_return_value(response: bytes, operation: str) -> int:
-    """Raise if a response's leading ReturnValue is truncated or non-zero.
+    """Raise if a response's leading ReturnValue is truncated or reports a failure.
 
-    The low 16 bits of an error ReturnValue hold a signed error code (see `service_result_code`).
+    Only bit 63 marks a failure (see `ReturnValue`). A non-zero value without it
+    is a success with information, e.g. a partial result, and is only logged.
 
     Args:
         response: Raw response payload, starting with the ReturnValue.
@@ -168,15 +172,17 @@ def parse_or_raise_for_return_value(response: bytes, operation: str) -> int:
 
     Raises:
         ValueError: If the ReturnValue is truncated.
-        S7ReturnValueError: If the ReturnValue is non-zero.
+        S7ReturnValueError: If the ReturnValue reports a failure.
     """
     try:
         return_value, offset = decode_uint64_vlq(response, 0)
     except ValueError as error:
         raise ValueError(f"{operation}: truncated ReturnValue") from error
-    if return_value != 0:
-        code = service_result_code(return_value)
-        raise S7ReturnValueError(f"{operation} failed: PLC returned 0x{return_value:016X} (error {code})", return_value, response)
+    result = ReturnValue.from_int(return_value)
+    if result.failed:
+        raise S7ReturnValueError(f"{operation} failed: PLC returned 0x{result.raw:016X} ({result})", return_value, response)
+    if return_value:
+        logger.debug("%s: PLC returned informational 0x%016X (%s)", operation, return_value, result)
     return offset
 
 

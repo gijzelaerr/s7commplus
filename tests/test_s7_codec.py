@@ -1,5 +1,6 @@
 """Tests for S7CommPlus codec (header encoding, typed values, payload builders)."""
 
+import logging
 import struct
 from typing import Any
 
@@ -844,23 +845,24 @@ class TestParseOrRaiseForReturnValue:
         assert parse_or_raise_for_return_value(response, "EXPLORE") == offset
 
     @pytest.mark.parametrize(
-        "return_value, code",
+        "return_value, code, name",
         [
-            (0x8020AB001992FFF4, -12),
-            (0x8020AB001A2BFFF4, -12),
-            (0x80208100217BFFC1, -63),
-            (0xA025AB000109FFFD, -3),
-            (0x8318890001E1FFFE, -2),
-            (0xA201BE000162FF79, -135),
-            (0xA201BB002C27FF88, -120),
+            (0x8020AB001992FFF4, -12, "OBJECT_NOT_FOUND"),
+            (0x8020AB001A2BFFF4, -12, "OBJECT_NOT_FOUND"),
+            (0x80208100217BFFC1, -63, "ASSOCIATION_NOT_FOUND"),
+            (0xA025AB000109FFFD, -3, "INVALID_ARGUMENT_VALUE"),
+            (0x8318890001E1FFFE, -2, "INVALID_VALUE_TYPE"),
+            (0xA201BE000162FF79, -135, "SERVICE_ABORTED"),
+            (0xA201BB002C27FF88, -120, "SERVICE_REQUEST_PARSING_ERROR"),
         ],
     )
-    def test_error_raises_with_signed_code(self, return_value: int, code: int) -> None:
+    def test_error_raises_with_signed_code(self, return_value: int, code: int, name: str) -> None:
         response = encode_uint64_vlq(return_value) + b"\x00\x00\x00\x00"
-        message = f"^EXPLORE failed: PLC returned 0x{return_value:016X} \\(error {code}\\)$"
+        message = f"^EXPLORE failed: PLC returned 0x{return_value:016X} \\({name} \\({code}\\), "
         with pytest.raises(S7ReturnValueError, match=message) as excinfo:
             parse_or_raise_for_return_value(response, "EXPLORE")
         assert excinfo.value.error_code == code
+        assert excinfo.value.result.code == code
         assert excinfo.value.return_value == return_value
         assert excinfo.value.response == response
 
@@ -870,6 +872,17 @@ class TestParseOrRaiseForReturnValue:
         with pytest.raises(S7ReturnValueError) as excinfo:
             parse_or_raise_for_return_value(response, "EXPLORE")
         assert excinfo.value.return_value == 0x8020AB001992FFF4
+        assert str(excinfo.value) == (
+            "EXPLORE failed: PLC returned 0x8020AB001992FFF4 (OBJECT_NOT_FOUND (-12), generic INVALID_ARGUMENT_VALUE (43))"
+        )
+
+    @pytest.mark.parametrize("return_value", [17, 19, 0x0000800000000013, 0x4000000000000000])
+    def test_informational_value_does_not_raise(self, return_value: int, caplog: pytest.LogCaptureFixture) -> None:
+        # Bit 63 clear: a success with information, e.g. 19 ExecutedWithPartialError
+        response = encode_uint64_vlq(return_value) + b"\x00\x00\x00\x00"
+        with caplog.at_level(logging.DEBUG, logger="s7commplus.codec"):
+            assert parse_or_raise_for_return_value(response, "EXPLORE") == len(encode_uint64_vlq(return_value))
+        assert f"EXPLORE: PLC returned informational 0x{return_value:016X}" in caplog.text
 
     @pytest.mark.parametrize("response", [b"", b"\x80", b"\xc0\x88\x95", bytes.fromhex("c08895b080e6a5ff")])
     def test_truncated_return_value(self, response: bytes) -> None:

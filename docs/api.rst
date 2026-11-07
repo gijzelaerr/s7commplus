@@ -75,6 +75,24 @@ Protocol enums
 .. autoclass:: s7commplus.protocol.AccessLevel
    :members:
 
+Return values
+-------------
+
+.. autoclass:: s7commplus.protocol.ReturnValue
+   :members:
+
+.. autoclass:: s7commplus.protocol.ServiceResult
+   :members:
+   :undoc-members:
+
+.. autoclass:: s7commplus.protocol.GenericError
+   :members:
+   :undoc-members:
+
+.. autoclass:: s7commplus.protocol.ErrorSource
+   :members:
+   :undoc-members:
+
 Exceptions
 ----------
 

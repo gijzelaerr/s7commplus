@@ -1648,7 +1648,7 @@ class S7CommPlusClient:
             Raw response payload. Read the compressed XML documents in it with `s7commplus.iter_preset_streams`.
 
         Raises:
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue, e.g. for an object that does not exist.
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue, e.g. for an object that does not exist.
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
@@ -1682,7 +1682,7 @@ class S7CommPlusClient:
             contains no recognisable zlib stream.
 
         Raises:
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue (see `explore`).
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue (see `explore`).
         """
         raw = self.explore(explore_id, attributes)
         return find_and_decompress(raw)
@@ -1827,7 +1827,7 @@ class S7CommPlusClient:
 
         Raises:
             NotImplementedError: On a V1 SessionKey session, which does not explore the program.
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue.
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
@@ -2338,7 +2338,7 @@ class S7CommPlusClient:
                 Omitting the filter retains every language sent by the PLC.
 
         Raises:
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue.
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")

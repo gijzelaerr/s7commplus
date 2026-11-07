@@ -1405,7 +1405,7 @@ class S7CommPlusAsyncClient:
             Raw response payload. Read the compressed XML documents in it with `s7commplus.iter_preset_streams`.
 
         Raises:
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue, e.g. for an object that does not exist.
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue, e.g. for an object that does not exist.
         """
         if self._session_key is not None:
             explore_id = explore_id or 0x38
@@ -1436,7 +1436,7 @@ class S7CommPlusAsyncClient:
             contains no recognisable zlib stream.
 
         Raises:
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue (see `explore`).
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue (see `explore`).
         """
         raw = await self.explore(explore_id, attributes)
         return find_and_decompress(raw)
@@ -1862,7 +1862,7 @@ class S7CommPlusAsyncClient:
         """Return a snapshot of the PLC's active alarms without consuming notifications.
 
         Raises:
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue.
         """
         response = await self._send_request(
             FunctionCode.EXPLORE, build_alarm_explore_request(), integrity_tail=5, reassemble=True
@@ -2244,7 +2244,7 @@ class S7CommPlusAsyncClient:
 
         Raises:
             NotImplementedError: On a V1 SessionKey session, which does not explore the program.
-            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
+            S7ReturnValueError: If the PLC answers with a failing ReturnValue.
         """
         if self._session_key is not None and not self.legacy_s7_1500:
             raise NotImplementedError("program_objects() is not supported on V1 SessionKey sessions")

@@ -506,7 +506,7 @@ def parse_alarm_explore_response(response: bytes, language_ids: Sequence[Languag
     """Parse the payload returned by an alarm-subsystem EXPLORE request.
 
     Raises:
-        S7ReturnValueError: If the ReturnValue is non-zero.
+        S7ReturnValueError: If the ReturnValue reports a failure.
         ValueError: If the response is truncated or malformed.
     """
     try:

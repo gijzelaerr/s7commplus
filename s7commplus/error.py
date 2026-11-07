@@ -8,7 +8,7 @@ import copyreg
 from typing import Optional, Callable, Any, Hashable
 from functools import cache
 
-from .protocol import service_result_code
+from .protocol import ReturnValue
 
 
 class S7Error(Exception):
@@ -56,12 +56,14 @@ class S7ReturnValueError(S7ProtocolError):
     """Raised when the PLC answers a request with an error ReturnValue.
 
     Attributes:
-        return_value: The full 64-bit ReturnValue; `error_code` holds the signed code from its low 16 bits.
+        return_value: The full 64-bit ReturnValue; `error_code` holds its signed result code.
+        result: The decoded ReturnValue: code, generic category and source.
         response: The raw response payload, starting with the ReturnValue.
     """
 
     def __init__(self, message: str, return_value: int, response: bytes):
-        super().__init__(message, error_code=service_result_code(return_value))
+        self.result = ReturnValue.from_int(return_value)
+        super().__init__(message, error_code=self.result.code)
         self.return_value = return_value
         self.response = response
 

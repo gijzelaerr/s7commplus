@@ -9,6 +9,8 @@ Reference: Wireshark S7CommPlus dissector
 """
 
 import functools
+import warnings
+from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
@@ -696,72 +698,349 @@ class ServiceResult(IntEnum):
     """Result codes a PLC returns in place of 0 (success) for a service.
 
     S7CommPlus services answer with a 64-bit return value whose low bits
-    carry one of these codes. Positive values are informational outcomes
-    (the request still succeeded); negative values are failures. The
-    numeric values also appear in the low word of composite return values
-    (error flag | error source | code), which is why a rejected request
-    commonly shows up as a large value such as ``0x8318890001B3FFFE``
-    (code -2 from source 0x19).
+    carry one of these codes (see `ReturnValue` for the whole layout).
+    Positive values are informational outcomes (the request still
+    succeeded); negative values are failures. A rejected request therefore
+    shows up as a large value such as ``0x8318890001B3FFFE``: code -2 in the
+    low word, with the failure flag and generic category in the upper bits.
 
-    Reference: Wireshark S7CommPlus dissector result-code table and
-    thomas-v2/S7CommPlusDriver result handling.
+    Members are ordered by value.
     """
 
-    # --- Legitimation outcomes (SetVariable on ServerSession) ---
-    # A PLC may report that the session already carries a lower protection
-    # level than the requested one, or was legitimated to a specific level.
-    # All of these mean the legitimation itself succeeded.
-    SESSION_PRE_LEGITIMIZED = 17
-    SERVICE_LEGITIMATED_FOR_LEVEL1 = 33
-    SERVICE_LEGITIMATED_FOR_LEVEL2 = 25
-    SERVICE_LEGITIMATED_FOR_LEVEL3 = 26
-    # The PLC answered the challenge with the wrong password.
-    SERVICE_SESSION_DELEGITIMATED = 22
+    PMS_MISMATCH = -522
+    SERVICE_PWD_EXPIRED = -521
+    SERVICE_TLS_ONLY = -520
+    SERVICE_NO_TLS = -519
+    TLS_INTERFACE_MISSING = -518
+    TLS_VERIFICATION_FAILED = -517
+    OPEN_SSL = -516
+    REFERENCED_OBJECT_DELETED = -515
+    WRONG_ENUM_TYPE = -514
+    CONCURRENT_TRANSACTION_RUNNING = -513
+    MULTI_ES_INCOMPATIBLE_OTHER_ES_VERSION = -512
+    MULTI_ES_LIMIT_EXCEEDED = -511
+    MULTI_ES_CONFLICT = -510
+    STREAMING_ERROR = -509
+    NOT_ALLOWED_WITH_STREAMING = -508
+    NO_SUPPORT_FOR_TLS = -507
+    STOPPING_TLS_FAILED = -506
+    START_TLS_FAILED = -505
+    PASSWORD_ALREADY_USED = -504
+    SPACE_SIGN_ONLY_HASH = -503
+    INVALID_TYPE_INFO_FORMAT = -502
+    SYSTEM_LIMIT_EXCEEDED = -501
+    WORKS_FOR_PROXY_OBJECTS_ONLY = -409
+    TEXT_LIB_BUFFER_OVERFLOW = -408
+    TEXT_LIB_CURRENTLY_NOT_AVAILABLE = -407
+    INVALID_SEARCH_MODE = -406
+    TEXT_LIB_DUPLICATED_TEXT_ID = -405
+    TEXT_LIB_NO_LIST_HEADER = -404
+    TEXT_LIB_NOT_INITIALIZED = -403
+    TEXT_LIB_INCONSISTENT_STRUCTURE = -402
+    INVALID_COMPILER_ALIGNMENT = -401
+    SSL_HANDSHAKE = -353
+    SECURITY_DISCONNECT = -352
+    INTEGRITY_ERROR = -351
+    DS_INCOMPLETE_PREPARATION = -303
+    DS_TARGET_LOST_UNEXPECTED = -302
+    DS_INCONSISTANT_CONTAINER = -301
+    DS_NOT_INITIALIZED = -300
+    CONFIGURED_SIZE_INVALID = -280
+    PLAIN_STRUCTURE_NEEDS_LITTLE_ENDIAN_DATA = -279
+    PLAIN_STRUCTURE_NEEDS_BIG_ENDIAN_DATA = -278
+    PLAIN_STRUCTURE_NEEDS_NENA_OFFSETS = -277
+    PLAIN_STRUCTURE_NEEDS_CLASSIC_OFFSETS = -276
+    NOT_ALLOWED_FOR_PERSISTENT_DATA = -275
+    NO_DATA_PTR_AVAILABLE = -274
+    TYPE_INFO_HIERARCHY_OVERFLOW = -273
+    NO_OFFSET_PUBLISHED = -272
+    VARIABLE_IS_OBSOLETE = -271
+    NOT_OMS = -270
+    STORE_DEFECT = -269
+    INVALID_THREAD_CONTEXT = -268
+    OBJECT_HAS_BEEN_DELETED = -267
+    STORE_NOT_EXISTING = -266
+    STORE_TRANSACTION_NOT_RUNNING = -265
+    STORE_TRANSACTION_ALREADY_RUNNING = -264
+    INVALID_STATE = -263
+    DUPLICATE_QUALIFIER_VALUE = -262
+    CBT_CONTAINER_NEEDED = -261
+    NOT_CREATEABLE_BY_TRANSACTION = -260
+    INVALID_TRANSACTION_STATE = -259
+    INVALID_VERSION = -258
+    VALUE_CONVERSION_NOT_POSSIBLE = -257
+    INVALID_TYPE_INFO_MODIFICATION_TIME = -256
+    INVALID_LID = -255
+    TYPE_INFO_NOT_SET = -254
+    ONLY_TYPE_INFO_ALLOWED = -253
+    TYPE_INFO_INVALID_STRUCTURE_TYPE = -252
+    STRUCT_NOT_AS_BLOB_ACCESSIBLE = -251
+    WSTRING_NOT_SUPPORTED = -250
+    CONSISTENCY_ASYNC_CALL_FAILED = -249
+    ASYNC_CALL_FAILED = -248
+    CALLBACK_MISSING = -247
+    NULL_POINTER = -246
+    STORE_REFUSED_BY_BL = -245
+    STORE_IS_BUSY = -244
+    STORE_HANDLER_NOT_FREE = -243
+    FILE_FIND_ELEMENT = -242
+    FILE_INVALID_FIND_STATE = -241
+    STATE_INVALID_CASE = -240
+    ASYNC_FILE_RUNNING = -239
+    SOURCE_FILE_NOT_EXISTING = -238
+    STORE_ALREADY_EXISTING = -237
+    STORE_INVALID_HANDLE = -236
+    VALUE_MISSING = -235
+    SERIALIZER_REINIT_FAILED = -234
+    STORE_BAD_INDEX = -233
+    STORE_WRONG_FORMAT = -232
+    STORE_INACTIVE = -231
+    STORE_FORCE_STORE = -230
+    FILE_UNLINK_ERROR = -227
+    FILE_WRITE_ERROR = -226
+    FILE_READ_ERROR = -225
+    STORE_HAS_TRANSACTION_LOCK = -223
+    START_TIMER_ERROR = -222
+    INVALID_CONSISTENCY_ID = -221
+    NOT_IN_CONSISTENCY = -220
+    FILE_INVALID_ACCESS = -219
+    DIRECTORY_REMOVE_ERROR = -218
+    DIRECTORY_ALREADY_CLOSED = -217
+    DIRECTORY_ALREADY_OPEN = -216
+    FILE_NOT_FOUND = -215
+    MESSAGE_BLOCK_INIT_ERROR = -214
+    ASYNC_FILE_INSTANCE_IN_USE_ERROR = -213
+    HAS_FILE_NAME_ERROR = -212
+    NO_FILE_NAME = -211
+    FILE_INNER_ERROR = -210
+    DIRECTORY_CREATE_ERROR = -209
+    DIRECTORY_OPEN_ERROR = -208
+    DIRECTORY_CLOSE_ERROR = -207
+    DIRECTORY_READ_ERROR = -206
+    INVALID_OPEN_MODE = -205
+    FILE_ALREADY_CLOSED = -204
+    FILE_ALREADY_OPEN = -203
+    FILE_CLOSE_ERROR = -202
+    FILE_OPEN_ERROR = -201
+    MODEL_INCONSISTENT = -171
+    REDIRECTION_NOT_ALLOWED = -170
+    REDIRECTION_CALLED_TWICE = -169
+    TREE_READ_LOCKED = -168
+    OBJECT_NOT_LOCKED = -167
+    CHILD_ALREADY_LOCKED_FOR_DELETION = -166
+    EXCLUSIVE_LOCKED_AGAINST_DELETION = -165
+    LOCK_FOR_DELETION = -164
+    LOCKING_LOOP_OVERFLOW = -163
+    TREE_LOCKED_AGAINST_DELETION = -162
+    WRONG_LOCK_FOR_DELETION_OBJECT = -161
+    LOCKING_COUNTER_UNDERFLOW = -160
+    LOCKING_COUNTER_OVERFLOW = -159
+    CALLBACK_INTERFACE_IS_MISSING = -158
+    CHILD_LOCKED = -157
+    LOCKING_STRATEGY_ALREADY_IN_QUEUE = -156
+    LOCKING_STRATEGY_NOT_IN_PROGRESS = -155
+    EXCLUSIVE_LOCKED = -154
+    LOCKING_STRATEGY_NOT_FOUND = -153
+    LOCKING_STRATEGY_ALREADY_IN_PROGRESS = -152
+    WRONG_LOCKING_STRATEGY = -151
+    TREE_WRITE_LOCKED = -150
+    SERVICE_COMM_FORMAT_DIFFERS_FROM_STORE_FORMAT = -136
+    SERVICE_ABORTED = -135
+    SERVICE_MULTI_ES_NOT_SUPPORTED = -134
+    SERVICE_NOT_CHANGABLE_IN_ERROR_STATE = -133
+    SERVICE_SUBSCRIPTION_IS_NOT_RUNNING = -132
+    SERVICE_SUBSCRIPTION_PREPARE_SEQUENCE_ERROR = -131
+    SERVICE_UNKNOWN_COM_FORMAT = -130
+    SERVICE_OBJECT_SERIALIZATION_ERROR = -129
+    SERVICE_TYPE_ALREADY_EXISTS = -128
+    SERVICE_ASYNC_RMC_IMPOSSIBLE = -127
+    SERVICE_WRONG_ARGUMENT_FORMAT = -126
+    SERVICE_WRONG_NR_OF_ARGUMENTS = -125
+    SERVICE_NOT_CHANGABLE_IN_RUN = -124
+    SERVICE_REQUEST_SERIALIZATION_ERROR = -123
+    SERVICE_NOTIFICATION_PARSING_ERROR = -122
+    SERVICE_OBJECT_PARSING_ERROR = -121
+    SERVICE_REQUEST_PARSING_ERROR = -120
+    SERVICE_UNKNOWN_REQUEST = -119
+    # The PLC answered the legitimation challenge with the wrong password (older firmware).
     SERVICE_SESSION_DELEGITIMATED_LEGACY = -118
-
-    # --- Common service outcomes ---
+    SERVICE_PENDING_REQUEST_NOT_FOUND = -117
+    SERVICE_UNEXPECTED_STREAM = -116
+    SERVICE_UNEXPECTED_RESPONSE = -115
+    SERVICE_CANNOT_CREATE_REQUEST = -114
+    SERVICE_TOO_MANY_SESSIONS = -113
+    SERVICE_TOO_MANY_REQUESTS = -112
+    SERVICE_TIMEOUT = -111
+    SERVICE_NOT_OWNER = -110
+    SERVICE_NOT_CONNECTED = -109
+    SERVICE_NOT_AVAILABLE = -108
+    SERVICE_NOT_ALLOWED = -107
+    SERVICE_INVALID_SESSION = -106
+    SERVICE_INVALID_OBJECT = -105
+    SERVICE_INVALID_ADDRESS = -104
+    SERVICE_FAILED_TO_DISCONNECT = -103
+    SERVICE_DISCONNECTED = -102
+    SERVICE_ACTIVATE_FAILED = -101
+    SERVICE_ACCESS_DENIED = -100
+    PERSISTENCE_NOT_AVAILABLE = -99
+    NOT_PERSISTENT = -98
+    VARIABLE_WITH_QUALIFIER = -97
+    INVALID_OBJECT_WITH_QUALIFIER = -96
+    NOT_IMPLEMENTED = -95
+    OBJECT_IS_NOT_PASSIVE = -94
+    OBJECT_ALREADY_IN_TREE = -93
+    OBJECT_IS_ACTIVE = -92
+    OBJECT_IS_PASSIVE = -91
+    OBJECT_IS_MARKED_FOR_DELETION = -90
+    DATA_IS_REFERENCED = -89
+    INFO_NOT_AVAILABLE = -88
+    OCB_MISSING = -87
+    NO_DELETE_ALLOWED = -86
+    STRUCT_ONLY_IN_DETAILS_ACCESSIBLE = -85
+    VALUE_NOT_MOVEABLE = -84
+    OCB_ALREADY_USED = -82
+    AID_ALREADY_SET = -81
+    DUPLICATE_AID = -80
+    NO_PROXY_OBJECT_ALLOWED = -79
+    ALLOCATOR_NOT_FOUND = -78
+    OBJECT_FACTORY_NOT_FOUND = -77
+    CANNOT_DELETE_NATIVE_OBJECT = -76
+    VALUE_TIMEOUT = -75
+    COMPOSITION_NOT_ALLOWED = -74
+    ASYNC_BUT_CALLBACK_INTERFACE_NOT_FOUND = -73
+    ELEMENT_IS_TRANSISTENT = -72
+    HIERARCHY_OVERFLOW = -71
+    INVALID_ASSOCIATION = -70
+    QUALIFIER_NOT_SYNC = -69
+    QUALIFIER_NOT_FOUND = -68
+    INVALID_ROOT = -67
+    HASH_INDEX_NOT_FOUND = -66
+    ITERATOR_INTERFACE_NOT_FOUND = -65
+    OBJECT_ALREADY_IN_ASSOCIATION = -64
+    ASSOCIATION_NOT_FOUND = -63
+    ASSOCIATION_NOT_QUALIFIED = -62
+    INVALID_VALUE_RANGE = -61
+    DUPLICATE_RID = -60
+    LINK_INTERFACE_NOT_FOUND = -59
+    ASYNC_ONLY = -58
+    VARIABLE_TYPE_NOT_ALLOWED = -57
+    VARIABLE_IS_SPECIFIC_ONLY = -56
+    INVALID_COMPOSITION = -55
+    NO_FREE_RID = -54
+    BUFFER_OVERFLOW = -53
+    DUPLICATE_LINK = -52
+    OBJECT_IS_LOCKED = -51
+    READ_ONLY_OBJECT = -50
+    STRING_MUST_HAVE_HEX_CHARACTERS_ONLY = -49
+    LINK_NOT_FOUND = -48
+    INVALID_META_TYPE = -47
+    OBJECT_IS_NOT_INSTANTIABLE = -46
+    TYPE_INFO_MAX_COMPLEXITY_REACHED = -46
+    CANNOT_CREATE_ABSTRACT_OBJECT = -45
+    NO_SEPARATE_LOAD_MEMORY_FILE_ALLOWED = -44
+    CREATE_CHILD_OBJECT_WITHIN_CREATE_CHILD_OBJECT = -43
+    M_N_ASSOC_NOT_SUPPORTED = -42
+    READ_ONLY_PROPERTY = -41
+    DIRECTORY_NOT_FOUND = -40
+    FILENAME_EXCED_RANGE = -39
+    CLASS_NOT_ALLOWED = -38
+    UNEXPECTED_ATTRIBUTE = -37
+    NUMERIC_UNDERFLOW = -36
+    NUMERIC_OVERFLOW = -35
+    UNEXPECTED_TOKEN = -34
+    BAD_CAST = -33
+    INVALID_AID = -32
+    INVALID_RID = -30
+    OBJECT_EXISTS_WITH_SAME_ID = -29
+    UNEXPECTED_FRAG_TYPE = -28
+    UNEXPECTED_END_TAG = -27
+    UNKNOWN_START_TAG = -26
+    INVALID_TYPE_ID = -25
+    INVALID_ID = -24
+    WRITING_DATA_ERROR = -23
+    NO_MORE_DATA_AVAILABLE = -22
+    READING_DATA_ERROR = -21
+    STREAM_IS_CURRENTLY_USED = -20
+    INVALID_NAMESPACE_ID = -19
+    CANNOT_DELIVER = -18
+    INVALID_CRC = -17
+    DUPLICATE_NAME_IN_CURRENT_HIERARCHY = -16
+    CLASS_NOT_SUPPORTED_FROM_CLASS_FACTORY = -15
+    CLASS_NOT_FOUND = -14
+    CARDINALITY_OVERFLOW = -13
+    OBJECT_NOT_FOUND = -12
+    INVALID_FILE_HANDLE = -11
+    INVALID_DESTINATION_REFERENCE_TYPE2 = -10
+    INVALID_SOURCE_REFERENCE_TYPE2 = -9
+    REFERENCES_ARE_NOT_CONNECTED = -8
+    INVALID_DESTINATION_REFERENCE_TYPE = -7
+    INVALID_SOURCE_REFERENCE_TYPE = -6
+    ERROR_IN_SPRINTF = -5
+    NOT_ENOUGH_MEMORY = -4
+    INVALID_ARGUMENT_VALUE = -3
+    INVALID_VALUE_TYPE = -2
+    UNKNOWN_ERROR = -1
+    OK = 0
+    MESSAGE_TYPE_CREATED = 1
+    MESSAGE_LINK_END = 2
+    MESSAGE_VALUE_UNCHANGED = 3
+    MESSAGE_SET_STRUCT_ATTRIBUTE = 4
+    MESSAGE_RESPONSE_NEEDED = 5
+    MESSAGE_ASYNC_CALL_PENDING = 6
+    MESSAGE_ASSOCIATION_WRONG_SIDE = 7
+    MESSAGE_LOCK_PENDING = 8
+    MESSAGE_ALREADY_LOCKED = 9
+    WARNING_DEFAULT_VALUE = 10
+    MESSAGE_CAN_MOVE_VALUE = 11
+    MESSAGE_LOAD_SUCCEEDED = 12
+    MESSAGE_CONTENT_ALREADY_MOVED = 13
+    WARNING_STORE_EMPTY = 14
+    MESSAGE_VALUE_SWAPPED = 15
+    MESSAGE_STORE_ACTIVE = 16
+    # 17, 25, 26 and 33: the session already carries a lower protection level
+    # than the requested one, or was legitimated to a specific level. All of
+    # these mean the legitimation itself succeeded.
+    SESSION_PRE_LEGITIMIZED = 17
     SERVICE_IGNORED = 18
     SERVICE_EXECUTED_WITH_PARTIAL_ERROR = 19
+    SERVICE_SUBSCRIPTION_SKIP = 20
     SERVICE_SUBSCRIPTION_TOO_MANY_NOTIFIES = 21
+    # The PLC answered the legitimation challenge with the wrong password.
+    SERVICE_SESSION_DELEGITIMATED = 22
+    END_OF_FILE = 23
     SERVICE_SUBSCRIPTION_DISABLED = 24
+    SERVICE_LEGITIMATED_FOR_LEVEL2 = 25
+    SERVICE_LEGITIMATED_FOR_LEVEL3 = 26
+    SERVICE_MULTI_RESPONSE_PENDING = 27
+    NEXT_MESSAGEBLOCK = 28
+    OBJECT_SKIPPED = 29
+    WARNING_DS_CANNOT_DISTRIBUTE = 30
+    WARNING_DS_CONTAINER_ITEM_NOT_FOUND = 31
+    WARNING_DS_PRECONDITION_MISSING = 32
+    SERVICE_LEGITIMATED_FOR_LEVEL1 = 33
     SERVICE_TRANSACTION_ABORTED = 34
+    BLOB_REALLOCATED = 35
+    MESSAGE_DIR_ALREADY_EXISTS = 36
     TEMPORARILY_OUT_OF_RESOURCES = 37
     LEGITIM_LEVEL_CURRENTLY_DISABLED = 38
-    END_OF_FILE = 23
-    BLOB_REALLOCATED = 35
+    RESCHEDULE_HANDLER = 39
     BLOB_END_REACHED = 40
-
-    # --- Negative failure codes (low word of a composite return value) ---
-    OK = 0
-    INVALID_VALUE_TYPE = -2
-    INVALID_ARGUMENT_VALUE = -3
-    NOT_ENOUGH_MEMORY = -4
-    UNKNOWN_ERROR = -1
-
-
-def service_result_code(return_value: int) -> int:
-    """Extract the ServiceResult code from a composite return value.
-
-    A composite return value packs ``error flag | error source | code`` into
-    the upper bits with the code's sign-extended low word at the bottom:
-
-    - a plain small negative number is already the code (legacy encoding),
-    - a value with the top bit set has its low 16 bits sign-extended, whether
-      it arrives as an unsigned 64-bit value or as its negative Python int.
-
-    >>> service_result_code(0x8318890001B3FFFE)
-    -2
-    >>> service_result_code(-2)
-    -2
-    >>> service_result_code(-9000293222178357250)  # the same value, negative
-    -2
-    >>> service_result_code(0)
-    0
-    """
-    if -(1 << 16) < return_value < 0:
-        return return_value  # a plain legacy code, not a composite
-    low = return_value & 0xFFFF
-    return low - 0x10000 if low & 0x8000 else low
+    WARNING_SINGLE_ES = 41
+    WARNING_MULTI_ES = 42
+    WARNING_MULTI_ES_WITH_SW_TOKEN = 43
+    WARNING_SKIP_DISTRIBUTION = 44
+    WARNING_LOGOUT = 45
+    WARNING_REDIRECTED_CALL = 46
+    WARNING_PWD_FALSE_CONFIGURED = 47
+    WARNING_PWD_FALSE_NOT_CONFIGURED = 48
+    SERVICE_LEGITIMATED_FOR_LEVEL4 = 49
+    SERVICE_PWD_EXPIRATION_WARNING = 50
+    SERVICE_PWD_EXPIRATION_WARNING_LEVEL1 = 51
+    SERVICE_PWD_EXPIRATION_WARNING_LEVEL2 = 52
+    SERVICE_PWD_EXPIRATION_WARNING_LEVEL3 = 53
+    SERVICE_PWD_EXPIRATION_WARNING_LEVEL4 = 54
+    MESSAGE_NO_STORE_INTEGRITY_CHECK = 55
+    CONTINUE_SYNCHRONOUSLY = 56
 
 
 class OperatingStateRequest(IntEnum):
@@ -843,18 +1122,120 @@ class SoftDataType(IntEnum):
 
 
 class ErrorSource(IntEnum):
-    """Subsystems that a composite return value can name as the error source.
+    """Subsystems that a return value can name as the error source.
 
-    A rejected service reports a composite 64-bit value whose low word is the
-    `ServiceResult` code and whose upper bits identify the reporting
-    subsystem. The exact bit layout of the upper bits varies by firmware and
-    is not decoded here; the enum documents the source identifiers so a
-    decoded value can be named once the layout is confirmed against a capture.
+    The source is bits 39..32 of a `ReturnValue`. 0 is the object management
+    system (OMS) itself; any other source carries its own 32-bit code in bits
+    31..0 instead of an OMS `ServiceResult` code, and no name for those codes
+    is known.
 
-    Reference: Wireshark S7CommPlus dissector error-source table and
-    thomas-v2/S7CommPlusDriver result handling.
+    Members are ordered by value. The members after "Deprecated names" are
+    older names for the same values, kept for compatibility; use the names
+    above them. `.name` and iteration return the new names, e.g.
+    ``ErrorSource(32).name == "ACE_FILESYSTEM"``.
     """
 
+    OMS_INTERNAL = 0
+    OMS = 0
+    OST = 1
+    IMC = 2
+    LMC = 3
+    WMC = 4
+    EVC = 5
+    OBEXEC = 6
+    TIS = 7
+    ALRM = 8
+    SDC = 9
+    PIC = 10
+    STIME = 11
+    RTIME = 12
+    COMP = 13
+    KERNEL = 14
+    BUS = 15
+    CIO = 16
+    PNIOC_IF = 17
+    XPNIOC_IF = 18
+    DPM_IF = 19
+    XDPM_IF = 20
+    WEB = 21
+    SNMP = 22
+    SPS7 = 23
+    SECU = 24
+    CPU_PARAM = 25
+    CPU_HARDWARE = 26
+    RW_ATTRIB = 27
+    PS = 28
+    SYSTEM = 29
+    SYSLOG = 30
+    ACE_FILESYSTEM = 32
+    ACE_COM = 33
+    BACKUP = 34
+    OPC_UA = 35
+    OPENSSL = 36
+    PRODIAG = 37
+    ENERGYSUITE = 38
+    CERTIFICATE_STORE = 39
+    UMC_RA = 40
+    CIR = 41
+    HSYNC = 48
+    HSYNC_RCPU = 49
+    HSYNC_HCPU = 50
+    ELS = 64
+    ELS_L01 = 65
+    ELS_L02 = 66
+    ELS_L03 = 67
+    ELS_L04 = 68
+    ELS_L05 = 69
+    ELS_L06 = 70
+    ELS_L07 = 71
+    ELS_L08 = 72
+    ELS_L09 = 73
+    ELS_L10 = 74
+    ELS_L11 = 75
+    ELS_L12 = 76
+    ELS_L13 = 77
+    ELS_L14 = 78
+    ELS_L15 = 79
+    ELS_L16 = 80
+    ELS_L17 = 81
+    ELS_L18 = 82
+    ELS_L19 = 83
+    ELS_L20 = 84
+    ELS_L21 = 85
+    ELS_L22 = 86
+    ELS_L23 = 87
+    ELS_L24 = 88
+    ELS_L25 = 89
+    ELS_L26 = 90
+    T_BLOCKS = 91
+    IE_CONFIG = 92
+    BMC = 93
+    DR = 94
+    CONNECTION = 95
+    SMC = 96
+    SAP = 97
+    CP_GPRS = 98
+    CP_DPM = 99
+    CP_DPS = 100
+    CP_PN = 101
+    CP_PNIOC = 102
+    CP_MCRC_BASE = 103
+    CP_MCRC_KINEMATICS_PLUS = 104
+    CP_SINUMERIC = 112
+    CP_SINAMICS = 113
+    CP_HWDIAG = 114
+    ID = 120
+    CP_SM_SOFTBUS = 208
+    CP_SM_COM_IF = 209
+    CP_SM_CS_CC = 210
+    CP_VIA_PANEL = 240
+    CP_VIA_WEBSERVER = 241
+    CP_VIA_ES = 242
+    FWUP_WEB = 253
+    FWUP_ES = 254
+    DEFAULT = 255
+
+    # --- Deprecated names ---
     OBJECT_MANAGEMENT_SYSTEM = 0
     OPERATING_STATE_CONTROL = 1
     LOAD_MEMORY_CONTROL = 3
@@ -862,11 +1243,220 @@ class ErrorSource(IntEnum):
     TEST_DEBUG_SYSTEM = 7
     ALARMING_SYSTEM = 8
     ONBOARD_COMPILER = 13
-    KERNEL = 14
     GENERAL_AS_OBJECT_MODEL_ERRORS = 25
     GENERAL_HARDWARE_CONFIGURATION_ERRORS = 26
     FILESYSTEM = 32
     COMMUNICATION_SYSTEM = 33
     EXECUTION_LEVEL_SYSTEM = 64
-    T_BLOCKS = 91
-    IE_CONFIG = 92
+
+
+class GenericError(IntEnum):
+    """Generic error categories, bits 46..40 of a `ReturnValue`.
+
+    The category groups codes across services: an answering PLC that has none
+    picks one from the request type, e.g. `GENERAL_GET_VARIABLE`.
+    """
+
+    OK = 0
+    GENERAL = 1
+    APPLICATION_ERROR = 2
+    ACCESS_DENIED = 3
+    CANT_ACTIVATE = 4
+    CARDINALITY_OVERFLOW = 5
+    CARDINALITY_UNDERFLOW = 6
+    CLASS_NOT_ALLOWED = 7
+    INVALID_ATTRIBUTE_IDENTIFIER = 8
+    INVALID_DATATYPE = 9
+    INVALID_OBJECT_IDENTIFIER = 10
+    INVALID_PLACEMENT = 11
+    INVALID_QUALIFIER = 12
+    INVALID_RANGE = 13
+    INVALID_SESSION = 14
+    NOT_LINKED = 15
+    SERVICE_TIMEOUT = 16
+    DISCONNECTED = 17
+    FAILED_TO_DISCONNECT = 18
+    INVALID_ADDRESS = 19
+    SERVICE_NOT_ALLOWED = 20
+    SERVICE_NOT_CONNECTED = 21
+    NOT_OWNER = 22
+    TOO_MANY_REQUESTS = 23
+    TOO_MANY_SESSIONS = 24
+    SESSION_DELEGITIMATED = 25
+    UNKNOWN_SERVICE = 26
+    INVALID_STORAGE_FORMAT = 27
+    INVALID_COM_FORMAT = 28
+    NOT_CHANGABLE_IN_RUN = 29
+    WRONG_NR_OF_ARGUMENTS_OF_INVOKE = 30
+    WRONG_ARGUMENT_FORMAT_OF_INVOKE = 31
+    INVOKE_FAILED = 32
+    OBJECT_CANNOT_BE_STORED_TWO_TIMES_IN_PARALLEL = 33
+    OBJECT_IS_LOCKED = 34
+    STORE_INACTIVE = 35
+    HIERARCHY_OVERFLOW = 36
+    OBJECT_OR_ATTRIBUTE_ALREADY_EXIST = 37
+    NOT_ENOUGH_MEMORY_AVAILABLE = 38
+    NO_MEMORY_ON_STORAGE = 39
+    NO_STORAGE_DETECTED = 40
+    INVALID_TIMESTAMP_IN_TYPESAFE_BLOB = 41
+    INVALID_FILE_NAME = 42
+    INVALID_ARGUMENT_VALUE = 43
+    STORE_DIRECTORY_ALREADY_USED = 44
+    GENERAL_STORE_ERROR = 45
+    INVALID_OBJECT_REFERENCE = 46
+    REFERENCED_OBJECT_DELETED = 46
+    GENERAL_CREATE = 47
+    GENERAL_ADD_OBJECT = 48
+    GENERAL_DELETE_OBJECT = 49
+    GENERAL_GET_VARIABLE = 50
+    GENERAL_SET_VARIABLE = 51
+    GENERAL_GET_VARIABLE_SUBRANGE = 52
+    GENERAL_SET_VARIABLE_SUBRANGE = 53
+    GENERAL_GET_MULTI_VARIABLES = 54
+    GENERAL_SET_MULTI_VARIABLES = 55
+    GENERAL_ADD_LINK = 56
+    GENERAL_REMOVE_LINK = 57
+    INVALID_ID = 58
+    GENERAL_COM_ERROR = 59
+    NOT_CHANGABLE_IN_ERROR_STATE = 60
+    MULTI_ES_NOT_SUPPORTED = 61
+    SERVICE_ABORTED = 62
+    SOURCE_FILE_NOT_EXISTING = 63
+    INVALID_VERSION = 64
+    COMM_FORMAT_DIFFERS_FROM_STORE_FORMAT = 65
+    GENERAL_TRANSACTION = 66
+    DISTRIBUTION = 67
+    GENERAL_PATH_NOT_FOUND = 68
+    GENERAL_END_OF_FILE = 69
+    GENERAL_FS_WRITE_PROTECTED = 70
+    GENERAL_FS_DISK_FULL = 71
+    GENERAL_FS_INVALID_PATH_NAME = 72
+    WSTRING_NOT_SUPPORTED = 73
+    TRANSACTION_ABORTED = 74
+    STORE_FORCE_STORE = 75
+    GENERAL_INTEGRITY = 76
+    MULTI_ES_CONFLICT = 77
+    TEMPORARILY_OUT_OF_RESOURCES = 78
+    MULTI_ES_LIMIT_EXCEEDED = 79
+    MULTI_ES_INCOMPATIBLE_OTHER_ES_VERSION = 80
+    CONCURRENT_TRANSACTION_RUNNING = 81
+    SSL_ERROR = 82
+    RH_PLC_PROXY_TREE_UNKNOWN = 83
+    RH_PLC_PROXY_TREE_NON_REDUNDANT = 84
+    SERVICE_NOT_AVAILABLE = 85
+    TLS_ERROR = 86
+    SECURITY = 87
+    MAX_NUMBER = 127
+
+
+def _enum_label(enum: type[IntEnum], value: int) -> str:
+    try:
+        return f"{enum(value).name} ({value})"
+    except ValueError:
+        return str(value)
+
+
+@dataclass(frozen=True)
+class ReturnValue:
+    """A decoded 64-bit S7CommPlus return value.
+
+    Layout::
+
+        63      failed: the only failure test; positive codes are successes with information
+        62      a ResponseExtension object comes with the reply
+        61..48  firmware-internal, not decoded
+        47      set by the side that answered the request
+        46..40  generic category (`GenericError`)
+        39..32  source subsystem (`ErrorSource`), 0 = OMS
+        31..16  firmware-internal, not decoded  (source 0 only)
+        15..0   signed 16-bit `ServiceResult`   (source 0 only)
+        31..0   signed 32-bit subsystem code    (any other source)
+
+    The firmware-internal bits differ between firmware versions for the same
+    code, so match on `code`, not on `raw`.
+
+    Example::
+
+        >>> rv = ReturnValue.from_int(0x8020AB001992FFF4)
+        >>> rv.failed, rv.code, rv.generic
+        (True, -12, 43)
+        >>> str(rv)
+        'OBJECT_NOT_FOUND (-12), generic INVALID_ARGUMENT_VALUE (43)'
+    """
+
+    raw: int
+    failed: bool
+    has_extension: bool
+    from_responder: bool
+    generic: int
+    source: int
+    code: int
+
+    @classmethod
+    def from_int(cls, value: int) -> "ReturnValue":
+        """Decode a return value given as an unsigned 64-bit or a signed Python int.
+
+        A small negative number (above -65536) is taken as a bare legacy code
+        and decoded as a failed OMS composite carrying that code, with every
+        other field zero.
+
+        Args:
+            value: The return value as decoded from the wire.
+
+        Returns:
+            The decoded fields.
+
+        Raises:
+            ValueError: If the value fits neither a signed nor an unsigned 64-bit integer.
+        """
+        if not -(1 << 63) <= value < 1 << 64:
+            raise ValueError(f"ReturnValue {value} does not fit in 64 bits")
+        if -(1 << 16) < value < 0:
+            value = (1 << 63) | (value & 0xFFFF)
+        raw = value % (1 << 64)
+        source = (raw >> 32) & 0xFF
+        if source:
+            low = raw & 0xFFFFFFFF
+            code = low - (1 << 32) if low & 0x80000000 else low
+        else:
+            low = raw & 0xFFFF
+            code = low - 0x10000 if low & 0x8000 else low
+        return cls(
+            raw=raw,
+            failed=bool(raw >> 63),
+            has_extension=bool((raw >> 62) & 1),
+            from_responder=bool((raw >> 47) & 1),
+            generic=(raw >> 40) & 0x7F,
+            source=source,
+            code=code,
+        )
+
+    def __str__(self) -> str:
+        parts = [f"subsystem code 0x{self.code & 0xFFFFFFFF:08X}" if self.source else _enum_label(ServiceResult, self.code)]
+        if self.generic:
+            parts.append(f"generic {_enum_label(GenericError, self.generic)}")
+        if self.source:
+            parts.append(f"source {_enum_label(ErrorSource, self.source)}")
+        return ", ".join(parts)
+
+
+def service_result_code(return_value: int) -> int:
+    """Extract the sign-extended low 16 bits of a composite return value.
+
+    A plain small negative number is already the code (legacy encoding) and is
+    returned unchanged.
+
+    .. deprecated:: 0.4.0
+        Use ``ReturnValue.from_int(return_value).code`` instead. It differs
+        when the source (bits 39..32) is non-zero: it then returns the
+        subsystem's 32-bit code, where this function keeps the low 16 bits.
+    """
+    warnings.warn(
+        "service_result_code() is deprecated; use ReturnValue.from_int(return_value).code instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if -(1 << 16) < return_value < 0:
+        return return_value
+    low = return_value & 0xFFFF
+    return low - 0x10000 if low & 0x8000 else low

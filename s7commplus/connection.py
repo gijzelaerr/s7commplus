@@ -90,8 +90,8 @@ from .protocol import (
     ObjectId,
     Opcode,
     ProtocolVersion,
+    ReturnValue,
     ServiceResult,
-    service_result_code,
 )
 from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq, encode_uint64_vlq
 
@@ -1020,7 +1020,7 @@ def _check_v1_legitimation_response(payload: bytes, raw_payload: Optional[bytes]
        When ``payload`` is empty or does not decode, there is no
        return-value reading at all, so no positive code is interpreted.
     """
-    payload_reading: Optional[tuple[int, int]] = None  # (signed_value, raw_value) from payload
+    payload_reading: Optional[int] = None
     for candidate in (raw_payload, payload):
         if not candidate:
             continue
@@ -1028,13 +1028,13 @@ def _check_v1_legitimation_response(payload: bytes, raw_payload: Optional[bytes]
             return_value, _ = decode_uint64_vlq(candidate, 0)
         except ValueError:
             continue
-        signed = return_value if return_value < (1 << 63) else return_value - (1 << 64)
         if candidate is payload:
-            payload_reading = (signed, return_value)
-        if signed < 0:
+            payload_reading = return_value
+        result = ReturnValue.from_int(return_value)
+        if result.failed:
             # Pass 1: a negative reading is always the return value, in either
             # reading position, and always a rejection.
-            if service_result_code(signed) in _LEGITIMATION_REJECTED:
+            if result.code in _LEGITIMATION_REJECTED:
                 raise S7AuthenticationError(
                     f"Post-auth legitimation rejected by PLC (wrong password): return_value=0x{return_value:X}"
                 )
@@ -1045,11 +1045,12 @@ def _check_v1_legitimation_response(payload: bytes, raw_payload: Optional[bytes]
 
     # Pass 2: positive codes, only from the return-value reading of payload —
     # never from raw_payload, whose first value may be an IntegrityId.
-    signed, return_value = payload_reading
-    if signed in _LEGITIMATION_REJECTED:
-        raise S7AuthenticationError(f"Post-auth legitimation rejected by PLC (wrong password): return_value=0x{return_value:X}")
-    if signed in _LEGITIMATION_ACCEPTED:
-        logger.debug("Legitimation response accepted (return_value=%d)", signed)
+    if payload_reading in _LEGITIMATION_REJECTED:
+        raise S7AuthenticationError(
+            f"Post-auth legitimation rejected by PLC (wrong password): return_value=0x{payload_reading:X}"
+        )
+    if payload_reading in _LEGITIMATION_ACCEPTED:
+        logger.debug("Legitimation response accepted (return_value=%d)", payload_reading)
 
 
 def _frame_request(request: bytes, protocol_version: int, session_key: Optional[bytes]) -> bytes:

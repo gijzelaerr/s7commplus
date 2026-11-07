@@ -34,11 +34,14 @@ from s7commplus.codec import skip_typed_value, parse_server_session_version
 from s7commplus.protocol import (
     DataType,
     ElementID,
+    ErrorSource,
     FunctionCode,
+    GenericError,
     Ids,
     ObjectId,
     Opcode,
     ProtocolVersion,
+    ReturnValue,
     ServiceResult,
     block_language_name,
     service_result_code,
@@ -1453,10 +1456,97 @@ class TestServiceResultCodes:
             (17, 17),  # positive informational stays itself
             (25, 25),
             (0x100, 256),  # low word without the sign bit is the value itself
+            ((1 << 63) | (24 << 32) | 0x02000003, 0x02000003),  # a subsystem source carries a 32-bit code
         ],
     )
-    def test_service_result_code_extracts_the_low_word(self, return_value: int, expected_code: int) -> None:
-        assert service_result_code(return_value) == expected_code
+    def test_code_extracts_the_low_word(self, return_value: int, expected_code: int) -> None:
+        assert ReturnValue.from_int(return_value).code == expected_code
+
+    def test_service_result_code_is_deprecated(self) -> None:
+        with pytest.warns(DeprecationWarning, match=r"ReturnValue\.from_int"):
+            assert service_result_code(0x8318890001E1FFFE) == -2
+
+
+class TestReturnValue:
+    """Decode every field of the 64-bit ReturnValue layout."""
+
+    @pytest.mark.parametrize(
+        ("raw", "failed", "from_responder", "generic", "code"),
+        [
+            # Known-answer values for an invalid object reference: the same code
+            # and category differ only in the firmware-internal bits
+            (0x986F2E000204FF0A, True, False, GenericError.INVALID_OBJECT_REFERENCE, ServiceResult.NULL_POINTER),
+            (0x986F2E000204FDFD, True, False, GenericError.INVALID_OBJECT_REFERENCE, ServiceResult.REFERENCED_OBJECT_DELETED),
+            (0x986F2E000206FF0A, True, False, GenericError.INVALID_OBJECT_REFERENCE, ServiceResult.NULL_POINTER),
+            # S7-1512C V2.9 and S7-1516 V2.9: EXPLORE of an object id that does not exist
+            (0x8020AB001992FFF4, True, True, GenericError.INVALID_ARGUMENT_VALUE, ServiceResult.OBJECT_NOT_FOUND),
+            # S7-1512C V2.9 and S7-1516 V2.9: EXPLORE with an unknown relation id (ExploreRequestId 0x7FFF)
+            (0x80208100217BFFC1, True, True, GenericError.GENERAL, ServiceResult.ASSOCIATION_NOT_FOUND),
+            # S7-1512C V2.9 and S7-1516 V2.9: alarm browse sending ExploreParents = 1
+            (0xA025AB000109FFFD, True, True, GenericError.INVALID_ARGUMENT_VALUE, ServiceResult.INVALID_ARGUMENT_VALUE),
+            # S7-1500s V2.9 and V3.1: EXPLORE of the data blocks or type info with an invalid filter flag
+            (0x8318890001E1FFFE, True, True, GenericError.INVALID_DATATYPE, ServiceResult.INVALID_VALUE_TYPE),
+            # S7-1517 V3.1: EXPLORE of PLCProgram without the request trailer. The PLC
+            # reports it as a SystemEvent and drops the connection, with bit 47 clear.
+            (0xA2013B00029FFF88, True, False, GenericError.GENERAL_COM_ERROR, ServiceResult.SERVICE_REQUEST_PARSING_ERROR),
+            # S7-1214C V4.2, no TLS: a DB write the PLC could not parse (cause not yet
+            # known). Reported as a SystemEvent that drops the connection, with bit 47 clear.
+            (0xA2013B000236FF88, True, False, GenericError.GENERAL_COM_ERROR, ServiceResult.SERVICE_REQUEST_PARSING_ERROR),
+        ],
+    )
+    def test_oms_source_fields(self, raw: int, failed: bool, from_responder: bool, generic: int, code: int) -> None:
+        result = ReturnValue.from_int(raw)
+        assert result == ReturnValue(raw, failed, False, from_responder, generic, 0, code)
+
+    def test_signed_and_unsigned_forms_decode_alike(self) -> None:
+        assert ReturnValue.from_int(-9000293222178357250) == ReturnValue.from_int(0x8318890001B3FFFE)
+
+    @pytest.mark.parametrize("value", [1 << 64, (1 << 64) | 0x16, -(1 << 63) - 1, -(1 << 64)])
+    def test_out_of_range_raises(self, value: int) -> None:
+        with pytest.raises(ValueError, match="does not fit in 64 bits"):
+            ReturnValue.from_int(value)
+
+    @pytest.mark.parametrize(("value", "raw"), [((1 << 64) - 1, (1 << 64) - 1), (-(1 << 63), 1 << 63)])
+    def test_64_bit_edges_are_accepted(self, value: int, raw: int) -> None:
+        assert ReturnValue.from_int(value).raw == raw
+
+    def test_bare_legacy_negative(self) -> None:
+        assert ReturnValue.from_int(-118) == ReturnValue((1 << 63) | 0xFF8A, True, False, False, 0, 0, -118)
+
+    @pytest.mark.parametrize(("low32", "code"), [(0x02000003, 0x02000003), (0xFFFFEDFD, -4611)])
+    def test_subsystem_source_has_a_32_bit_code(self, low32: int, code: int) -> None:
+        result = ReturnValue.from_int((1 << 63) | (1 << 47) | (24 << 32) | low32)
+        assert (result.source, result.code, result.generic) == (24, code, 0)
+
+    @pytest.mark.parametrize(
+        ("raw", "failed", "has_extension"),
+        [(0, False, False), (19, False, False), (0x4000000000000000, False, True), (0xC000000000000000, True, True)],
+    )
+    def test_flags(self, raw: int, failed: bool, has_extension: bool) -> None:
+        result = ReturnValue.from_int(raw)
+        assert (result.failed, result.has_extension) == (failed, has_extension)
+
+    @pytest.mark.parametrize(
+        ("raw", "text"),
+        [
+            (0x986F2E000204FF0A, "NULL_POINTER (-246), generic INVALID_OBJECT_REFERENCE (46)"),
+            (0x80208100217BFFC1, "ASSOCIATION_NOT_FOUND (-63), generic GENERAL (1)"),
+            ((1 << 63) | (24 << 32) | 0x02000003, "subsystem code 0x02000003, source SECU (24)"),
+            ((1 << 63) | (2 << 40) | (0xEE << 32) | 7, "subsystem code 0x00000007, generic APPLICATION_ERROR (2), source 238"),
+            ((1 << 63) | 0xFFE1, "-31"),  # no name
+            (17, "SESSION_PRE_LEGITIMIZED (17)"),
+        ],
+    )
+    def test_str(self, raw: int, text: str) -> None:
+        assert str(ReturnValue.from_int(raw)) == text
+
+    def test_enum_tables(self) -> None:
+        assert ServiceResult(-46) is ServiceResult.OBJECT_IS_NOT_INSTANTIABLE
+        assert ServiceResult.TYPE_INFO_MAX_COMPLEXITY_REACHED is ServiceResult.OBJECT_IS_NOT_INSTANTIABLE
+        assert GenericError.REFERENCED_OBJECT_DELETED is GenericError.INVALID_OBJECT_REFERENCE
+        assert ErrorSource.OST is ErrorSource.OPERATING_STATE_CONTROL
+        assert ErrorSource(25).name == "CPU_PARAM"
+        assert ErrorSource.GENERAL_AS_OBJECT_MODEL_ERRORS is ErrorSource.CPU_PARAM
 
 
 class TestLegitimationOutcomes:
