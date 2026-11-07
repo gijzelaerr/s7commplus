@@ -665,14 +665,20 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
 
 def _pvalue_element_size(datatype: int) -> int:
-    """Return the fixed byte size for a PValue array element, or 0 for variable-length."""
+    """Return the fixed byte size for a PValue array element, or 0 for variable-length.
+
+    DWORD and LWORD elements are fixed-size, like their scalars. A CPU 1214C FW V4.2
+    sent an ``Array[0..99] of DWord`` as ``10 0c 64`` followed by 100 four-byte
+    elements (``de ad be ef ...``), which the VLQ reader cannot parse (#160). No
+    LWORD array has been captured; it is assumed to follow its 8-byte scalar.
+    """
     if datatype in (DataType.BOOL, DataType.USINT, DataType.BYTE, DataType.SINT):
         return 1
     elif datatype in (DataType.UINT, DataType.WORD, DataType.INT):
         return 2
-    elif datatype in (DataType.REAL,):
+    elif datatype in (DataType.REAL, DataType.DWORD):
         return 4
-    elif datatype in (DataType.LREAL, DataType.TIMESTAMP):
+    elif datatype in (DataType.LREAL, DataType.TIMESTAMP, DataType.LWORD):
         return 8
     elif datatype in (DataType.RID,):
         return 4
