@@ -786,6 +786,7 @@ class S7CommPlusClient:
             "tls_ca": tls_ca,
             "tls_cert_fingerprint": tls_cert_fingerprint,
             "password": password,
+            "username": "",
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
             "timeout": timeout,
@@ -872,7 +873,35 @@ class S7CommPlusClient:
         )
         if p["password"] is not None and self._connection.tls_active and not self._connection.requires_substreamed:
             logger.info("Performing PLC legitimation (password authentication)")
-            self._connection.authenticate(p["password"])
+            self._connection.authenticate(p["password"], p["username"])
+
+    def authenticate(self, password: str, username: str = "") -> None:
+        """Perform PLC password authentication (legitimation).
+
+        Once the PLC confirms the legitimation, the password and username
+        replace those of ``connect()``, so :meth:`reconnect` legitimates the new
+        session the same way. A refused attempt changes nothing.
+
+        Args:
+            password: PLC password
+            username: Username for the new-mode exchange (leave empty for legacy)
+
+        Raises:
+            S7NotConnectedError: If not connected.
+            S7ConnectionError: If TLS is not active, the firmware does not
+                support legitimation, or the password was refused.
+        """
+        if self._connection is None:
+            raise S7NotConnectedError("Not connected")
+        level_before = self._connection.protection_level
+        self._connection.authenticate(password, username)
+        level_after = self._connection.protection_level
+        # The level only drops when the PLC confirmed a legitimation; a CPU that
+        # already grants full access returns early and keeps the old parameters.
+        legitimated = level_before is not None and level_after is not None and level_after < level_before
+        if legitimated and self._connect_params is not None:
+            self._connect_params["password"] = password
+            self._connect_params["username"] = username
 
     def _probe_family_keys(self, family: int, excluded: set[str] | None = None) -> None:
         """Try each same-family key on a new connection and cache the winner."""

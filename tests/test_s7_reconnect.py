@@ -8,12 +8,13 @@ import pickle
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
+from s7commplus.connection import S7CommPlusConnection
 from s7commplus.error import S7ConnectionError, S7NotConnectedError
 from s7commplus.protocol import LegitimationType, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
@@ -160,6 +161,58 @@ async def test_async_reconnect_reuses_the_password_and_username_of_authenticate(
         assert client.connection_generation == 1
     finally:
         await client.disconnect()
+
+
+def _sync_client_with_levels(*levels: int) -> S7CommPlusClient:
+    """A client whose connection reports these protection levels, one per read."""
+    client = S7CommPlusClient()
+    connection = MagicMock()
+    type(connection).protection_level = PropertyMock(side_effect=list(levels))
+    client._connection = connection
+    client._connect_params = {"password": "known", "username": ""}
+    return client
+
+
+def test_sync_authenticate_requires_a_connection() -> None:
+    with pytest.raises(S7NotConnectedError, match="Not connected"):
+        S7CommPlusClient().authenticate("secret")
+
+
+def test_sync_authenticate_remembers_a_confirmed_password() -> None:
+    client = _sync_client_with_levels(3, 1)
+    client.authenticate("secret", "operator")
+    assert client._connection is not None
+    client._connection.authenticate.assert_called_once_with("secret", "operator")  # type: ignore[attr-defined]
+    assert client._connect_params == {"password": "secret", "username": "operator"}
+
+
+def test_sync_authenticate_keeps_the_password_when_full_access_needs_none() -> None:
+    client = _sync_client_with_levels(1, 1)
+    client.authenticate("secret", "operator")
+    assert client._connect_params == {"password": "known", "username": ""}
+
+
+def test_sync_authenticate_keeps_the_password_when_refused() -> None:
+    client = _sync_client_with_levels(3)
+    assert client._connection is not None
+    client._connection.authenticate.side_effect = S7ConnectionError("refused")  # type: ignore[attr-defined]
+    with pytest.raises(S7ConnectionError, match="refused"):
+        client.authenticate("wrong", "intruder")
+    assert client._connect_params == {"password": "known", "username": ""}
+
+
+def test_sync_reconnect_reuses_the_password_and_username_of_authenticate(tls_server: tuple[int, str]) -> None:
+    port, cert_path = tls_server
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=cert_path)
+    try:
+        assert client._connect_params is not None
+        client._connect_params.update(password="secret", username="operator")
+        with patch.object(S7CommPlusConnection, "authenticate") as legitimate:
+            client.reconnect()
+        legitimate.assert_called_once_with("secret", "operator")
+    finally:
+        client.disconnect()
 
 
 async def test_async_requests_wait_out_another_tasks_rebuild(server: tuple[S7CommPlusServer, int]) -> None:

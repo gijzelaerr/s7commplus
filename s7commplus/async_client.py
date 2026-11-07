@@ -826,8 +826,9 @@ class S7CommPlusAsyncClient:
             username: Username for the new-mode exchange (leave empty for legacy)
 
         Raises:
-            S7ConnectionError: If not connected, TLS is not active, the firmware
-                does not support legitimation, or the password was refused
+            S7NotConnectedError: If not connected.
+            S7ConnectionError: If TLS is not active, the firmware does not
+                support legitimation, or the password was refused.
         """
         from .error import S7ConnectionError
 
