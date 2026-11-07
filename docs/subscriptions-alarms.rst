@@ -136,6 +136,12 @@ Alarm notifications
    finally:
        client.delete_alarm_subscription(subscription_id)
 
+On an S7-1200 without TLS (key family 01), call ``create_alarm_subscription()``
+without ``language_ids`` and ``domains``. A CPU 1214C FW V4.2 refuses the
+subscription when it carries the domain filter or the text attributes, so the
+client leaves them out there and raises ``ValueError`` if either is given
+(#173). Alarm texts are not requested on that PLC.
+
 Both alarm receivers take a per-call ``timeout`` in seconds; without one they
 wait for the ``notification_timeout`` passed to ``connect()``, else the request
 timeout, and raise ``S7TimeoutError`` when it runs out:
