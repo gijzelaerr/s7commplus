@@ -159,6 +159,21 @@ async def test_db_read_multi_keeps_an_item_error_in_place(kind: str) -> None:
 
 
 @kinds
+@pytest.mark.parametrize("method", ["db_read_multi", "read_symbolic_multi"])
+async def test_multi_read_keeps_the_good_values_when_some_items_fail(kind: str, method: str) -> None:
+    # An S7-1500 (FW V2.9) answers a request with a failing item with a non-zero
+    # ReturnValue, but still sends the other values (#129).
+    answer = encode_uint64_vlq(0x20278000009A0013) + _read_answer({1: b"a", 3: b"c"}, errors={2: 0x13})[1:]
+    plc = _Client(kind, [answer], max_items=3)
+
+    items = [(1, offset, 1) for offset in range(3)]
+    if method == "read_symbolic_multi":
+        items = [(0x8A0E0001, [3, offset], 0) for offset in range(3)]
+    expected = [b"a", b"", b"c"] if method == "db_read_multi" else [b"a", None, b"c"]
+    assert await plc.call(method, items) == expected
+
+
+@kinds
 async def test_db_read_multi_rejects_an_answer_that_skips_an_item(kind: str) -> None:
     # The PLC answers only item 1 of the first request: the second value must not
     # slide onto item 2.

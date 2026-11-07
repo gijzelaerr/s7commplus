@@ -16,6 +16,7 @@ from s7commplus.codec import (
     decode_int32,
     decode_int64,
     decode_pvalue_to_bytes,
+    encode_pvalue_array,
     decode_response_header,
     decode_uint8,
     decode_uint16,
@@ -810,14 +811,50 @@ class TestPValueElementSize:
     def test_four_byte_types(self) -> None:
         assert _pvalue_element_size(DataType.REAL) == 4
         assert _pvalue_element_size(DataType.RID) == 4
+        assert _pvalue_element_size(DataType.DWORD) == 4
 
     def test_eight_byte_types(self) -> None:
         assert _pvalue_element_size(DataType.LREAL) == 8
         assert _pvalue_element_size(DataType.TIMESTAMP) == 8
+        assert _pvalue_element_size(DataType.LWORD) == 8
 
     def test_variable_length_types(self) -> None:
-        for dt in (DataType.UDINT, DataType.DWORD, DataType.BLOB, DataType.WSTRING, DataType.STRUCT):
+        for dt in (DataType.UDINT, DataType.ULINT, DataType.BLOB, DataType.WSTRING, DataType.STRUCT):
             assert _pvalue_element_size(dt) == 0
+
+
+class TestCapturedDwordArray:
+    """GetMultiVariables reply for ``Array[0..99] of DWord`` from a CPU 1214C DC/DC/DC FW V4.2 (#160).
+
+    Captured by @pmpn8ez: DB3 elements 0..2 are 16#DEADBEEF, 16#ABCDEFAB and 16#ABCDABCD,
+    the other 97 are zero. ReturnValue 0, item 1, then the value; after it come the
+    end of the value list, the end of the error list and the response IntegrityId.
+    """
+
+    ELEMENTS = bytes.fromhex("deadbeefabcdefababcdabcd") + bytes(97 * 4)
+    REPLY = bytes.fromhex("00 01 10 0c 64") + ELEMENTS + bytes.fromhex("00 00 06 00 00 00 00")
+
+    def test_decode_reads_four_byte_elements(self) -> None:
+        raw, consumed = decode_pvalue_to_bytes(self.REPLY, 2)
+        assert raw == self.ELEMENTS
+        assert consumed == 3 + 400
+        assert self.REPLY[2 + consumed : 2 + consumed + 2] == b"\x00\x00"
+
+    def test_skip_lands_after_the_last_element(self) -> None:
+        assert skip_typed_value(self.REPLY, 4, DataType.DWORD, 0x10) == 5 + 400
+
+    def test_read_response_returns_the_array(self) -> None:
+        from s7commplus.client import _parse_read_response
+
+        assert _parse_read_response(self.REPLY[:-5], expected_count=1) == [self.ELEMENTS]
+
+    @pytest.mark.parametrize(("datatype", "size"), [(DataType.DWORD, 4), (DataType.LWORD, 8)])
+    def test_encode_array_round_trips(self, datatype: DataType, size: int) -> None:
+        data = bytes(range(1, 1 + 3 * size))
+        encoded = encode_pvalue_array(datatype, data)
+        assert encoded == bytes([0x10, datatype, 3]) + data
+        assert decode_pvalue_to_bytes(encoded, 0) == (data, len(encoded))
+        assert skip_typed_value(encoded, 2, datatype, 0x10) == len(encoded)
 
 
 class TestObjectQualifier:
