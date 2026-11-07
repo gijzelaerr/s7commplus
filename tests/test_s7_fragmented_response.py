@@ -19,7 +19,7 @@ from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import _LEGACY_KEY_CACHE, S7CommPlusClient
 from s7commplus.codec import encode_header
 from s7commplus.connection import S7CommPlusConnection, _response_continues
-from s7commplus.error import S7ConnectionError
+from s7commplus.error import S7ConnectionError, S7ProtocolError
 from s7commplus.protocol import FunctionCode, Opcode, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 
@@ -284,3 +284,39 @@ async def test_async_reassembly_rejects_a_trailer_of_another_version() -> None:
     client = _async_client()
     with pytest.raises(S7ConnectionError, match="fragment version"):
         await client._recv_reassembled_payload(WRONG_VERSION_TRAILER)
+
+
+# A V3 fragment on a session without a key: its HMAC cannot be checked.
+V3_WITHOUT_A_KEY = encode_header(ProtocolVersion.V3, 12) + _response(5, b"\xaa\xbb") + b"\x72\x03\x00\x00"
+
+
+def test_sync_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
+    conn = _sync_connection()
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        conn._recv_reassembled_payload(V3_WITHOUT_A_KEY)
+
+
+@pytest.mark.asyncio
+async def test_async_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
+    client = _async_client()
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        await client._recv_reassembled_payload(V3_WITHOUT_A_KEY)
+
+
+# The same as one whole reply, with the digest length and digest of a V3 envelope.
+_ENVELOPE = bytes([32]) + bytes(32) + _response(5, bytes([0xAA, 0xBB]))
+WHOLE_V3_WITHOUT_A_KEY = encode_header(ProtocolVersion.V3, len(_ENVELOPE)) + _ENVELOPE + bytes([0x72, 0x03, 0x00, 0x00])
+
+
+def test_sync_rejects_a_whole_v3_reply_without_a_session_key() -> None:
+    # Refused before the key check: without a key the frame's first byte is read as the opcode.
+    conn = _sync_connection(WHOLE_V3_WITHOUT_A_KEY)
+    with pytest.raises(S7ProtocolError, match="Unexpected S7CommPlus opcode 0x20"):
+        conn.send_request(FunctionCode.GET_MULTI_VARIABLES)
+
+
+@pytest.mark.asyncio
+async def test_async_rejects_a_whole_v3_reply_without_a_session_key() -> None:
+    client = _async_client(WHOLE_V3_WITHOUT_A_KEY)
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")

@@ -178,8 +178,8 @@ def _response_continues(frame: bytes) -> bool:
     return bytes(frame[end : end + 4]) != struct.pack(">BBH", 0x72, version, 0x0000)
 
 
-def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> None:
-    """Validate that application data is the response to one outstanding request."""
+def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> int:
+    """Validate that application data is the response to one outstanding request; return its function code."""
     from .error import S7ConnectionError, S7ProtocolError
 
     if len(response) < 10:
@@ -199,6 +199,7 @@ def _validate_response_header(response: bytes, expected_function: int, expected_
         raise S7ProtocolError(
             f"Response sequence mismatch: expected seq={expected_sequence}, got seq={sequence} for function=0x{function:04X}"
         )
+    return int(function)
 
 
 def _log_create_object_return_value(return_value: int, tls_active: bool) -> None:
@@ -491,13 +492,19 @@ def _build_set_variable_payload(in_object_id: int, address: int, value: bytes) -
     return payload
 
 
-def _check_set_variable_response(payload: bytes) -> None:
-    """Raise when a SetVariable response reports a refused legitimation.
+def _check_set_variable_response(payload: bytes, function: Optional[int] = None) -> None:
+    """Raise when a SetVariable response reports a refused write.
+
+    ``function`` is the response's function code. A generic ERROR frame is
+    always a refusal, whatever its payload decodes to: its first value is the
+    error function code, which has no sign bit.
 
     Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
     """
     from .error import S7ConnectionError
 
+    if function == FunctionCode.ERROR:
+        raise S7ConnectionError("SetVariable answered with the generic error function")
     if not payload:
         raise S7ConnectionError("SetVariable response is empty")
     try:
@@ -1063,12 +1070,28 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
 def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_version: int, object_qualifier_version: int) -> int:
     """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-    PLCSIM Advanced V8 (key family 03) needs the layout of the session's other
-    data requests there too (V2 on a V1 SessionKey session, #66). Other PLCs keep
-    the negotiated protocol version these two requests have always used: neither
-    layout of them has been checked on a hardware PLC.
+    PLCSIM Advanced V8 (key family 03) and the S7-1200 (key family 01) need the
+    layout of the session's other data requests there too, V2 on a V1 SessionKey
+    session. PLCSIM was found in #66. A CPU 1214C FW V4.2 resets the connection on
+    a V1 delete and accepts a V2 one (#136); ``write_symbolic`` is the same
+    SetMultiVariables request as ``write_tags``, which that CPU accepts with V2.
+    The S7-1500 keeps the negotiated protocol version, which these two requests
+    have always used and which hasn't been checked on hardware.
     """
-    return object_qualifier_version if family == KeyFamily.PLCSIM else protocol_version
+    if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200):
+        return object_qualifier_version
+    return protocol_version
+
+
+def _alarm_texts_and_domain_filter(family: Optional[KeyFamily]) -> bool:
+    """Whether an alarm subscription may send the domain filter and the text attributes.
+
+    A CPU 1214C FW V4.2 (key family 01, no TLS) refuses an alarm subscription
+    carrying ``AlarmDomainFilter`` (7731) and ``SendTexts``/``TextLanguages``
+    (8173/8181) with ``INVALID_AID``, and accepts it without them (#173). Every
+    other PLC keeps the S7-1500 reference layout.
+    """
+    return family != KeyFamily.S7_1200
 
 
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
@@ -1099,12 +1122,18 @@ def _strip_response_integrity_id(function_code: int, payload: bytes, session_key
     """Remove the IntegrityId that leads SessionKey response payloads.
 
     The legacy S7-1500 profile keeps GET_MULTI_VARIABLES and EXPLORE payloads
-    whole, because there the IntegrityId follows the body.
+    whole, because there the IntegrityId follows the body. A leading value too
+    large for an IntegrityId is the return value of a PLC that sends it first,
+    as a rejected S7-1215C legitimation does, so that payload stays whole too.
     """
     if legacy_s7_1500 and function_code in (FunctionCode.GET_MULTI_VARIABLES, FunctionCode.EXPLORE):
         return payload
     if session_key_active and len(payload) > 1:
-        resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        try:
+            resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        except ValueError:
+            logger.debug("  Response starts with a value that is not an IntegrityId; keeping it whole")
+            return payload
         logger.debug("  Response IntegrityId: %d (%d bytes)", resp_iid, consumed)
         return payload[consumed:]
     return payload
@@ -1234,6 +1263,7 @@ class S7CommPlusConnection:
     ):
         self._legacy_s7_1500 = legacy_s7_1500
         self._last_raw_response_payload: Optional[bytes] = None
+        self._last_response_function: Optional[int] = None
         self.host = host
         self.port = port
 
@@ -1400,10 +1430,15 @@ class S7CommPlusConnection:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
+
+    @property
+    def alarm_texts_and_domain_filter(self) -> bool:
+        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family)
 
     @property
     def requires_substreamed(self) -> bool:
@@ -1752,7 +1787,7 @@ class S7CommPlusConnection:
         value += encrypted_response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
         resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR).
@@ -1764,7 +1799,7 @@ class S7CommPlusConnection:
         value += response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
         resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     def collect_explore_frames(self, first_payload: bytes) -> bytes:
         """Collect unauthenticated multi-fragment EXPLORE continuation frames.
@@ -1937,9 +1972,11 @@ class S7CommPlusConnection:
 
         from .v1_session_key.handshake import authenticate_session_key
 
-        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
-        challenge_payload = self._build_get_var_substreamed(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
-        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail, False)
+        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        # one, after which the renewal completes (#169).
+        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4, False)
         challenge = _parse_get_var_substreamed_response(challenge_response)
         if len(challenge) != 20:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
@@ -1947,7 +1984,7 @@ class S7CommPlusConnection:
         security_key = self._encode_security_key_struct(blob, new_session_key)
         renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
         renewal_response = self._send_request(FunctionCode.SET_VARIABLE, renewal_payload, 4, False)
-        _check_set_variable_response(renewal_response)
+        _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")
 
@@ -2068,7 +2105,7 @@ class S7CommPlusConnection:
                 from .error import S7ConnectionError
 
                 raise S7ConnectionError("Response too short")
-            _validate_response_header(data, function_code, seq_num)
+            self._last_response_function = _validate_response_header(data, function_code, seq_num)
             logger.debug(f"  Reassembled response ({len(data)} bytes), payload {len(data) - 10} bytes")
             return self._response_payload(function_code, bytes(data[10:]))
 
@@ -2101,7 +2138,7 @@ class S7CommPlusConnection:
 
         logger.debug(f"  Response data ({len(response)} bytes): {response.hex(' ')}")
 
-        _validate_response_header(response, function_code, seq_num)
+        self._last_response_function = _validate_response_header(response, function_code, seq_num)
 
         # Parse the 10-byte response header for debug (responses carry no SessionId)
         resp_opcode = response[0]
@@ -2681,6 +2718,10 @@ class S7CommPlusConnection:
         logger.debug("Session activation: SET_VARIABLE addr 323 = USINT(5)")
         payload = _build_session_activate_payload(self._session_id, self._sequence_number)
         self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
+        if self._last_response_function == FunctionCode.ERROR:
+            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
+            logger.warning("Session activation answered with the generic error function")
+            return
         logger.info("Session activation completed")
 
     def _skip_integrity_ids_after_legitimation(self) -> None:

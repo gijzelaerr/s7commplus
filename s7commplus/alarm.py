@@ -144,10 +144,24 @@ def build_alarm_subscription_request(
     language_ids: Sequence[LanguageId | int] | None = None,
     domains: list[int] | None = None,
     credit_limit: int = 10,
+    *,
+    texts_and_domain_filter: bool = True,
 ) -> bytes:
-    """Build an alarm-subscription CREATE_OBJECT payload."""
+    """Build an alarm-subscription CREATE_OBJECT payload.
+
+    With ``texts_and_domain_filter=False`` the alarm reference object leaves out
+    ``AlarmDomainFilter`` (7731), ``TextLanguages`` (8181) and ``SendTexts`` (8173).
+    A CPU 1214C FW V4.2 refuses the full request with ``INVALID_AID`` and accepts
+    this one (#173). Those attributes carry ``domains`` and ``language_ids``, so
+    both must be ``None`` then.
+    """
     if not -1 <= credit_limit <= 255:
         raise ValueError("credit_limit must be -1 (unlimited) or between 0 and 255")
+    if not texts_and_domain_filter and (language_ids is not None or domains is not None):
+        raise ValueError(
+            "this PLC refuses the alarm domain filter and text languages in an alarm subscription (#173); "
+            "pass domains=None and language_ids=None"
+        )
     languages = [] if language_ids is None else language_ids
     domain_filter = [0xFFFF] if domains is None else domains
     if any(not 0 <= value <= 0xFFFF for value in domain_filter):
@@ -190,11 +204,12 @@ def build_alarm_subscription_request(
     payload += _attribute(Ids.SUBSCRIPTION_REFERENCE_TRIGGER_MODE, DataType.USINT, b"\x03")
     payload += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.ALARM_SUBSCRIPTION_REF_ALARM_DOMAIN)
     payload += _uint_array([0] * 10)
-    payload += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.ALARM_SUBSCRIPTION_REF_ALARM_DOMAIN_FILTER)
-    payload += _uint_array(domain_filter, flags=0x20)
-    payload += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.ALARM_SUBSCRIPTION_REF_TEXT_LANGUAGES)
-    payload += _udint_array(languages)
-    payload += _attribute(Ids.ALARM_SUBSCRIPTION_REF_SEND_TEXTS, DataType.BOOL, b"\x01")
+    if texts_and_domain_filter:
+        payload += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.ALARM_SUBSCRIPTION_REF_ALARM_DOMAIN_FILTER)
+        payload += _uint_array(domain_filter, flags=0x20)
+        payload += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.ALARM_SUBSCRIPTION_REF_TEXT_LANGUAGES)
+        payload += _udint_array(languages)
+        payload += _attribute(Ids.ALARM_SUBSCRIPTION_REF_SEND_TEXTS, DataType.BOOL, b"\x01")
     payload += bytes([ElementID.RELATION])
     payload += encode_uint32_vlq(Ids.ALARM_SUBSCRIPTION_REF_ITS_ALARM_SUBSYSTEM)
     payload += struct.pack(">I", Ids.NATIVE_THE_ALARM_SUBSYSTEM_RID)

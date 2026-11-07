@@ -17,6 +17,7 @@ from s7commplus.codec import encode_header
 from s7commplus.connection import (
     FamilyOnlyFingerprintError,
     SessionKeyCandidateRejectedError,
+    _build_get_var_substreamed_payload,
     _frame_request,
 )
 from s7commplus.error import S7ConnectionError, S7IntegrityError
@@ -314,6 +315,22 @@ async def test_async_renewal_installs_key_only_after_accepted_old_key_response()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("family", [KeyFamily.S7_1200, KeyFamily.S7_1500])
+async def test_async_renewal_reads_the_challenge_with_the_reference_layout(family: KeyFamily) -> None:
+    client = _authenticated_client()
+    client._v1_session_key_family = family
+    client._sequence_number = 7
+    challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
+    client._send_request_locked = AsyncMock(side_effect=[challenge_response, b"\x00"])  # type: ignore[method-assign]
+    with patch("s7commplus.v1_session_key.handshake.authenticate_session_key", return_value=(b"b" * 180, b"n" * 24)):
+        await client._renew_session_key_locked()
+
+    challenge_call = client._send_request_locked.call_args_list[0]
+    expected = _build_get_var_substreamed_payload(0x70000FDC, LegitimationId.SERVER_SESSION_REQUEST)
+    assert challenge_call.args == (FunctionCode.GET_VAR_SUBSTREAMED, expected, 4)
+
+
+@pytest.mark.asyncio
 async def test_async_rejected_renewal_never_installs_generated_key() -> None:
     client = _authenticated_client()
     challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
@@ -323,6 +340,26 @@ async def test_async_rejected_renewal_never_installs_generated_key() -> None:
     with (
         patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
         pytest.raises(S7ConnectionError, match="return_value=0x8104"),
+    ):
+        await client._renew_session_key_locked()
+    assert client._session_key == old_key
+
+
+@pytest.mark.asyncio
+async def test_async_error_frame_never_installs_generated_key() -> None:
+    client = _authenticated_client()
+    challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
+    old_key = client._session_key
+    replies = iter([(FunctionCode.GET_VAR_SUBSTREAMED, challenge_response), (FunctionCode.ERROR, bytes.fromhex("893100000000"))])
+
+    async def exchange(*_args: object) -> bytes:
+        client._last_response_function, reply = next(replies)
+        return reply
+
+    client._send_request_locked = AsyncMock(side_effect=exchange)  # type: ignore[method-assign]
+    with (
+        patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
+        pytest.raises(S7ConnectionError, match="generic error"),
     ):
         await client._renew_session_key_locked()
     assert client._session_key == old_key
