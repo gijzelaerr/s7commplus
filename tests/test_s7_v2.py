@@ -1647,6 +1647,24 @@ class TestLegacySessionKeyRefresh:
         assert renewal_call.args[0] == FunctionCode.SET_VARIABLE
         assert encode_uint32_vlq(LegitimationId.SESSION_SETUP_LEGITIMATION) in renewal_call.args[1]
 
+    @pytest.mark.parametrize("family_name", ["S7_1200", "S7_1500"])
+    def test_renewal_reads_the_challenge_with_the_reference_layout(self, family_name: str) -> None:
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        conn = self._authenticated_connection()
+        conn._v1_session_key_family = KeyFamily[family_name]
+        conn._sequence_number = 7
+        challenge = bytes(range(20))
+        conn._send_request = MagicMock(
+            side_effect=[bytes([0x00, 0x00, 0x10, DataType.USINT, len(challenge)]) + challenge, b"\x00"]
+        )
+        with patch("s7commplus.v1_session_key.handshake.authenticate_session_key", return_value=(b"b" * 180, b"n" * 24)):
+            conn._renew_session_key_locked()
+
+        challenge_call = conn._send_request.call_args_list[0]
+        expected = _build_get_var_substreamed_payload(0x70000FDC, LegitimationId.SERVER_SESSION_REQUEST)
+        assert challenge_call.args == (FunctionCode.GET_VAR_SUBSTREAMED, expected, 4, False)
+
     def test_rejected_renewal_never_installs_generated_key(self) -> None:
         conn = self._authenticated_connection()
         challenge = bytes(range(20))
@@ -1657,6 +1675,28 @@ class TestLegacySessionKeyRefresh:
         with (
             patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
             pytest.raises(S7ConnectionError, match="return_value=0x8104"),
+        ):
+            conn._renew_session_key_locked()
+
+        assert conn._session_key == old_key
+
+    def test_error_frame_never_installs_generated_key(self) -> None:
+        conn = self._authenticated_connection()
+        challenge = bytes(range(20))
+        challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(challenge)]) + challenge
+        old_key = conn._session_key
+        replies = iter(
+            [(FunctionCode.GET_VAR_SUBSTREAMED, challenge_response), (FunctionCode.ERROR, bytes.fromhex("893100000000"))]
+        )
+
+        def exchange(*_args: object) -> bytes:
+            conn._last_response_function, reply = next(replies)
+            return reply
+
+        conn._send_request = MagicMock(side_effect=exchange)
+        with (
+            patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
+            pytest.raises(S7ConnectionError, match="generic error"),
         ):
             conn._renew_session_key_locked()
 
