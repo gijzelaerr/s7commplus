@@ -1,6 +1,244 @@
 CHANGES
 =======
 
+0.4.0 (2026-11-08)
+------------------
+
+The S7-1200 without TLS (V1 SessionKey, key family 01) now works for writes,
+subscriptions, subscription deletes, SessionKey renewal and alarm subscriptions,
+validated on a CPU 1214C and a CPU 1215C (both FW V4.2). Tags read and write as
+Python values by name, structs and arrays included. Both clients gain
+`reconnect()`, an opt-in automatic reconnect for reads, and configurable connect,
+request and notification timeouts. Where an entry was verified only on PLCSIM or
+on a single CPU, it says so.
+
+### Upgrading from 0.3.0
+
+Most applications need no changes. Check the following if you use them:
+
+* Every reply now has a deadline: 5 s by default (`request_timeout`), 30 s for
+  an EXPLORE (`explore_timeout`). A missed deadline raises `S7TimeoutError` and
+  closes the session, so call `connect()` again before the next request. For a
+  slower PLC pass larger timeouts to `connect()`. An async notification wait
+  without a `timeout` used to wait forever; it now ends after
+  `notification_timeout` (default: the request timeout) and raises
+  `S7TimeoutError` instead of `asyncio.TimeoutError` (#123).
+* `AsyncClient` raises `S7ConnectionError` when the PLC closes or resets the
+  connection during a request, instead of `asyncio.IncompleteReadError` or an
+  `OSError` such as `ConnectionResetError` (#122).
+* `list_datablocks()` returns `ProgramObject` instead of `dict`. `db["number"]`,
+  `db["name"]`, `db.get(...)` and `"key" in db` still work but emit a
+  `DeprecationWarning`; use the attributes (`db.number`, `db.name`, `db.rid`,
+  `db.language`, `db.knowhow_protected`, `db.unlinked`). Comparing the result
+  to a list of dicts no longer holds, and `json.dumps(list_datablocks())` now
+  raises `TypeError` (#135).
+* `Ids.BLOCK_BLOCKNUMBER` was removed. It duplicated `Ids.BLOCK_BLOCK_NUMBER`
+  (same value, 2521); use that instead (#137).
+* A raw STRING or WSTRING value passed to `write_tags()` or `write_tag()` must be
+  in the layout a read returns, `[max length, length, characters]` padded with
+  zeros to the declared length (a WSTRING as big-endian UINTs). Bytes in another
+  form, such as the characters alone, are no longer wrapped in a string PValue
+  (#105).
+* `tags_from_explore()` and `block_interface_from_explore()` raise `ValueError`
+  instead of `zlib.error` for a stream that does not inflate, with the
+  `zlib.error` as its cause (#120).
+* On an S7-1200 without TLS, `create_alarm_subscription()` requires
+  `language_ids` and `domains` to be `None` and raises `ValueError` otherwise
+  (#175).
+* A client call without a connection raises `S7NotConnectedError`. It is both an
+  `S7ConnectionError` and a `RuntimeError`, so existing handlers keep working
+  (#165).
+
+### New features
+
+* Typed values: `read_value()`, `read_values()`, `write_value()` and
+  `write_values()` (both clients) read and write Python values by tag name
+  instead of raw bytes, for every elementary type including strings, dates and
+  times. The name of a struct, UDT, DTL or array reads or writes all its leaves
+  as one batch, as a `dict`, `list` or `datetime`. A value the PLC type cannot
+  hold raises `TypeError` or `ValueError` naming the leaf before anything is
+  sent. With `auto_refresh_tags` set, a name not in the catalog runs the
+  rate-limited program-change check once and is looked up again, as in
+  `read_tags`. `read_value()` and `read_values()` are retried by
+  `auto_reconnect` like the other reads; writes never are. CHAR, STRING,
+  WSTRING and DATE_AND_TIME leaves were written and read back on an S7-1500
+  (CPU 1512SP-1 PN, FW V2.9, TLS) with both clients. Structs, UDTs, DTL and
+  arrays were validated on PLCSIM Advanced (V8.0, CPU 1511, FW V2.9) only
+  (#102).
+* `Client.reconnect()` and `AsyncClient.reconnect()` build a new session with the
+  parameters of the last `connect()` and legitimate it with the same password; a
+  successful `authenticate()` replaces that password and adds its username,
+  while a refused one changes nothing. `connection_generation` counts the
+  reconnects. A failed attempt keeps the parameters, so it can be repeated once
+  the PLC is back. Data subscriptions lost with the old session stay restorable
+  with `resubscribe()`; alarm subscriptions must be created again. Reconnects
+  are serialized, and while one runs, other `AsyncClient` tasks' requests fail
+  with "Not connected" instead of interleaving with its handshake (#122).
+* Opt-in automatic reconnect for reads: with `connect(..., auto_reconnect=True)`
+  (keyword-only) or the `auto_reconnect` property, a read that finds the
+  connection dropped reconnects and runs once more on the new session. Only
+  `db_read`, `db_read_multi`, `read_area`, `read_symbolic`,
+  `read_symbolic_multi`, `read_tag`, `read_tags`, `read_value`, `read_values`,
+  `browse` and `get_cpu_state` are retried; writes never are, because it is
+  unknown whether the PLC applied a lost write. A read that timed out is not
+  retried either; when the timeout ended the session, the next call reconnects.
+  It stands down, raising `S7ConnectionError`, while data or alarm subscriptions
+  are live or lost data subscriptions await `resubscribe()`. After an automatic
+  attempt the next one waits at least one second, and `AsyncClient` tasks that
+  find the same connection dropped share one reconnect. Off by default (#122).
+* `connect()` on both clients takes the keyword-only `timeout` (the TCP connect
+  and the COTP, InitSSL, TLS and CreateObject handshake together; 5 s by
+  default, as before), `request_timeout` (the wait for each reply, and for each
+  further part of a multi-part reply; default `timeout`), `explore_timeout` (the
+  same for the reply to an EXPLORE; default 30 s, `None` for the request
+  timeout) and `notification_timeout` (the default wait of the notification
+  receivers; default the request timeout). `S7CommPlusConnection.connect()`
+  takes the last three by keyword. A timeout that is zero, negative or not
+  finite raises `ValueError`. The async client now bounds the connect, the
+  handshake, every reply and every send, and tunes TCP keepalive like the sync
+  client. The sync `receive_subscription_notification()` and
+  `receive_alarm_notification()` gain the per-call `timeout` the async ones
+  have, and `S7CommPlusConnection.receive_notification()` takes one too (#123).
+* `Client.authenticate(password, username="")`, matching
+  `AsyncClient.authenticate()`. After a confirmed legitimation, `reconnect()`
+  uses the new password and username (#164).
+* `Client.program_objects()` and `AsyncClient.program_objects()` list every
+  object of the PLC program (blocks, UDTs and their containers) as
+  `ProgramObject`, exported from `s7commplus`. Experimental. `list_datablocks()`
+  sends the same EXPLORE and now also reads each block's number from the PLC
+  (#135).
+* The tag browser's `Member` has an `id` field (`0` when the interface does not
+  provide one), and inline Struct members are reported as `Struct` with their
+  sub-members in `Member.fields` (#121).
+* `Ids.BLOCK_AUTO_NUMBERING` (0x9DA), which `describe_attribute()` names
+  `Block.AutoNumbering` (#137).
+
+### Behaviour changes
+
+* S7-1200 V1 SessionKey sessions (no TLS, key family 01) no longer send the
+  address-323 session activation after connecting, in `Client` and
+  `AsyncClient`, and they read the replies to `CreateObject` and
+  `SetMultiVariables` whole: on a CPU 1215C and a CPU 1214C (FW V4.2) these
+  start with the return value, not with an IntegrityId. S7-1500 sessions (key
+  family 00) still send the activation and are otherwise unchanged; the 0.3.0
+  note that families other than PLCSIM send the same requests as in 0.2.0 no
+  longer holds for the S7-1200 (#104).
+* `write_tags()` and `write_tag()` send CHAR as a USINT, STRING and WSTRING as
+  USINT and UINT arrays of `[max length, length, characters]` padded to the
+  declared length, and DATE_AND_TIME as an array of its eight BCD bytes. An
+  S7-1500 (CPU 1512SP-1 PN, FW V2.9, TLS) and PLCSIM Advanced V8 (CPU 1511,
+  FW V2.9 with TLS and FW V2.8 without) accept these forms and read the values
+  back. Both refuse the scalar forms that 0.3.0 and earlier sent, so named
+  writes of these four types failed before. Not checked on an S7-1200 (#105).
+* Every reply now has a deadline, and missing it closes the session. Before,
+  the async client waited for a reply without limit, and the sync client gave
+  every socket read the connect timeout, EXPLORE replies included. EXPLORE gets
+  the longer default because its replies can be large: on a CPU 1215C (FW V4.2,
+  54 data blocks, 6802 variables) the type-info EXPLORE that `browse()` sends,
+  about 111 KB in 111 parts, took 5.9 to 7.0 s. In both clients a notification
+  wait now bounds the whole call rather than each frame, so notifications for
+  other subscriptions no longer extend it (#123).
+* `AsyncClient` ends the session when the PLC closes or resets the connection
+  during a request (`connected` turns false), so the next request fails at once
+  with "Not connected", and `AsyncClient.browse()` now reconnects on firmware
+  that resets the connection after a symbolic read, as `Client.browse()` does
+  (#122).
+* A client call without a connection raises `S7NotConnectedError` in both
+  clients. With `auto_reconnect` on, a read that finds no connection now tries
+  to reconnect if the connect parameters are still kept; after `disconnect()`
+  it does not (#165).
+
+### Bug fixes and hardening
+
+* `create_subscription()` now works on an S7-1200 without TLS. A CPU 1215C
+  FW V4.2 answered the subscription's `CreateObject` after the session
+  activation with a SystemEvent and a TCP reset, while reads kept working
+  (#104).
+* A write on an S7-1200 without TLS no longer raises `unexpected or duplicate
+  item` after it landed (#104, #136).
+* `delete_subscription()` no longer makes an S7-1200 (key family 01) reset the
+  connection. It and `write_symbolic()` send the V2 ObjectQualifier there, like
+  the session's other data requests (#172).
+* SessionKey renewal on an S7-1200 (key family 01) no longer resets the
+  connection. The challenge is read with the layout the PLC accepts (#171).
+* `create_alarm_subscription()` works on an S7-1200 without TLS. The request
+  leaves out the alarm domain filter and the text attributes, which a CPU 1214C
+  FW V4.2 refuses, and alarm texts are not requested there. Verified on one CPU
+  and firmware (#175).
+* Arrays of `DWORD` are read with four-byte elements, as a CPU 1214C sends them,
+  instead of as VLQ; previously reading one failed or returned wrong values.
+  Arrays of `LWORD` use eight-byte elements, by analogy with the scalar
+  (unverified). Both array types can now be written (#176).
+* `db_read_multi()` and `read_symbolic_multi()` keep the values of the items
+  that were read when other items of the same request fail. An S7-1500 (CPU
+  1512SP-1 PN, FW V2.9) answers such a request with a non-zero overall
+  ReturnValue but still sends the good values. Previously every item came back
+  as `b""` or the read raised (#145).
+* A multi-read item for a missing data block is reported as a failed item
+  instead of raising `RuntimeError`: the PLC answers it with both an empty value
+  and an error. Seen on an S7-1500 (CPU 1512SP-1 PN, FW V2.9) (#133).
+* The block language is parsed from `Block.BlockLanguage` (0x9DB). It was read
+  from 0x9DA, so EXPLORE replies never reported a language (#137).
+* A SessionKey renewal answered with the generic error function now fails as a
+  renewal, keeping the old key and closing the connection, instead of
+  installing a key the PLC rejected. Password legitimation answered that way
+  raises `S7ConnectionError` instead of counting as success, and a session
+  activation answered that way logs a warning (#158).
+* A timeout no longer leaves a dead session behind that still reports
+  `connected`. A request whose reply misses its deadline, and any read that
+  stops part-way through a frame or a multi-part reply (in the async client also
+  one cancelled from outside), close the session and raise `S7TimeoutError`.
+  A notification wait that runs out before any byte of the next frame arrived
+  leaves the session usable (#123).
+* A failed reconnect inside `AsyncClient.browse()` no longer discards the
+  `connect()` parameters (#122).
+* `AsyncClient` raises `S7ConnectionError` for a V3 reply on a session without
+  a session key. A fragment of a multi-part reply used to pass through
+  unverified (#163).
+* A malformed GetMultiVariables reply could hang `db_read()`,
+  `db_read_multi()`, `read_area()` and `read_symbolic()` and exhaust memory; it
+  now raises `ValueError`. Truncated or corrupt PLC replies raise `ValueError`
+  from the PValue decoder, the alarm parsers,
+  `typeinfo.extract_type_info_objects()` and the `tag_browser`
+  `*_from_explore()` functions, instead of `struct.error`, `IndexError`,
+  `zlib.error` or an XML `ParseError` (#120).
+* The uint32 and int32 VLQ decoders raise `ValueError` for a value outside the
+  type's range and for a fifth byte with a continuation flag. Arrays of
+  `ULINT`, `LINT`, `TIMESPAN` and `DINT` are decoded and skipped with the VLQ
+  reader of their own type; large elements used to raise or desynchronise an
+  EXPLORE walk. A reply that starts with a return value too large for an
+  IntegrityId is no longer stripped at a meaningless position (#155).
+* `encode_typed_value(DataType.BLOB, ...)` writes the BlobRootId, so its output
+  decodes correctly. `decode_pvalue_to_bytes` and `skip_typed_value` accept
+  `S7STRING` values, as a VLQ length and the bytes (not confirmed against a PLC
+  capture), and `skip_typed_value` skips packed structs correctly (#156).
+
+### Testing
+
+* `Server.port` is the TCP port the emulator listens on while it runs, and
+  `Server.start(port=0)` lets the OS pick a free one (#132, #134).
+* The emulator accepts `renewal_session_keys`, the keys it will accept in a
+  SessionKey renewal, and answers SetVariable for session activation and
+  legitimation (#158, #161).
+* The emulator writes the ServerSessionVersion struct id as a fixed 4-byte word,
+  matching a real CPU (#157), and sends key family 01 `SetMultiVariables`
+  replies in the CPU 1214C layout (#104).
+* `tests/test_client_parity.py` checks that `Client` and `AsyncClient` keep the
+  same public API (#162).
+* The real-PLC suites pass the configured password on every connect (#128,
+  #131).
+
+### Thanks
+
+* @pmpn8ez for running probe after probe on a CPU 1214C (FW V4.2) without TLS,
+  which found and confirmed most of this release's S7-1200 fixes (#136, #160,
+  #173).
+* @sullibar for typed values, the string and date write forms, and S7-1200
+  subscriptions (#102, #104, #105).
+* @bvanelli for program objects, the tag browser's member ids and inline
+  structs, the block language fix and the S7-1500 captures behind #129 and #130
+  (#121, #127, #128, #135, #137, #144).
+
 0.3.0 (2026-10-20)
 ------------------
 
