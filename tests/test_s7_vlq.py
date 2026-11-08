@@ -1,5 +1,7 @@
 """Tests for S7CommPlus VLQ (Variable-Length Quantity) encoding."""
 
+from collections.abc import Callable
+
 import pytest
 
 from s7commplus.vlq import (
@@ -159,3 +161,40 @@ class TestInt64Vlq:
         """Max/min int64 should encode in at most 9 bytes."""
         assert len(encode_int64_vlq(0x7FFFFFFFFFFFFFFF)) <= 9
         assert len(encode_int64_vlq(-0x8000000000000000)) <= 9
+
+
+class TestVlqRangeChecks:
+    """A 5-byte VLQ holds 35 bits, and its last byte must end the value (#146)."""
+
+    @pytest.mark.parametrize(
+        "decode, data",
+        [
+            (decode_uint32_vlq, "ffffffff7f"),  # 2**35 - 1
+            (decode_uint32_vlq, "9080808000"),  # 2**32
+            (decode_uint32_vlq, "8080808080"),  # continuation flag on the fifth byte
+            (decode_int32_vlq, "8fffffff7f"),  # 2**32 - 1
+            (decode_int32_vlq, "8880808000"),  # 2**31
+            (decode_int32_vlq, "f780808000"),  # -(2**31) - 1
+            (decode_int32_vlq, "8080808080"),  # continuation flag on the fifth byte
+        ],
+    )
+    def test_rejected(self, decode: Callable[[bytes], tuple[int, int]], data: str) -> None:
+        with pytest.raises(ValueError, match="VLQ"):
+            decode(bytes.fromhex(data))
+
+    @pytest.mark.parametrize(
+        "decode, encode, value",
+        [
+            (decode_uint32_vlq, encode_uint32_vlq, 0xFFFFFFFF),
+            (decode_int32_vlq, encode_int32_vlq, 0x7FFFFFFF),
+            (decode_int32_vlq, encode_int32_vlq, -0x80000000),
+        ],
+    )
+    def test_limits_still_round_trip(
+        self, decode: Callable[[bytes], tuple[int, int]], encode: Callable[[int], bytes], value: int
+    ) -> None:
+        encoded = encode(value)
+        assert decode(encoded) == (value, len(encoded))
+
+    def test_overlong_encoding_stays_accepted(self) -> None:
+        assert decode_uint32_vlq(bytes.fromhex("8000")) == (0, 2)

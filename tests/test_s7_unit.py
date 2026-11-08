@@ -14,6 +14,7 @@ from s7commplus.client import (
     ProgramObject,
     S7CommPlusClient,
     _build_read_payload,
+    _db_read_values,
     _parse_read_response,
     _build_write_payload,
     _parse_write_response,
@@ -48,6 +49,7 @@ from s7commplus.vlq import (
     encode_uint64_vlq,
     encode_int32_vlq,
     decode_uint32_vlq,
+    decode_uint64_vlq,
 )
 
 
@@ -405,6 +407,94 @@ class TestParseReadResponse:
         response = b"\x2a\x00\x00\x04\x00\x00\x00\x00"
         results = _parse_read_response(response)
         assert results == [b"\x2a"]
+
+    # GetMultiVariables replies from an S7-1500 (CPU 1512SP-1 PN, FW V2.9, TLS), captured
+    # by @bvanelli for #120 (after the 14-byte response header). DB1 is 37 bytes; DB9999
+    # does not exist. The PLC sent ReturnValue 0x20278000009A0013 with each one (#129).
+    CAPTURED = {
+        # (1,0,2), (9999,0,2), (1,4,4): the missing DB is in both lists
+        "missing DB in the middle": (
+            "9089f0808082b480130100140002000a020000030014000442f6e6660002c08895b080e6a5fff4000a00000000",
+            [b"\x00\n", None, b"B\xf6\xe6f"],
+        ),
+        # (1,0,2), (1,1000,4), (1,4,4): an offset past the end is only in the error list
+        "offset past the end": (
+            "9089f0808082b480130100140002000a030014000442f6e6660002c181d1d0808ba3ffc3000c00000000",
+            [b"\x00\n", None, b"B\xf6\xe6f"],
+        ),
+        # (9999,0,2), (1,1000,4)
+        "only failing items": (
+            "9089f0808082b480130100000001c08895b080e6a5fff402c181d1d0808ba3ffc3000e00000000",
+            [None, None],
+        ),
+        # (9999,0,2), (1,0,2)
+        "failing item first": (
+            "9089f0808082b480130100000200140002000a0001c08895b080e6a5fff4001000000000",
+            [None, b"\x00\n"],
+        ),
+    }
+
+    @staticmethod
+    def _with_return_value_zero(hex_reply: str) -> bytes:
+        reply = bytes.fromhex(hex_reply)
+        _, consumed = decode_uint64_vlq(reply, 0)
+        return encode_uint64_vlq(0) + reply[consumed:]
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_gives_one_result_per_item(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = self._with_return_value_zero(hex_reply)
+        assert _parse_read_response(reply) == expected
+        assert _parse_read_response(reply, expected_count=len(expected)) == expected
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_with_the_wrong_item_count_is_refused(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        with pytest.raises(RuntimeError, match="Symbolic multi-read failed"):
+            _parse_read_response(self._with_return_value_zero(hex_reply), expected_count=len(expected) + 1)
+
+    def test_an_item_with_a_value_and_an_error_is_refused(self) -> None:
+        response = self._build_response(items=[b"\x01\x02"], errors=[(1, 0xDEAD)])
+        with pytest.raises(RuntimeError, match="duplicate item 1"):
+            _parse_read_response(response, expected_count=1)
+        assert _parse_read_response(response) == [None]  # without a count, the error wins
+
+    def test_an_item_with_two_errors_is_refused(self) -> None:
+        response = self._build_response(errors=[(1, 0xDEAD), (1, 0xBEEF)])
+        with pytest.raises(RuntimeError, match="duplicate item 1"):
+            _parse_read_response(response, expected_count=1)
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_keeps_the_good_values_despite_its_return_value(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = bytes.fromhex(hex_reply)
+        assert decode_uint64_vlq(reply, 0)[0] == 0x20278000009A0013
+        assert _parse_read_response(reply) == expected
+        assert _parse_read_response(reply, expected_count=len(expected)) == expected
+        assert _db_read_values(reply, len(expected)) == [value or b"" for value in expected]
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_with_the_wrong_item_count_counts_as_refused(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = bytes.fromhex(hex_reply)
+        assert _parse_read_response(reply, expected_count=len(expected) + 1) == []
+        assert _db_read_values(reply, len(expected) + 1) == [b""] * (len(expected) + 1)
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            pytest.param(encode_uint64_vlq(0x05A9), id="no item lists"),
+            pytest.param(encode_uint64_vlq(0x05A9) + b"\x00\x00", id="empty item lists"),
+            pytest.param(encode_uint64_vlq(0x05A9) + b"\x01", id="truncated item list"),
+            pytest.param(
+                encode_uint64_vlq(0x05A9) + encode_uint32_vlq(1) + encode_pvalue_blob(b"\x01") + b"\x00\x00",
+                id="values but no failed item",
+            ),
+        ],
+    )
+    def test_a_non_zero_return_value_without_failed_items_is_a_refusal(self, response: bytes) -> None:
+        assert _parse_read_response(response) == []
+        assert _parse_read_response(response, expected_count=1) == []
 
 
 class TestParseWriteResponse:
@@ -1342,10 +1432,16 @@ class TestLegitimationRejection:
         from s7commplus.connection import _check_v1_legitimation_response, _strip_response_integrity_id
         from s7commplus.error import S7ConnectionError
 
-        stripped = _strip_response_integrity_id(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED, True, False)
-        _check_v1_legitimation_response(stripped)  # the stripped reading alone looks like success
+        # The return value is too large for an IntegrityId, so nothing is stripped.
+        kept = _strip_response_integrity_id(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED, True, False)
+        assert kept == self._REJECTED
         with pytest.raises(S7ConnectionError, match="rejected"):
-            _check_v1_legitimation_response(stripped, self._REJECTED)
+            _check_v1_legitimation_response(kept, kept)
+
+        hidden = self._REJECTED[5:]  # a reading that starts inside the return value looks like success
+        _check_v1_legitimation_response(hidden)
+        with pytest.raises(S7ConnectionError, match="rejected"):
+            _check_v1_legitimation_response(hidden, self._REJECTED)
 
     def test_success_with_leading_integrity_id_is_accepted(self) -> None:
         from s7commplus.connection import _check_v1_legitimation_response
@@ -1541,10 +1637,10 @@ class TestPlcsimResponseLayout:
 
 
 class TestWriteDeleteQualifierVersion:
-    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM only.
+    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM and the S7-1200.
 
-    A real S7-1200/1500 V1 SessionKey session keeps the negotiated V1 layout of
-    these two requests, as before #66; every other data path already sends V2.
+    An S7-1500 V1 SessionKey session keeps the negotiated V1 layout of these two
+    requests, as before #66; every other data path already sends V2.
     """
 
     _WRITE_ARGS = (0x8A0E0001, [1], b"\x00\x2a", 0)
@@ -1562,7 +1658,7 @@ class TestWriteDeleteQualifierVersion:
 
         return build_delete_subscription_request(0x70000F90, version)
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_sync_client(self, family: str, version: int) -> None:
         from s7commplus.client import S7CommPlusClient
         from s7commplus.v1_session_key.keys import KeyFamily
@@ -1582,7 +1678,7 @@ class TestWriteDeleteQualifierVersion:
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_async_client(self, family: str, version: int) -> None:
         from s7commplus.async_client import S7CommPlusAsyncClient
         from s7commplus.v1_session_key.keys import KeyFamily

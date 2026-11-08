@@ -13,12 +13,15 @@ Reference: thomas-v2/S7CommPlusDriver/Core/S7p.cs
 """
 
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from .error import S7ReturnValueError
 from .protocol import PROTOCOL_ID, DataType, ElementID, Ids, ObjectId, ProtocolVersion, service_result_code
 from .vlq import (
+    decode_int32_vlq,
+    decode_int64_vlq,
     decode_uint32_vlq,
     decode_uint64_vlq,
     encode_int32_vlq,
@@ -332,7 +335,7 @@ def encode_typed_value(datatype: int, value: Any) -> bytes:
         encoded: bytes = value.encode("utf-8")
         return tag + encode_uint32_vlq(len(encoded)) + encoded
     elif datatype == DataType.BLOB:
-        return bytes(tag + encode_uint32_vlq(len(value)) + value)
+        return bytes(tag + encode_uint32_vlq(0) + encode_uint32_vlq(len(value)) + value)  # BlobRootId, length, data
     else:
         raise ValueError(f"Unsupported DataType for encoding: {datatype:#04x}")
 
@@ -508,6 +511,11 @@ def _pack_decoded(fmt: str, value: int) -> bytes:
         raise ValueError(f"PValue value {value} does not fit {fmt}") from exc
 
 
+def _is_packed_struct(struct_id: int) -> bool:
+    """Whether a struct id marks a packed struct, whose members travel as one opaque blob."""
+    return 0x90000000 < struct_id < 0x9FFFFFFF or 0x02000000 < struct_id < 0x02FFFFFF
+
+
 def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
     """Decode a PValue from S7CommPlus response to raw bytes.
 
@@ -542,10 +550,11 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         else:
             # Variable-length elements (VLQ encoded)
             result = bytearray()
+            decode, encode = _vlq_element_codec(datatype)
             for _ in range(count):
-                val, c = decode_uint32_vlq(data, offset + consumed)
+                val, c = decode(data, offset + consumed)
                 consumed += c
-                result += encode_uint32_vlq(val)
+                result += encode(val)
             return bytes(result), consumed
 
     # Scalar types
@@ -566,8 +575,6 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         return data[offset + consumed : offset + consumed + 4], consumed + 4
     elif datatype in (DataType.DINT,):
         # Signed VLQ
-        from .vlq import decode_int32_vlq
-
         val, c = decode_int32_vlq(data, offset + consumed)
         consumed += c
         return _pack_decoded(">i", val), consumed
@@ -583,16 +590,12 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         # ValueLWord is a fixed 8-byte big-endian value, not VLQ.
         return data[offset + consumed : offset + consumed + 8], consumed + 8
     elif datatype in (DataType.LINT,):
-        from .vlq import decode_int64_vlq
-
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
         return _pack_decoded(">q", val), consumed
     elif datatype == DataType.TIMESTAMP:
         return data[offset + consumed : offset + consumed + 8], consumed + 8
     elif datatype == DataType.TIMESPAN:
-        from .vlq import decode_int64_vlq
-
         val, c = decode_int64_vlq(data, offset + consumed)
         consumed += c
         return _pack_decoded(">q", val), consumed
@@ -610,7 +613,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         raw = data[offset + consumed : offset + consumed + length]
         consumed += length
         return bytes(raw), consumed
-    elif datatype == DataType.WSTRING:
+    elif datatype in (DataType.WSTRING, DataType.S7STRING):
         length, c = decode_uint32_vlq(data, offset + consumed)
         consumed += c
         raw = data[offset + consumed : offset + consumed + length]
@@ -633,7 +636,7 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
         struct_id = int.from_bytes(data[offset + consumed : offset + consumed + 4], "big")
         consumed += 4
 
-        if (0x90000000 < struct_id < 0x9FFFFFFF) or (0x02000000 < struct_id < 0x02FFFFFF):
+        if _is_packed_struct(struct_id):
             consumed += 8  # PackedStructInterfaceTimestamp (UInt64, fixed)
             transport_flags, c = decode_uint32_vlq(data, offset + consumed)
             consumed += c
@@ -662,19 +665,36 @@ def decode_pvalue_to_bytes(data: bytes, offset: int) -> tuple[bytes, int]:
 
 
 def _pvalue_element_size(datatype: int) -> int:
-    """Return the fixed byte size for a PValue array element, or 0 for variable-length."""
+    """Return the fixed byte size for a PValue array element, or 0 for variable-length.
+
+    DWORD and LWORD elements are fixed-size, like their scalars. A CPU 1214C FW V4.2
+    sent an ``Array[0..99] of DWord`` as ``10 0c 64`` followed by 100 four-byte
+    elements (``de ad be ef ...``), which the VLQ reader cannot parse (#160). No
+    LWORD array has been captured; it is assumed to follow its 8-byte scalar.
+    """
     if datatype in (DataType.BOOL, DataType.USINT, DataType.BYTE, DataType.SINT):
         return 1
     elif datatype in (DataType.UINT, DataType.WORD, DataType.INT):
         return 2
-    elif datatype in (DataType.REAL,):
+    elif datatype in (DataType.REAL, DataType.DWORD):
         return 4
-    elif datatype in (DataType.LREAL, DataType.TIMESTAMP):
+    elif datatype in (DataType.LREAL, DataType.TIMESTAMP, DataType.LWORD):
         return 8
     elif datatype in (DataType.RID,):
         return 4
     else:
         return 0  # Variable-length (VLQ encoded)
+
+
+def _vlq_element_codec(datatype: int) -> tuple[Callable[[bytes, int], tuple[int, int]], Callable[[int], bytes]]:
+    """Return the (decoder, encoder) for a variable-length array element of this type."""
+    if datatype == DataType.ULINT:
+        return decode_uint64_vlq, encode_uint64_vlq
+    if datatype in (DataType.LINT, DataType.TIMESPAN):
+        return decode_int64_vlq, encode_int64_vlq
+    if datatype == DataType.DINT:
+        return decode_int32_vlq, encode_int32_vlq
+    return decode_uint32_vlq, encode_uint32_vlq
 
 
 # -- PObject-tree parsing shared by the sync (S7CommPlusConnection) and async clients --
@@ -694,10 +714,11 @@ def skip_typed_value(data: bytes, offset: int, datatype: int, flags: int) -> int
             offset += count * elem_size
         else:
             # Variable-length: skip each VLQ element.
+            decode, _encode = _vlq_element_codec(datatype)
             for _ in range(count):
                 if offset >= len(data):
                     break
-                _, consumed = decode_uint32_vlq(data, offset)
+                _, consumed = decode(data, offset)
                 offset += consumed
         return offset
 
@@ -707,8 +728,11 @@ def skip_typed_value(data: bytes, offset: int, datatype: int, flags: int) -> int
         return offset + 1
     elif datatype in (DataType.UINT, DataType.WORD, DataType.INT):
         return offset + 2
-    elif datatype in (DataType.UDINT, DataType.AID, DataType.DINT):
+    elif datatype in (DataType.UDINT, DataType.AID):
         _, consumed = decode_uint32_vlq(data, offset)
+        return offset + consumed
+    elif datatype == DataType.DINT:
+        _, consumed = decode_int32_vlq(data, offset)
         return offset + consumed
     elif datatype == DataType.DWORD:
         return offset + 4  # fixed 4-byte, not VLQ
@@ -733,13 +757,25 @@ def skip_typed_value(data: bytes, offset: int, datatype: int, flags: int) -> int
         offset += consumed
         length, consumed = decode_uint32_vlq(data, offset)
         return offset + consumed + length
-    elif datatype == DataType.WSTRING:
+    elif datatype in (DataType.WSTRING, DataType.S7STRING):
         length, consumed = decode_uint32_vlq(data, offset)
         return offset + consumed + length
     elif datatype == DataType.STRUCT:
+        struct_id = int.from_bytes(data[offset : offset + 4], "big")
+        offset += 4  # struct id (UInt32, not VLQ)
+        if _is_packed_struct(struct_id):
+            # Same layout as in decode_pvalue_to_bytes.
+            offset += 8  # PackedStructInterfaceTimestamp (UInt64, fixed)
+            transport_flags, consumed = decode_uint32_vlq(data, offset)
+            offset += consumed
+            count, consumed = decode_uint32_vlq(data, offset)
+            offset += consumed
+            if transport_flags & 0x400:  # Count2Present: a second count follows
+                count, consumed = decode_uint32_vlq(data, offset)
+                offset += consumed
+            return offset + count
         # Normal-mode struct: UInt32 struct-id, then members [VLQ key][typed value],
         # terminated by a 0x00 list-terminator byte (keys always start with high bit set).
-        offset += 4  # struct id (UInt32, not VLQ)
         while offset < len(data):
             if data[offset] == 0x00:
                 offset += 1

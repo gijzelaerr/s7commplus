@@ -283,9 +283,9 @@ parameters of the last ``connect()``:
 
    client.reconnect()
 
-The new session is legitimated with the password given to ``connect()``; on the
-asyncio client, a successful ``authenticate()`` replaces that password and adds
-its username, while a refused one changes nothing. ``connection_generation``
+The new session is legitimated with the password given to ``connect()``; a
+successful ``authenticate()`` replaces that password and adds its username,
+while a refused one changes nothing. ``connection_generation``
 counts the reconnects, so a caller can tell that the session was rebuilt. A
 failed attempt keeps the parameters, so ``reconnect()`` can be called again
 once the PLC is back. Data subscriptions lost with the old session are restored

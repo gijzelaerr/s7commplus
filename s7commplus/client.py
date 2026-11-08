@@ -15,7 +15,15 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from typing import Any, Concatenate, Literal, Optional, ParamSpec, TypeAlias, TypeVar
 
-from .error import S7ConnectionError, S7ProtocolError, S7SubscriptionError, S7TimeoutError, S7TlsHandshakeError, S7WriteError
+from .error import (
+    S7ConnectionError,
+    S7NotConnectedError,
+    S7ProtocolError,
+    S7SubscriptionError,
+    S7TimeoutError,
+    S7TlsHandshakeError,
+    S7WriteError,
+)
 
 from . import typeinfo
 from .alarm import (
@@ -778,6 +786,7 @@ class S7CommPlusClient:
             "tls_ca": tls_ca,
             "tls_cert_fingerprint": tls_cert_fingerprint,
             "password": password,
+            "username": "",
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
             "timeout": timeout,
@@ -797,7 +806,7 @@ class S7CommPlusClient:
         fallback to plaintext never outlives the connection it was made for.
         """
         if self._connect_params is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         p = self._connect_params
         if not p["auto_tls"]:
             self._open_connection_with_key_fallback()
@@ -864,7 +873,35 @@ class S7CommPlusClient:
         )
         if p["password"] is not None and self._connection.tls_active and not self._connection.requires_substreamed:
             logger.info("Performing PLC legitimation (password authentication)")
-            self._connection.authenticate(p["password"])
+            self._connection.authenticate(p["password"], p["username"])
+
+    def authenticate(self, password: str, username: str = "") -> None:
+        """Perform PLC password authentication (legitimation).
+
+        Once the PLC confirms the legitimation, the password and username
+        replace those of ``connect()``, so :meth:`reconnect` legitimates the new
+        session the same way. A refused attempt changes nothing.
+
+        Args:
+            password: PLC password
+            username: Username for the new-mode exchange (leave empty for legacy)
+
+        Raises:
+            S7NotConnectedError: If not connected.
+            S7ConnectionError: If TLS is not active, the firmware does not
+                support legitimation, or the password was refused.
+        """
+        if self._connection is None:
+            raise S7NotConnectedError("Not connected")
+        level_before = self._connection.protection_level
+        self._connection.authenticate(password, username)
+        level_after = self._connection.protection_level
+        # The level only drops when the PLC confirmed a legitimation; a CPU that
+        # already grants full access returns early and keeps the old parameters.
+        legitimated = level_before is not None and level_after is not None and level_after < level_before
+        if legitimated and self._connect_params is not None:
+            self._connect_params["password"] = password
+            self._connect_params["username"] = username
 
     def _probe_family_keys(self, family: int, excluded: set[str] | None = None) -> None:
         """Try each same-family key on a new connection and cache the winner."""
@@ -930,7 +967,7 @@ class S7CommPlusClient:
                 cleared its parameters.
         """
         if self._connect_params is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         logger.info("Reconnecting to the PLC")
         self._reconnect()
 
@@ -1009,7 +1046,7 @@ class S7CommPlusClient:
             Raw bytes read from the data block
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             return self._db_read_substreamed(db_number, start, size)
@@ -1071,7 +1108,7 @@ class S7CommPlusClient:
                 nothing is sent.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             normalized = [_normalize_write_item(item) for item in items]
@@ -1137,7 +1174,7 @@ class S7CommPlusClient:
                 exactly once.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             return [self._db_read_substreamed(db, start, size) for db, start, size in items]
@@ -1166,7 +1203,7 @@ class S7CommPlusClient:
             Raw bytes read from the area.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             payload = _build_substreamed_read_payload(
@@ -1196,7 +1233,7 @@ class S7CommPlusClient:
                 use an explicit scalar datatype when writing a scalar target.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection.requires_substreamed:
             payload = _build_substreamed_write_payload(
@@ -1250,7 +1287,7 @@ class S7CommPlusClient:
             Raw bytes of the variable value.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, self._connection.object_qualifier_version)
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
@@ -1280,7 +1317,7 @@ class S7CommPlusClient:
             RuntimeError: If the PLC does not answer every requested item.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not items:
             return []
 
@@ -1321,7 +1358,7 @@ class S7CommPlusClient:
                 legacy calls but is not a generic replacement for scalar types.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         payload = _build_symbolic_write_payload(
             access_area,
@@ -1369,7 +1406,7 @@ class S7CommPlusClient:
             RuntimeError: If not connected.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if _block_signature(self.list_datablocks()) != self._block_layout_signature:
             logger.info("The PLC data-block list changed; refreshing the tag catalog")
             self.refresh_tag_catalog()
@@ -1389,7 +1426,7 @@ class S7CommPlusClient:
     def _read_type_info_time(self, ti_rid: int) -> Optional[bytes]:
         """EXPLORE one type-info object for its modification time (``None`` if not reported)."""
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         payload = _build_explore_request(ti_rid, [Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME])
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
@@ -1523,7 +1560,7 @@ class S7CommPlusClient:
                 nothing is sent.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not values:
             return []
         tags, _ = self._resolve_tags(list(values))
@@ -1643,7 +1680,7 @@ class S7CommPlusClient:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue, e.g. for an object that does not exist.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection._session_key is not None:
             explore_id = explore_id or 0x38
@@ -1710,7 +1747,7 @@ class S7CommPlusClient:
             One of ``"RUN"``, ``"STOP"``, or ``"UNKNOWN"``.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         # Read the CPU exec unit object to get the running state
         payload = _build_explore_request(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, [])
@@ -1731,7 +1768,7 @@ class S7CommPlusClient:
             Raw block data.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         # Use GET_VAR_SUBSTREAMED to read block content
         payload = bytearray()
@@ -1760,7 +1797,7 @@ class S7CommPlusClient:
             data: Raw block data to write.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         from .codec import encode_pvalue_blob
 
@@ -1793,7 +1830,7 @@ class S7CommPlusClient:
             for an unprotected block is available to pin its encoding.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
             # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
@@ -1822,7 +1859,7 @@ class S7CommPlusClient:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
             raise NotImplementedError("program_objects() is not supported on V1 SessionKey sessions")
 
@@ -1851,7 +1888,7 @@ class S7CommPlusClient:
     def _browse_layout(self) -> tuple[list[dict[str, Any]], list[tuple[str, int, int]], dict[int, bytes]]:
         """:meth:`browse`, also returning the block-list signature and type-info modification times."""
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         # Phase A: enumerate data blocks. Phase B/C: resolve each DB's type-info RID
         # (a LID=1 read — needed for instance DBs whose TI is not their own RID) and seed
@@ -1926,7 +1963,7 @@ class S7CommPlusClient:
     def _explore_type_info_container(self) -> list["typeinfo.PObject"]:
         """EXPLORE the OMS type-info container and return its per-type objects."""
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         payload = _build_explore_request(Ids.OBJECT_OMS_TYPE_INFO_CONTAINER, [])
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, "Type-info browse")
@@ -1965,7 +2002,7 @@ class S7CommPlusClient:
                 :meth:`create_subscriptions` for that many items.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
 
@@ -2041,7 +2078,7 @@ class S7CommPlusClient:
                 first one fails, that error propagates unchanged.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not items:
             raise ValueError("a subscription requires at least one item")
         container_id = self._connection.subscription_container_id
@@ -2116,7 +2153,7 @@ class S7CommPlusClient:
         """
         _check_timeout("timeout", timeout)
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         wait = self._notification_wait(timeout)
         deadline = time.monotonic() + wait
         if subscription_id is not None:
@@ -2181,7 +2218,7 @@ class S7CommPlusClient:
                 for logging.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
 
@@ -2213,15 +2250,28 @@ class S7CommPlusClient:
             credit_limit: Notification credit limit. The default of 10 matches
                 the working S7-1500 reference trace.
 
+        On an S7-1200 without TLS (key family 01) the request leaves out the
+        domain filter and the text attributes, which a CPU 1214C FW V4.2 refuses
+        (#173): ``language_ids`` and ``domains`` must be ``None`` there, and the
+        PLC is not asked to send alarm texts.
+
         Returns:
             Subscription object ID assigned by the PLC.
+
+        Raises:
+            ValueError: ``language_ids`` or ``domains`` were given on a PLC that
+                refuses them.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_alarm_subscription_request(
-            self._connection.subscription_container_id, language_ids, domains, credit_limit
+            self._connection.subscription_container_id,
+            language_ids,
+            domains,
+            credit_limit,
+            texts_and_domain_filter=self._connection.alarm_texts_and_domain_filter,
         )
         response = self._connection.send_request(
             FunctionCode.CREATE_OBJECT,
@@ -2242,7 +2292,7 @@ class S7CommPlusClient:
         subscription container, data subscriptions included.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(
@@ -2269,7 +2319,7 @@ class S7CommPlusClient:
         """
         _check_timeout("timeout", timeout)
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         wait = self._notification_wait(timeout)
         deadline = time.monotonic() + wait
         while True:
@@ -2320,7 +2370,7 @@ class S7CommPlusClient:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         response = self._connection.send_request(
             FunctionCode.EXPLORE, build_alarm_explore_request(), integrity_tail=5, reassemble=True
         )
@@ -2381,22 +2431,43 @@ def _parse_read_response(response: bytes, expected_count: Optional[int] = None) 
 
     Returns:
         List of raw bytes per item (None for errored items)
-    """
-    offset = 0
 
+    A real S7-1500 (CPU 1512SP-1 PN, FW V2.9) answers an item for a missing DB
+    twice: with an empty value in the value list and with an entry in the error
+    list (#130). Such an item counts once and is reported as an error. An item
+    named twice in one list, or with a non-empty value and an error, is still
+    refused when ``expected_count`` is given.
+
+    When some items of a request fail, the same PLC sets a non-zero ReturnValue
+    (``0x20278000009A0013``) but still sends the values of the other items (#129).
+    A reply with a non-zero ReturnValue whose item lists parse, name at least one
+    failed item and (with ``expected_count``) account for every item is returned
+    per item. Any other reply with a non-zero ReturnValue is a request refused as
+    a whole and gives ``[]``.
+    """
     # S7-1200 single-byte scalar: [value 0x00 | 00 04 00 00 00 00]
     if response.endswith(_SCALAR_RESPONSE_SUFFIX):
         body = response[: -len(_SCALAR_RESPONSE_SUFFIX)]
         if len(body) == 2 and body[1] == 0x00:
             return [bytes(body[:1])]
 
-    return_value, consumed = decode_uint64_vlq(response, offset)
-    offset += consumed
+    return_value, offset = decode_uint64_vlq(response, 0)
+    if return_value == 0:
+        return _parse_read_items(response, offset, expected_count)
 
-    if return_value != 0:
+    try:
+        results = _parse_read_items(response, offset, expected_count)
+    except (RuntimeError, ValueError):
+        results = []
+    if None not in results:
         logger.error(f"_parse_read_response: PLC returned error 0x{return_value:X}")
         return []
+    logger.warning(f"_parse_read_response: PLC returned 0x{return_value:X}; {results.count(None)} of {len(results)} items failed")
+    return results
 
+
+def _parse_read_items(response: bytes, offset: int, expected_count: Optional[int]) -> list[Optional[bytes]]:
+    """Parse the value and error lists of a GetMultiVariables reply, starting at ``offset``."""
     values: dict[int, bytes] = {}
     while offset < len(response):
         item_nr, consumed = decode_uint32_vlq(response, offset)
@@ -2417,27 +2488,25 @@ def _parse_read_response(response: bytes, expected_count: Optional[int] = None) 
             break
         err_value, consumed = decode_uint64_vlq(response, offset)
         offset += consumed
-        if expected_count is not None and (err_item_nr > expected_count or err_item_nr in values or err_item_nr in errors):
+        # An empty value next to an error is how a PLC answers a missing DB; any
+        # other item that already has a value or an error is a duplicate.
+        duplicate = err_item_nr in errors or bool(values.get(err_item_nr))
+        if expected_count is not None and (err_item_nr > expected_count or duplicate):
             raise RuntimeError(f"Symbolic multi-read failed: unexpected or duplicate item {err_item_nr}")
         errors[err_item_nr] = err_value
 
-    if expected_count is not None and len(values) + len(errors) != expected_count:
-        raise RuntimeError(f"Symbolic multi-read failed: PLC answered {len(values) + len(errors)} of {expected_count} items")
+    answered = len(values.keys() | errors.keys())
+    if expected_count is not None and answered != expected_count:
+        raise RuntimeError(f"Symbolic multi-read failed: PLC answered {answered} of {expected_count} items")
 
     max_item = max(max(values.keys(), default=0), max(errors.keys(), default=0))
     # Every requested item is answered once, with a value or an error, so item
     # numbers run 1..N for N answered items. A higher number would make the list
     # below as long as the number says (up to 2**32 entries from a few bytes).
-    if max_item > len(values) + len(errors):
-        raise ValueError(f"Read response names item {max_item} but answers only {len(values) + len(errors)} items")
-    results: list[Optional[bytes]] = []
-    for i in range(1, max_item + 1):
-        if i in values:
-            results.append(values[i])
-        else:
-            results.append(None)
-
-    return results
+    if max_item > answered:
+        raise ValueError(f"Read response names item {max_item} but answers only {answered} items")
+    # An item with an error is reported as one, even when it also has a value.
+    return [None if i in errors else values.get(i) for i in range(1, max_item + 1)]
 
 
 def _build_write_payload(items: list[DBWriteItem], protocol_version: int = ProtocolVersion.V2) -> bytes:

@@ -1,11 +1,13 @@
 """Tests for S7CommPlus codec (header encoding, typed values, payload builders)."""
 
 import struct
+from typing import Any
 
 import pytest
 
 from s7commplus.client import _build_multi_symbolic_read_payload, _build_symbolic_read_payload, _build_symbolic_write_payload
 from s7commplus.codec import (
+    skip_typed_value,
     _pvalue_element_size,
     decode_float32,
     decode_float64,
@@ -14,6 +16,7 @@ from s7commplus.codec import (
     decode_int32,
     decode_int64,
     decode_pvalue_to_bytes,
+    encode_pvalue_array,
     decode_response_header,
     decode_uint8,
     decode_uint16,
@@ -407,6 +410,43 @@ class TestMultiSymbolicReadPayload:
         )
 
 
+class TestCodecRoundTrips:
+    """Encoders and decoders agree on the wire layout."""
+
+    def test_encode_typed_blob_has_a_blob_root_id(self) -> None:
+        encoded = encode_typed_value(DataType.BLOB, bytes([1, 2]))
+        assert encoded == bytes([DataType.BLOB, 0x00, 0x02, 0x01, 0x02])
+        assert decode_pvalue_to_bytes(bytes([0x00]) + encoded, 0) == (bytes([1, 2]), 6)
+        assert encoded == encode_pvalue_blob(bytes([1, 2]))[1:]
+
+    def test_s7string_decodes_and_skips_what_the_encoder_writes(self) -> None:
+        value = bytes([0x05, 0x02]) + b"hi"
+        encoded = encode_pvalue_typed(DataType.S7STRING, value)
+        assert decode_pvalue_to_bytes(encoded, 0) == (value, len(encoded))
+        assert skip_typed_value(encoded + bytes([0xAA]), 2, DataType.S7STRING, 0x00) == len(encoded)
+
+    @pytest.mark.parametrize(
+        "struct_id, transport_flags, counts",
+        [
+            (0x91000000, 0, [3]),
+            (0x02000001, 0, [3]),
+            (0x91000000, 0x400, [9, 3]),
+        ],
+    )
+    def test_packed_struct_is_skipped_to_its_end(self, struct_id: int, transport_flags: int, counts: list[int]) -> None:
+        packed = bytes([0x00, DataType.STRUCT]) + struct.pack(">I", struct_id) + bytes(8) + encode_uint32_vlq(transport_flags)
+        for count in counts:
+            packed += encode_uint32_vlq(count)
+        packed += b"xyz"
+        assert decode_pvalue_to_bytes(packed, 0) == (b"xyz", len(packed))
+        assert skip_typed_value(packed + bytes([0xAA]), 2, DataType.STRUCT, 0x00) == len(packed)
+
+    def test_normal_struct_is_still_walked_member_by_member(self) -> None:
+        normal = bytes([0x00, DataType.STRUCT]) + struct.pack(">I", 314) + encode_uint32_vlq(315)
+        normal += bytes([0x00, DataType.USINT, 0x2A, 0x00])
+        assert skip_typed_value(normal + bytes([0xAA]), 2, DataType.STRUCT, 0x00) == len(normal)
+
+
 class TestPValueBlob:
     def test_basic_blob(self) -> None:
         data = bytes([1, 2, 3, 4])
@@ -733,6 +773,32 @@ class TestDecodePValue:
         assert result == encode_uint32_vlq(100) + encode_uint32_vlq(200)
 
 
+class TestVlqArrayElements:
+    """Array elements use the VLQ reader of their own type (#147)."""
+
+    @pytest.mark.parametrize(
+        "datatype, encode, value",
+        [
+            (DataType.ULINT, encode_uint64_vlq, 2**40),
+            (DataType.ULINT, encode_uint64_vlq, 2**64 - 1),
+            (DataType.LINT, encode_int64_vlq, -(2**40)),
+            (DataType.LINT, encode_int64_vlq, 2**62),
+            (DataType.TIMESPAN, encode_int64_vlq, 2**40),
+            (DataType.DINT, encode_int32_vlq, -(2**31)),
+            (DataType.UDINT, encode_uint32_vlq, 2**32 - 1),
+        ],
+    )
+    def test_decode_and_skip_stop_after_the_element(self, datatype: DataType, encode: Any, value: int) -> None:
+        element = encode(value)
+        pvalue = bytes([0x10, datatype]) + encode_uint32_vlq(1) + element + b"\xaa"
+        assert decode_pvalue_to_bytes(pvalue, 0) == (element, len(pvalue) - 1)
+        assert skip_typed_value(pvalue, 2, datatype, 0x10) == len(pvalue) - 1
+
+    def test_negative_dint_scalar_is_skipped(self) -> None:
+        element = encode_int32_vlq(-(2**31))
+        assert skip_typed_value(element + b"\xaa", 0, DataType.DINT, 0x00) == len(element)
+
+
 class TestPValueElementSize:
     def test_single_byte_types(self) -> None:
         for dt in (DataType.BOOL, DataType.USINT, DataType.BYTE, DataType.SINT):
@@ -745,14 +811,50 @@ class TestPValueElementSize:
     def test_four_byte_types(self) -> None:
         assert _pvalue_element_size(DataType.REAL) == 4
         assert _pvalue_element_size(DataType.RID) == 4
+        assert _pvalue_element_size(DataType.DWORD) == 4
 
     def test_eight_byte_types(self) -> None:
         assert _pvalue_element_size(DataType.LREAL) == 8
         assert _pvalue_element_size(DataType.TIMESTAMP) == 8
+        assert _pvalue_element_size(DataType.LWORD) == 8
 
     def test_variable_length_types(self) -> None:
-        for dt in (DataType.UDINT, DataType.DWORD, DataType.BLOB, DataType.WSTRING, DataType.STRUCT):
+        for dt in (DataType.UDINT, DataType.ULINT, DataType.BLOB, DataType.WSTRING, DataType.STRUCT):
             assert _pvalue_element_size(dt) == 0
+
+
+class TestCapturedDwordArray:
+    """GetMultiVariables reply for ``Array[0..99] of DWord`` from a CPU 1214C DC/DC/DC FW V4.2 (#160).
+
+    Captured by @pmpn8ez: DB3 elements 0..2 are 16#DEADBEEF, 16#ABCDEFAB and 16#ABCDABCD,
+    the other 97 are zero. ReturnValue 0, item 1, then the value; after it come the
+    end of the value list, the end of the error list and the response IntegrityId.
+    """
+
+    ELEMENTS = bytes.fromhex("deadbeefabcdefababcdabcd") + bytes(97 * 4)
+    REPLY = bytes.fromhex("00 01 10 0c 64") + ELEMENTS + bytes.fromhex("00 00 06 00 00 00 00")
+
+    def test_decode_reads_four_byte_elements(self) -> None:
+        raw, consumed = decode_pvalue_to_bytes(self.REPLY, 2)
+        assert raw == self.ELEMENTS
+        assert consumed == 3 + 400
+        assert self.REPLY[2 + consumed : 2 + consumed + 2] == b"\x00\x00"
+
+    def test_skip_lands_after_the_last_element(self) -> None:
+        assert skip_typed_value(self.REPLY, 4, DataType.DWORD, 0x10) == 5 + 400
+
+    def test_read_response_returns_the_array(self) -> None:
+        from s7commplus.client import _parse_read_response
+
+        assert _parse_read_response(self.REPLY[:-5], expected_count=1) == [self.ELEMENTS]
+
+    @pytest.mark.parametrize(("datatype", "size"), [(DataType.DWORD, 4), (DataType.LWORD, 8)])
+    def test_encode_array_round_trips(self, datatype: DataType, size: int) -> None:
+        data = bytes(range(1, 1 + 3 * size))
+        encoded = encode_pvalue_array(datatype, data)
+        assert encoded == bytes([0x10, datatype, 3]) + data
+        assert decode_pvalue_to_bytes(encoded, 0) == (data, len(encoded))
+        assert skip_typed_value(encoded, 2, datatype, 0x10) == len(encoded)
 
 
 class TestObjectQualifier:
