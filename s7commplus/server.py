@@ -597,6 +597,11 @@ class S7CommPlusServer:
                                 # IntegrityId goes before it (as the real PLC and the
                                 # HarpoS7 capture do).
                                 response = response[:-4] + encode_uint32_vlq(response_integrity_id) + response[-4:]
+                            elif v1_after_body and func_code == FunctionCode.SET_MULTI_VARIABLES and self._is_s7_1200_key():
+                                # A CPU 1214C FW V4.2 (key family 01) starts its SetMultiVariables
+                                # reply with the return value and sends the IntegrityId after the
+                                # body, in place of the legacy zero id (#136).
+                                response = response[:-1] + encode_uint32_vlq(response_integrity_id)
                             elif v1_after_body and func_code == FunctionCode.EXPLORE:
                                 # The client keeps legacy EXPLORE payloads whole because the
                                 # IntegrityId follows the body (v1_session_key/ARCHITECTURE.md).
@@ -1496,6 +1501,17 @@ class S7CommPlusServer:
             self._pending_session_key = key
             self._accepted_session_key_renewals += 1
         return True
+
+    def _is_s7_1200_key(self) -> bool:
+        """Whether the configured public key fingerprint is an S7-1200 one (key family 01)."""
+        if self._public_key_fingerprint is None:
+            return False
+        from .v1_session_key.keys import KeyFamily, parse_fingerprint
+
+        try:
+            return parse_fingerprint(self._public_key_fingerprint)[0] == KeyFamily.S7_1200
+        except ValueError:
+            return False
 
     def _build_error_response(self, seq_num: int, session_id: int, function_code: int) -> bytes:
         """Build a generic error response for unsupported function codes."""
