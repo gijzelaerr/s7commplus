@@ -315,6 +315,47 @@ def _interrupt_tag_writes(results: list[TagResult], start: int, count: int, erro
         results[index] = TagResult(tag=results[index].tag, error=interrupted)
 
 
+def _plan_tag_writes(tags: Sequence[SymbolicTag], values: Iterable[bytes]) -> list[SymbolicWriteItem]:
+    """The SetMultiVariables items for ``write_tags``, one per tag, in order.
+
+    Raises:
+        ValueError: A tag has no S7CommPlus wire datatype; nothing is sent.
+    """
+    unsupported = [tag.name for tag in tags if _write_type(tag) is None]
+    if unsupported:
+        raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
+    return [
+        (tag.access_area, list(tag.lids), data, 0, write_type)
+        for tag, data in zip(tags, values)
+        if (write_type := _write_type(tag)) is not None
+    ]
+
+
+def _plan_subscription_groups(
+    items: Sequence[SubscriptionItem | SymbolicTag | str],
+    container_id: int,
+    cycle_ms: int,
+    credit_limit: int,
+    max_request_bytes: int,
+    overhead: int,
+) -> list[list[SubscriptionItem]]:
+    """The groups ``create_subscriptions`` creates one subscription for each, in item order.
+
+    Raises:
+        ValueError: ``items`` is empty, two items share a reference id, or one
+            item alone does not fit a request; nothing is sent.
+    """
+    if not items:
+        raise ValueError("a subscription requires at least one item")
+
+    def build(group: list[SubscriptionItem]) -> bytes:
+        # The default change counter and relation id encode at least as long
+        # as the ones create_subscription() sends.
+        return build_subscription_request(container_id, group, cycle_ms=cycle_ms, credit_limit=credit_limit)[0]
+
+    return _subscription_groups(_normalize_subscription_items(items), max_request_bytes, overhead, build)
+
+
 def _normalize_subscription_items(items: Sequence[SubscriptionItem | SymbolicTag | str]) -> list[SubscriptionItem]:
     return [
         SubscriptionItem.from_access_sequence(item)
@@ -1403,7 +1444,7 @@ class S7CommPlusClient:
             ``True`` when the catalog was refreshed.
 
         Raises:
-            RuntimeError: If not connected.
+            S7NotConnectedError: If not connected.
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
@@ -1564,14 +1605,7 @@ class S7CommPlusClient:
         if not values:
             return []
         tags, _ = self._resolve_tags(list(values))
-        unsupported = [tag.name for tag in tags if _write_type(tag) is None]
-        if unsupported:
-            raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
-        items: list[SymbolicWriteItem] = [
-            (tag.access_area, list(tag.lids), data, 0, write_type)
-            for tag, data in zip(tags, values.values())
-            if (write_type := _write_type(tag)) is not None
-        ]
+        items = _plan_tag_writes(tags, values.values())
 
         def build_write(chunk: list[SymbolicWriteItem]) -> bytes:
             assert self._connection is not None
@@ -2079,16 +2113,14 @@ class S7CommPlusClient:
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
-        if not items:
-            raise ValueError("a subscription requires at least one item")
-        container_id = self._connection.subscription_container_id
-
-        def build(group: list[SubscriptionItem]) -> bytes:
-            # The default change counter and relation id encode at least as long
-            # as the ones create_subscription() sends.
-            return build_subscription_request(container_id, group, cycle_ms=cycle_ms, credit_limit=credit_limit)[0]
-
-        groups = _subscription_groups(_normalize_subscription_items(items), self.max_request_bytes, self._frame_overhead(), build)
+        groups = _plan_subscription_groups(
+            items,
+            self._connection.subscription_container_id,
+            cycle_ms,
+            credit_limit,
+            self.max_request_bytes,
+            self._frame_overhead(),
+        )
         created: list[int] = []
         for group in groups:
             try:

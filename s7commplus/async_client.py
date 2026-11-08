@@ -71,10 +71,11 @@ from .client import (
     _write_refused,
     _check_subscription_size,
     _normalize_subscription_items,
-    _subscription_groups,
+    _plan_subscription_groups,
+    _plan_tag_writes,
     _subscriptions_interrupted,
 )
-from .catalog import SymbolCatalog, SymbolicTag, TagResult, _write_type
+from .catalog import SymbolCatalog, SymbolicTag, TagResult
 from .codec import (
     SERVER_SESSION_ROLE_SECURED_BIT,
     decode_header,
@@ -1606,16 +1607,14 @@ class S7CommPlusAsyncClient:
         """
         if not self._connected:
             raise S7NotConnectedError("Not connected")
-        if not items:
-            raise ValueError("a subscription requires at least one item")
-        container_id = self._subscription_container_id
-
-        def build(group: list[SubscriptionItem]) -> bytes:
-            # The default change counter and relation id encode at least as long
-            # as the ones create_subscription() sends.
-            return build_subscription_request(container_id, group, cycle_ms=cycle_ms, credit_limit=credit_limit)[0]
-
-        groups = _subscription_groups(_normalize_subscription_items(items), self.max_request_bytes, self._frame_overhead(), build)
+        groups = _plan_subscription_groups(
+            items,
+            self._subscription_container_id,
+            cycle_ms,
+            credit_limit,
+            self.max_request_bytes,
+            self._frame_overhead(),
+        )
         created: list[int] = []
         for group in groups:
             try:
@@ -1966,7 +1965,7 @@ class S7CommPlusAsyncClient:
             ``True`` when the catalog was refreshed.
 
         Raises:
-            S7ConnectionError: If not connected.
+            S7NotConnectedError: If not connected.
         """
         if not self._connected:
             raise S7NotConnectedError("Not connected")
@@ -2120,14 +2119,7 @@ class S7CommPlusAsyncClient:
         if not values:
             return []
         tags, _ = await self._resolve_tags(list(values))
-        unsupported = [tag.name for tag in tags if _write_type(tag) is None]
-        if unsupported:
-            raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
-        items: list[SymbolicWriteItem] = [
-            (tag.access_area, list(tag.lids), data, 0, write_type)
-            for tag, data in zip(tags, values.values())
-            if (write_type := _write_type(tag)) is not None
-        ]
+        items = _plan_tag_writes(tags, values.values())
 
         def build_write(chunk: list[SymbolicWriteItem]) -> bytes:
             return _build_multi_symbolic_write_payload(chunk, self.object_qualifier_version)
