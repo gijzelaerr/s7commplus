@@ -101,8 +101,8 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> _FakeClient:
 def emulator() -> Generator[tuple[S7CommPlusServer, int], None, None]:
     srv = S7CommPlusServer()
     srv.register_raw_db(1, bytearray(16))
-    port = get_free_tcp_port()
-    srv.start(port=port)
+    srv.start(port=0)
+    port = srv.port
     time.sleep(0.1)
     yield srv, port
     srv.stop()
@@ -114,8 +114,8 @@ def tls_emulator() -> Generator[tuple[int, str], None, None]:
     cert_path, key_path = _generate_self_signed_cert()
     srv = S7CommPlusServer(protocol_version=ProtocolVersion.V2)
     srv.register_raw_db(1, bytearray(16))
-    port = get_free_tcp_port()
-    srv.start(port=port, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+    srv.start(port=0, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+    port = srv.port
     time.sleep(0.1)
     yield port, cert_path
     srv.stop()

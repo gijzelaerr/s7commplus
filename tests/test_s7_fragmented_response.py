@@ -19,12 +19,10 @@ from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import _LEGACY_KEY_CACHE, S7CommPlusClient
 from s7commplus.codec import encode_header
 from s7commplus.connection import S7CommPlusConnection, _response_continues
-from s7commplus.error import S7ConnectionError
+from s7commplus.error import S7ConnectionError, S7ProtocolError
 from s7commplus.protocol import FunctionCode, Opcode, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
-from tests.conftest import get_free_tcp_port
 
-FRAGMENT_PORT = get_free_tcp_port()
 
 TEST_FINGERPRINT = "01:BD426B091F08731A"
 TEST_CHALLENGE = bytes(range(20))
@@ -65,7 +63,7 @@ def test_response_continues_compares_the_trailer_bytes() -> None:
 def fragmenting_server() -> Iterator[S7CommPlusServer]:
     server = S7CommPlusServer(max_response_pdu=64)
     server.register_raw_db(2, bytearray(range(256)))
-    server.start(port=FRAGMENT_PORT)
+    server.start(port=0)
     time.sleep(0.1)
     yield server
     server.stop()
@@ -78,7 +76,7 @@ def test_server_rejects_a_non_positive_response_pdu() -> None:
 
 def test_sync_reads_a_response_split_over_several_pdus(fragmenting_server: S7CommPlusServer) -> None:
     client = S7CommPlusClient()
-    client.connect("127.0.0.1", port=FRAGMENT_PORT)
+    client.connect("127.0.0.1", port=fragmenting_server.port)
     try:
         assert client.db_read(2, 0, 200) == bytes(range(200))
         # The session stays in step: the next request gets its own response.
@@ -90,7 +88,7 @@ def test_sync_reads_a_response_split_over_several_pdus(fragmenting_server: S7Com
 @pytest.mark.asyncio
 async def test_async_reads_a_response_split_over_several_pdus(fragmenting_server: S7CommPlusServer) -> None:
     client = S7CommPlusAsyncClient()
-    await client.connect("127.0.0.1", port=FRAGMENT_PORT)
+    await client.connect("127.0.0.1", port=fragmenting_server.port)
     try:
         assert await client.db_read(2, 0, 200) == bytes(range(200))
         assert await client.db_read_multi([(2, 10, 2), (2, 250, 6)]) == [bytes([10, 11]), bytes(range(250, 256))]
@@ -104,8 +102,8 @@ def tiny_pdu_server_port() -> Iterator[int]:
     # clients read as one PDU: the emulator splits only the responses after them.
     server = S7CommPlusServer(max_response_pdu=8)
     server.register_raw_db(2, bytearray(range(256)))
-    port = get_free_tcp_port()
-    server.start(port=port)
+    server.start(port=0)
+    port = server.port
     time.sleep(0.1)
     yield port
     server.stop()
@@ -159,8 +157,8 @@ def fragmenting_v3_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[int]:
         max_response_pdu=64,
     )
     server.register_raw_db(2, bytearray(range(256)))
-    port = get_free_tcp_port()
-    server.start(port=port)
+    server.start(port=0)
+    port = server.port
     time.sleep(0.1)
     yield port
     server.stop()
@@ -177,9 +175,9 @@ def test_sync_reads_an_authenticated_response_split_over_several_pdus(fragmentin
         reassembled: list[bytes] = []
         reassemble = connection._recv_reassembled_payload
 
-        def spy(initial_data: bytes = b"") -> bytes:
+        def spy(initial_data: bytes = b"", timeout: float | None = None) -> bytes:
             reassembled.append(initial_data)
-            return reassemble(initial_data)
+            return reassemble(initial_data, timeout)
 
         connection._recv_reassembled_payload = spy  # type: ignore[method-assign]
         assert client.db_read(2, 0, 200) == bytes(range(200))
@@ -198,9 +196,9 @@ async def test_async_reads_an_authenticated_response_split_over_several_pdus(fra
         reassembled: list[bytes] = []
         reassemble = client._recv_reassembled_payload
 
-        async def spy(initial_data: bytes = b"") -> bytes:
+        async def spy(initial_data: bytes = b"", timeout: float | None = None) -> bytes:
             reassembled.append(initial_data)
-            return await reassemble(initial_data)
+            return await reassemble(initial_data, timeout)
 
         client._recv_reassembled_payload = spy  # type: ignore[method-assign]
         assert await client.db_read(2, 0, 200) == bytes(range(200))
@@ -286,3 +284,39 @@ async def test_async_reassembly_rejects_a_trailer_of_another_version() -> None:
     client = _async_client()
     with pytest.raises(S7ConnectionError, match="fragment version"):
         await client._recv_reassembled_payload(WRONG_VERSION_TRAILER)
+
+
+# A V3 fragment on a session without a key: its HMAC cannot be checked.
+V3_WITHOUT_A_KEY = encode_header(ProtocolVersion.V3, 12) + _response(5, b"\xaa\xbb") + b"\x72\x03\x00\x00"
+
+
+def test_sync_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
+    conn = _sync_connection()
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        conn._recv_reassembled_payload(V3_WITHOUT_A_KEY)
+
+
+@pytest.mark.asyncio
+async def test_async_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
+    client = _async_client()
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        await client._recv_reassembled_payload(V3_WITHOUT_A_KEY)
+
+
+# The same as one whole reply, with the digest length and digest of a V3 envelope.
+_ENVELOPE = bytes([32]) + bytes(32) + _response(5, bytes([0xAA, 0xBB]))
+WHOLE_V3_WITHOUT_A_KEY = encode_header(ProtocolVersion.V3, len(_ENVELOPE)) + _ENVELOPE + bytes([0x72, 0x03, 0x00, 0x00])
+
+
+def test_sync_rejects_a_whole_v3_reply_without_a_session_key() -> None:
+    # Refused before the key check: without a key the frame's first byte is read as the opcode.
+    conn = _sync_connection(WHOLE_V3_WITHOUT_A_KEY)
+    with pytest.raises(S7ProtocolError, match="Unexpected S7CommPlus opcode 0x20"):
+        conn.send_request(FunctionCode.GET_MULTI_VARIABLES)
+
+
+@pytest.mark.asyncio
+async def test_async_rejects_a_whole_v3_reply_without_a_session_key() -> None:
+    client = _async_client(WHOLE_V3_WITHOUT_A_KEY)
+    with pytest.raises(S7ConnectionError, match="without a session key"):
+        await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")

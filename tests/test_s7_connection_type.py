@@ -18,7 +18,6 @@ from s7commplus.protocol import (
     remote_tsap_for_connection_type,
 )
 from s7commplus.server import S7CommPlusServer
-from tests.conftest import get_free_tcp_port
 
 
 class TestRemoteTsapForConnectionType:
@@ -205,8 +204,8 @@ class TestEmulatorStillAcceptsDefaults:
 def emulator() -> Generator[tuple[S7CommPlusServer, int], None, None]:
     srv = S7CommPlusServer()
     srv.register_db(1, {"temperature": ("Real", 0)})
-    port = get_free_tcp_port()
-    srv.start(port=port)
+    srv.start(port=0)
+    port = srv.port
     import time
 
     time.sleep(0.1)

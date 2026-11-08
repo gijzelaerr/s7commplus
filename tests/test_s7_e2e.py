@@ -13,6 +13,9 @@ Available options:
     --plc-db-read   Read-only DB number (default: 1)
     --plc-db-write  Read-write DB number (default: 2)
 
+For a password-protected PLC, set S7COMMPLUS_TEST_PASSWORD; there is no
+command-line option for it.
+
 The PLC needs two data blocks configured with the same layout as the
 regular S7 e2e tests:
 
@@ -48,6 +51,7 @@ import unittest
 import pytest
 
 from s7commplus.client import S7CommPlusClient
+from tests.real_plc.support import PASSWORD_ENV
 
 # Enable DEBUG logging for all s7 modules so we get full hex dumps
 logging.basicConfig(
@@ -69,6 +73,9 @@ PLC_USE_TLS = os.environ.get("PLC_USE_TLS", "").lower() in {"1", "true", "yes"}
 PLC_TLS_CERT = os.environ.get("PLC_TLS_CERT")
 PLC_TLS_KEY = os.environ.get("PLC_TLS_KEY")
 PLC_TLS_CA = os.environ.get("PLC_TLS_CA")
+# The password comes only from the environment, as for the acceptance suite
+# (docs/real-plc-testing.rst), so it stays out of shell history and the process list.
+PLC_PASSWORD = os.environ.get(PASSWORD_ENV) or None
 
 # Data block numbers
 DB_READ_ONLY = int(os.environ.get("PLC_DB_READ", "1"))
@@ -76,7 +83,7 @@ DB_READ_WRITE = int(os.environ.get("PLC_DB_WRITE", "2"))
 
 
 def connect_client(client: S7CommPlusClient) -> None:
-    """Connect using the shared real-PLC TLS configuration."""
+    """Connect using the shared real-PLC TLS configuration and password."""
     client.connect(
         PLC_IP,
         PLC_PORT,
@@ -86,6 +93,7 @@ def connect_client(client: S7CommPlusClient) -> None:
         tls_cert=PLC_TLS_CERT,
         tls_key=PLC_TLS_KEY,
         tls_ca=PLC_TLS_CA,
+        password=PLC_PASSWORD,
     )
 
 

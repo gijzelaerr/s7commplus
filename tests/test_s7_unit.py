@@ -11,12 +11,15 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 from s7commplus.client import (
+    ProgramObject,
     S7CommPlusClient,
     _build_read_payload,
+    _db_read_values,
     _parse_read_response,
     _build_write_payload,
     _parse_write_response,
     _build_explore_request,
+    _parse_program_objects,
     _parse_cpu_state,
     _parse_explore_datablocks,
     _build_area_read_payload,
@@ -46,6 +49,7 @@ from s7commplus.vlq import (
     encode_uint64_vlq,
     encode_int32_vlq,
     decode_uint32_vlq,
+    decode_uint64_vlq,
 )
 
 
@@ -403,6 +407,94 @@ class TestParseReadResponse:
         response = b"\x2a\x00\x00\x04\x00\x00\x00\x00"
         results = _parse_read_response(response)
         assert results == [b"\x2a"]
+
+    # GetMultiVariables replies from an S7-1500 (CPU 1512SP-1 PN, FW V2.9, TLS), captured
+    # by @bvanelli for #120 (after the 14-byte response header). DB1 is 37 bytes; DB9999
+    # does not exist. The PLC sent ReturnValue 0x20278000009A0013 with each one (#129).
+    CAPTURED = {
+        # (1,0,2), (9999,0,2), (1,4,4): the missing DB is in both lists
+        "missing DB in the middle": (
+            "9089f0808082b480130100140002000a020000030014000442f6e6660002c08895b080e6a5fff4000a00000000",
+            [b"\x00\n", None, b"B\xf6\xe6f"],
+        ),
+        # (1,0,2), (1,1000,4), (1,4,4): an offset past the end is only in the error list
+        "offset past the end": (
+            "9089f0808082b480130100140002000a030014000442f6e6660002c181d1d0808ba3ffc3000c00000000",
+            [b"\x00\n", None, b"B\xf6\xe6f"],
+        ),
+        # (9999,0,2), (1,1000,4)
+        "only failing items": (
+            "9089f0808082b480130100000001c08895b080e6a5fff402c181d1d0808ba3ffc3000e00000000",
+            [None, None],
+        ),
+        # (9999,0,2), (1,0,2)
+        "failing item first": (
+            "9089f0808082b480130100000200140002000a0001c08895b080e6a5fff4001000000000",
+            [None, b"\x00\n"],
+        ),
+    }
+
+    @staticmethod
+    def _with_return_value_zero(hex_reply: str) -> bytes:
+        reply = bytes.fromhex(hex_reply)
+        _, consumed = decode_uint64_vlq(reply, 0)
+        return encode_uint64_vlq(0) + reply[consumed:]
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_gives_one_result_per_item(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = self._with_return_value_zero(hex_reply)
+        assert _parse_read_response(reply) == expected
+        assert _parse_read_response(reply, expected_count=len(expected)) == expected
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_with_the_wrong_item_count_is_refused(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        with pytest.raises(RuntimeError, match="Symbolic multi-read failed"):
+            _parse_read_response(self._with_return_value_zero(hex_reply), expected_count=len(expected) + 1)
+
+    def test_an_item_with_a_value_and_an_error_is_refused(self) -> None:
+        response = self._build_response(items=[b"\x01\x02"], errors=[(1, 0xDEAD)])
+        with pytest.raises(RuntimeError, match="duplicate item 1"):
+            _parse_read_response(response, expected_count=1)
+        assert _parse_read_response(response) == [None]  # without a count, the error wins
+
+    def test_an_item_with_two_errors_is_refused(self) -> None:
+        response = self._build_response(errors=[(1, 0xDEAD), (1, 0xBEEF)])
+        with pytest.raises(RuntimeError, match="duplicate item 1"):
+            _parse_read_response(response, expected_count=1)
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_keeps_the_good_values_despite_its_return_value(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = bytes.fromhex(hex_reply)
+        assert decode_uint64_vlq(reply, 0)[0] == 0x20278000009A0013
+        assert _parse_read_response(reply) == expected
+        assert _parse_read_response(reply, expected_count=len(expected)) == expected
+        assert _db_read_values(reply, len(expected)) == [value or b"" for value in expected]
+
+    @pytest.mark.parametrize("name", list(CAPTURED))
+    def test_captured_reply_with_the_wrong_item_count_counts_as_refused(self, name: str) -> None:
+        hex_reply, expected = self.CAPTURED[name]
+        reply = bytes.fromhex(hex_reply)
+        assert _parse_read_response(reply, expected_count=len(expected) + 1) == []
+        assert _db_read_values(reply, len(expected) + 1) == [b""] * (len(expected) + 1)
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            pytest.param(encode_uint64_vlq(0x05A9), id="no item lists"),
+            pytest.param(encode_uint64_vlq(0x05A9) + b"\x00\x00", id="empty item lists"),
+            pytest.param(encode_uint64_vlq(0x05A9) + b"\x01", id="truncated item list"),
+            pytest.param(
+                encode_uint64_vlq(0x05A9) + encode_uint32_vlq(1) + encode_pvalue_blob(b"\x01") + b"\x00\x00",
+                id="values but no failed item",
+            ),
+        ],
+    )
+    def test_a_non_zero_return_value_without_failed_items_is_a_refusal(self, response: bytes) -> None:
+        assert _parse_read_response(response) == []
+        assert _parse_read_response(response, expected_count=1) == []
 
 
 class TestParseWriteResponse:
@@ -923,6 +1015,44 @@ class TestClientErrorPaths:
 class TestExploreDatablocks:
     """Test the EXPLORE(thePLCProgram) request format and DB-list parser."""
 
+    # Live S7-1500 (6ES7 512-1CK01-0AB0, FW V2.9) reply to the request list_datablocks()
+    # sends, cut down to DB1 and DB2:
+    #   _build_explore_request(Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER])
+    # The data blocks are children of PLCProgram (RID 3), and the reply carries 5 bytes
+    # after the ReturnValue and a 4-byte trailer that the walk has to skip.
+    _REAL_PROGRAM_TREE = bytes.fromhex(
+        "00000000010ca10000000393583000a3816900150a504c4350726f6772616da18a0e0001940e2000a38169001509526561"
+        "645f6f6e6c79a3935900030001a2a18a0e0002940e2000a3816900150c446174615f626c6f636b5f32a3935900030002a2"
+        "a200000000"
+    )
+
+    # The same PLC's reply with the language and auto numbering added to the filter, cut down to
+    # DB1 and DB2:
+    #   _build_explore_request(
+    #       Ids.NATIVE_THE_PLC_PROGRAM_RID,
+    #       [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER, Ids.BLOCK_AUTO_NUMBERING, Ids.BLOCK_BLOCK_LANGUAGE],
+    #   )
+    # Each DB carries the language as a UINT, ``a3 93 5b 00 03 00 05`` (5 = DB), then auto
+    # numbering as a BOOL, ``a3 93 5a 00 01 00`` (both DBs were numbered by hand).
+    _REAL_PROGRAM_TREE_WITH_LANGUAGE = bytes.fromhex(
+        "00000000010aa10000000393583000a3816900150a504c4350726f6772616da18a0e0001940e2000a38169001509526561"
+        "645f6f6e6c79a3935900030001a3935b00030005a3935a000100a2a18a0e0002940e2000a3816900150c446174615f626c"
+        "6f636b5f32a3935900030002a3935b00030005a3935a000100a2a200000000"
+    )
+
+    def test_parse_real_program_tree(self) -> None:
+        objects = _parse_program_objects(self._REAL_PROGRAM_TREE)
+        assert [(obj.rid, obj.class_id, obj.name, obj.block_number, obj.language) for obj in objects] == [
+            (0x8A0E0001, Ids.DB_CLASS_RID, "Read_only", 1, None),
+            (0x8A0E0002, Ids.DB_CLASS_RID, "Data_block_2", 2, None),
+            (Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID, "PLCProgram", None, None),
+        ]
+        assert [db.number for db in _parse_explore_datablocks(self._REAL_PROGRAM_TREE)] == [1, 2]
+
+    def test_parse_real_program_tree_language(self) -> None:
+        dbs = _parse_explore_datablocks(self._REAL_PROGRAM_TREE_WITH_LANGUAGE)
+        assert [(db.number, db.name, db.language) for db in dbs] == [(1, "Read_only", "DB"), (2, "Data_block_2", "DB")]
+
     def test_build_explore_request_format(self) -> None:
         # ExploreId as a fixed UInt32, then the marker bytes, address count + ids,
         # and a 5-byte trailer (UInt32 fill + filler byte) for the IntegrityId splice.
@@ -960,8 +1090,43 @@ class TestExploreDatablocks:
 
         dbs = _parse_explore_datablocks(bytes(r))
         assert len(dbs) == 1
-        assert dbs[0]["number"] == 42
-        assert dbs[0]["rid"] == Ids.DB_ACCESS_AREA_BASE | 42
+        assert dbs[0].number == 42
+        assert dbs[0].rid == Ids.DB_ACCESS_AREA_BASE | 42
+
+    def test_program_objects_take_their_number_from_block_number(self) -> None:
+        # Block.BlockNumber as a lab S7-1500 sends it: flags 0, UINT, two bytes big-endian
+        fb = (
+            bytearray([ElementID.START_OF_OBJECT])
+            + struct.pack(">I", 0x8A120005)
+            + encode_uint32_vlq(Ids.FB_CLASS_RID)
+            + b"\x00\x00"
+        )
+        fb += (
+            bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.BLOCK_BLOCK_NUMBER) + bytes([0x00, DataType.UINT]) + b"\x00\x05"
+        )
+        fb += bytes([ElementID.TERMINATING_OBJECT])
+        program = bytearray([ElementID.START_OF_OBJECT]) + struct.pack(">I", Ids.NATIVE_THE_PLC_PROGRAM_RID)
+        program += encode_uint32_vlq(Ids.PLC_PROGRAM_CLASS_RID) + b"\x00\x00" + fb + bytes([ElementID.TERMINATING_OBJECT])
+        objects = _parse_program_objects(encode_uint64_vlq(0) + bytes(program))
+        assert [(obj.rid, obj.block_number, obj.number) for obj in objects] == [
+            (0x8A120005, 5, 5),
+            (Ids.NATIVE_THE_PLC_PROGRAM_RID, None, None),  # not a block, so no number, not 3
+        ]
+        # A data block without the attribute keeps the number from its RelationId
+        assert _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(7))[0].number == 7
+
+    def test_parse_explore_datablocks_warns_on_an_undecodable_attribute(self, caplog: pytest.LogCaptureFixture) -> None:
+        # Attribute 0x9DF with datatype 0xFF, which the codec does not know
+        r = encode_uint64_vlq(0) + self._db_object(7, extra_attributes=bytes([ElementID.ATTRIBUTE, 0x93, 0x5F, 0x00, 0xFF]))
+        with caplog.at_level("WARNING", logger="s7commplus.client"):
+            assert _parse_explore_datablocks(r) == []
+        assert "undecodable value of attribute 2527" in caplog.text
+
+    def test_parse_explore_datablocks_warns_when_the_reply_ends_inside_an_object(self, caplog: pytest.LogCaptureFixture) -> None:
+        r = encode_uint64_vlq(0) + self._db_object(7)[:-1]  # without the TerminatingObject
+        with caplog.at_level("WARNING", logger="s7commplus.client"):
+            assert _parse_explore_datablocks(r) == []
+        assert "ends inside 1 open object(s)" in caplog.text
 
     @staticmethod
     def _db_object(db_number: int, name: bytes = b"DataBlock_1", extra_attributes: bytes = b"") -> bytes:
@@ -983,16 +1148,29 @@ class TestExploreDatablocks:
     def test_parse_explore_datablocks_defaults_without_block_metadata(self) -> None:
         r = encode_uint64_vlq(0) + self._db_object(7)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs == [
-            {
-                "name": "DataBlock_1",
-                "number": 7,
+        assert dbs == [ProgramObject(Ids.DB_ACCESS_AREA_BASE | 7, Ids.DB_CLASS_RID, "DataBlock_1")]
+        assert dbs[0].number == 7
+
+    def test_program_object_keeps_the_dict_interface_list_datablocks_used_to_return(self) -> None:
+        block = ProgramObject(Ids.DB_ACCESS_AREA_BASE | 7, Ids.DB_CLASS_RID, "DataBlock_1")
+        with pytest.warns(DeprecationWarning, match=r'block\["\w+"\] is deprecated; read block\.\w+ instead'):
+            assert (block["number"], block["name"]) == (7, "DataBlock_1")
+            assert (block.get("number"), block.get("size"), block.get("size", 0)) == (7, None, 0)
+            assert "number" in block
+            assert "size" not in block
+            assert dict(block) == {
                 "rid": Ids.DB_ACCESS_AREA_BASE | 7,
+                "class_id": Ids.DB_CLASS_RID,
+                "name": "DataBlock_1",
                 "language": None,
                 "knowhow_protected": False,
                 "unlinked": False,
+                "block_number": None,
+                "number": 7,
             }
-        ]
+        assert list(block) == list(block.keys())
+        assert len(block) == 8
+        assert {block} == {ProgramObject(Ids.DB_ACCESS_AREA_BASE | 7, Ids.DB_CLASS_RID, "DataBlock_1")}
 
     def test_parse_explore_datablocks_reports_knowhow_protection(self) -> None:
         # KnowhowProtected (0x9DC) is struct 0xD77; its presence marks the block.
@@ -1009,8 +1187,8 @@ class TestExploreDatablocks:
         )
         r = encode_uint64_vlq(0) + self._db_object(8, extra_attributes=knowhow)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["knowhow_protected"] is True
-        assert dbs[0]["language"] is None
+        assert dbs[0].knowhow_protected is True
+        assert dbs[0].language is None
 
     def test_parse_explore_datablocks_reports_language(self) -> None:
         from s7commplus.protocol import Ids
@@ -1020,8 +1198,8 @@ class TestExploreDatablocks:
         )
         r = encode_uint64_vlq(0) + self._db_object(9, extra_attributes=language)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["language"] == "SCL"
-        assert dbs[0]["knowhow_protected"] is False
+        assert dbs[0].language == "SCL"
+        assert dbs[0].knowhow_protected is False
 
     def test_parse_explore_datablocks_reports_unknown_language(self) -> None:
         language = (
@@ -1029,7 +1207,7 @@ class TestExploreDatablocks:
         )
         r = encode_uint64_vlq(0) + self._db_object(10, extra_attributes=language)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["language"] == "language 123"
+        assert dbs[0].language == "language 123"
 
     def test_parse_explore_datablocks_language_codes_at_and_above_128(self) -> None:
         # A USINT code of 0x80+ would look like a VLQ continuation if decoded
@@ -1039,7 +1217,7 @@ class TestExploreDatablocks:
             bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.BLOCK_BLOCK_LANGUAGE) + bytes([0x00, DataType.USINT, 201])
         )
         dbs = _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(12, extra_attributes=motion_db))
-        assert dbs[0]["language"] == "MOTION_DB"
+        assert dbs[0].language == "MOTION_DB"
 
         as_uint = (
             bytes([ElementID.ATTRIBUTE])
@@ -1048,7 +1226,7 @@ class TestExploreDatablocks:
             + struct.pack(">H", 300)
         )
         dbs = _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(13, extra_attributes=as_uint))
-        assert dbs[0]["language"] == "GRAPH_ACTIONS"  # 300 is a defined code
+        assert dbs[0].language == "GRAPH_ACTIONS"  # 300 is a defined code
 
         unknown_uint = (
             bytes([ElementID.ATTRIBUTE])
@@ -1057,13 +1235,13 @@ class TestExploreDatablocks:
             + struct.pack(">H", 1234)
         )
         dbs = _parse_explore_datablocks(encode_uint64_vlq(0) + self._db_object(14, extra_attributes=unknown_uint))
-        assert dbs[0]["language"] == "language 1234"
+        assert dbs[0].language == "language 1234"
 
     def test_parse_explore_datablocks_reports_unlinked(self) -> None:
         unlinked = bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.BLOCK_UNLINKED) + bytes([0x00, DataType.BOOL, 1])
         r = encode_uint64_vlq(0) + self._db_object(11, extra_attributes=unlinked)
         dbs = _parse_explore_datablocks(bytes(r))
-        assert dbs[0]["unlinked"] is True
+        assert dbs[0].unlinked is True
 
 
 class TestBlockLanguage:
@@ -1100,7 +1278,7 @@ class TestReassembledPayload:
         conn = S7CommPlusConnection("127.0.0.1", 102)
         it = iter(chunks)
 
-        def fake_recv() -> bytes:
+        def fake_recv(timeout: float | None = None) -> bytes:
             return next(it, b"")
 
         conn._recv_s7_data = fake_recv  # type: ignore[method-assign]
@@ -1254,10 +1432,16 @@ class TestLegitimationRejection:
         from s7commplus.connection import _check_v1_legitimation_response, _strip_response_integrity_id
         from s7commplus.error import S7ConnectionError
 
-        stripped = _strip_response_integrity_id(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED, True, False)
-        _check_v1_legitimation_response(stripped)  # the stripped reading alone looks like success
+        # The return value is too large for an IntegrityId, so nothing is stripped.
+        kept = _strip_response_integrity_id(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED, True, False)
+        assert kept == self._REJECTED
         with pytest.raises(S7ConnectionError, match="rejected"):
-            _check_v1_legitimation_response(stripped, self._REJECTED)
+            _check_v1_legitimation_response(kept, kept)
+
+        hidden = self._REJECTED[5:]  # a reading that starts inside the return value looks like success
+        _check_v1_legitimation_response(hidden)
+        with pytest.raises(S7ConnectionError, match="rejected"):
+            _check_v1_legitimation_response(hidden, self._REJECTED)
 
     def test_success_with_leading_integrity_id_is_accepted(self) -> None:
         from s7commplus.connection import _check_v1_legitimation_response
@@ -1453,10 +1637,10 @@ class TestPlcsimResponseLayout:
 
 
 class TestWriteDeleteQualifierVersion:
-    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM only.
+    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM and the S7-1200.
 
-    A real S7-1200/1500 V1 SessionKey session keeps the negotiated V1 layout of
-    these two requests, as before #66; every other data path already sends V2.
+    An S7-1500 V1 SessionKey session keeps the negotiated V1 layout of these two
+    requests, as before #66; every other data path already sends V2.
     """
 
     _WRITE_ARGS = (0x8A0E0001, [1], b"\x00\x2a", 0)
@@ -1474,7 +1658,7 @@ class TestWriteDeleteQualifierVersion:
 
         return build_delete_subscription_request(0x70000F90, version)
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_sync_client(self, family: str, version: int) -> None:
         from s7commplus.client import S7CommPlusClient
         from s7commplus.v1_session_key.keys import KeyFamily
@@ -1494,7 +1678,7 @@ class TestWriteDeleteQualifierVersion:
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 1), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_async_client(self, family: str, version: int) -> None:
         from s7commplus.async_client import S7CommPlusAsyncClient
         from s7commplus.v1_session_key.keys import KeyFamily

@@ -22,7 +22,6 @@ from s7commplus.server import S7CommPlusServer
 from s7commplus.subscription import SubscriptionItem
 from s7commplus.typeinfo import Softdatatype
 from s7commplus.vlq import decode_uint32_vlq, encode_uint32_vlq, encode_uint64_vlq
-from tests.conftest import get_free_tcp_port
 from tests.test_s7_tls import _generate_self_signed_cert
 
 REFUSED = 0x8104  # any non-zero return value refuses a request as a whole
@@ -157,6 +156,21 @@ async def test_db_read_multi_keeps_an_item_error_in_place(kind: str) -> None:
     plc = _Client(kind, [_read_answer({2: b"b"}, errors={1: 0x13}), _read_answer({1: b"c"})])
 
     assert await plc.call("db_read_multi", [(1, offset, 1) for offset in range(3)]) == [b"", b"b", b"c"]
+
+
+@kinds
+@pytest.mark.parametrize("method", ["db_read_multi", "read_symbolic_multi"])
+async def test_multi_read_keeps_the_good_values_when_some_items_fail(kind: str, method: str) -> None:
+    # An S7-1500 (FW V2.9) answers a request with a failing item with a non-zero
+    # ReturnValue, but still sends the other values (#129).
+    answer = encode_uint64_vlq(0x20278000009A0013) + _read_answer({1: b"a", 3: b"c"}, errors={2: 0x13})[1:]
+    plc = _Client(kind, [answer], max_items=3)
+
+    items = [(1, offset, 1) for offset in range(3)]
+    if method == "read_symbolic_multi":
+        items = [(0x8A0E0001, [3, offset], 0) for offset in range(3)]
+    expected = [b"a", b"", b"c"] if method == "db_read_multi" else [b"a", None, b"c"]
+    assert await plc.call(method, items) == expected
 
 
 @kinds
@@ -419,11 +433,11 @@ def limited_plc(
     else:
         server = S7CommPlusServer(max_request_bytes=900)
     server.register_raw_db(2, bytearray(range(256)))
-    port = get_free_tcp_port()
     if request.param == "tls":
-        server.start(port=port, use_tls=True, tls_cert=tls_files[0], tls_key=tls_files[1])
+        server.start(port=0, use_tls=True, tls_cert=tls_files[0], tls_key=tls_files[1])
     else:
-        server.start(port=port)
+        server.start(port=0)
+    port = server.port
     time.sleep(0.1)
     yield server, port, connect_kwargs
     server.stop()

@@ -159,6 +159,18 @@ Failed items are reported per tag and not retried automatically unless
 layout, call ``refresh_tag_catalog``. Unknown
 names and unsupported PLC datatypes raise before a request is sent.
 
+Raw values use the layout a read returns. A STRING is written as the bytes
+``[max length, length, characters...]`` and a WSTRING the same as big-endian
+UINTs, both padded with zeros to the declared length (``tag.string_length``),
+and a DATE_AND_TIME as its eight BCD bytes. ``write_tags`` sends a CHAR as a
+USINT, a STRING and a WSTRING as USINT and UINT arrays of that layout, and a
+DATE_AND_TIME as an array of its eight bytes. An S7-1500 (CPU 1512SP-1 PN,
+FW V2.9 with TLS) and PLCSIM Advanced V8 (CPU 1511, FW V2.9 with TLS and FW
+V2.8 without) accept these forms and read the values back. Both refuse the
+scalar forms 0.3.0 and earlier sent (a CHAR as a BYTE, a STRING or WSTRING as an S7STRING
+or WSTRING PValue, a DATE_AND_TIME as a TIMESTAMP), which are no longer
+available. An S7-1200 has not been checked.
+
 ``refresh_caches_if_program_changed()`` checks before rebuilding: it compares the
 PLC's data-block list with the one the catalog was built from and, if that is
 unchanged, each cached data block's type-info modification time (one small
@@ -199,6 +211,79 @@ The async client provides the same methods as coroutines, except
    results = await client.write_tags(
        {"Data_block_1.temperature": struct.pack(">f", 21.5)}
    )
+
+Typed values
+~~~~~~~~~~~~
+
+``read_value`` and ``write_value`` work with Python values instead of raw
+bytes. A name can be a single tag, or a struct, UDT instance, DTL or array:
+those are read as one batch of all their leaves (split over several requests
+like ``read_tags`` when it is large) and returned as a ``dict`` or ``list`` (a
+DTL as a ``datetime``), and written back the same way:
+
+.. code-block:: python
+
+   import datetime
+
+   temperature = client.read_value("Data_block_1.temperature")   # float
+   recipe = client.read_value("Data_block_1.recipe")             # dict
+   client.write_value("Data_block_1.temperature", 21.5)
+   client.write_value("Data_block_1.recipe", {"speed": 120})     # only this member
+   client.write_value("Data_block_1.stamp", datetime.datetime.now())  # a DTL
+
+   speed, setpoints = client.read_values(["Data_block_1.recipe.speed", "Data_block_1.setpoints"])
+   client.write_values({"Data_block_1.setpoints": [1.0, 2.0, 3.0], "Data_block_1.on": True})
+
+The values map as follows:
+
+==================================================  ==========================================
+PLC type                                            Python value
+==================================================  ==========================================
+BOOL                                                ``bool``
+integers, BYTE, WORD, DWORD, LWORD                  ``int``
+REAL, LREAL                                         ``float``
+CHAR, WCHAR, STRING, WSTRING                        ``str`` (CHAR and STRING as Latin-1)
+DATE                                                ``datetime.date``
+TIME, LTIME, S5TIME                                 ``datetime.timedelta``
+TIME_OF_DAY, LTOD                                   ``datetime.time`` (naive)
+DATE_AND_TIME, LDT, DTL                             ``datetime.datetime`` (naive)
+struct, UDT                                         ``dict`` of members
+ARRAY                                               ``list`` (nested lists per dimension)
+==================================================  ==========================================
+
+A list's first element is the array's declared lower bound, so ``[-2..2]``
+reads as five elements. When writing, a ``dict`` may give only some members and
+an array may be given as a ``dict`` of index to value; a ``list`` must hold every
+element. Nanosecond types (LTIME, LTOD, LDT, DTL) are truncated to the
+microseconds Python's types hold; write an ``int`` of nanoseconds (milliseconds
+for TIME, TIME_OF_DAY and S5TIME) to set an exact value.
+
+No PLC date or time type stores a time zone. Values are read as naive
+``datetime`` and ``time`` objects, and writing an aware one raises
+``ValueError`` instead of silently shifting or dropping its offset; convert it
+first, for example with ``value.astimezone(datetime.timezone.utc).replace(tzinfo=None)``.
+The accepted ranges follow the TIA Portal data type documentation (not verified
+on hardware): DATE 1990-01-01 to 2168-12-31, DATE_AND_TIME 1990 to 2089, LDT
+and DTL 1970-01-01 to 2262-04-11 23:47:16.854775807, STRING up to 254 and
+WSTRING up to 16382 characters. REAL and LREAL also take infinities and NaN.
+
+A value the PLC type cannot hold (the wrong type, out of range, carrying a time
+zone, or a string longer than its declared length) raises ``TypeError`` or
+``ValueError`` naming the leaf before anything is sent, and a PLC rejection
+raises ``RuntimeError`` naming the failed tags. A STRING or WSTRING whose
+declared length the catalog does not give also raises ``ValueError`` before
+anything is sent, since its header and padding follow that length. Writes are
+never retried, and a write batch split over several requests is not atomic, as
+for ``write_tags``.
+With ``auto_refresh_tags`` set, a name not in the catalog runs the program-change
+check described above once (with the same 10-second limit) and is looked up
+again before anything is encoded or sent; a failed read item does too, through
+``read_tags``. A struct or array is read with the members known when the call
+started: if a refresh during the read changes them, a member that is gone
+raises ``KeyError`` and a new one is left out until the next call.
+Member names that themselves contain ``.`` or ``[`` nest one level deeper than
+declared. ``TagResult.tag.decode_value`` and ``SymbolicTag.encode_value``
+convert single raw values the same way.
 
 Symbolic browsing and access remain experimental because observable behavior
 varies across firmware versions. In particular, physical I/Q/M reads and

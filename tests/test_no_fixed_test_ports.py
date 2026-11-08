@@ -2,8 +2,9 @@
 
 A fixed port lets two test runs at once (two checkouts, or CI jobs sharing a
 host) start emulators on the same port, so a client can reach the other run's
-emulator and fail at random. Use ``get_free_tcp_port()`` or
-``get_free_tcp_ports()`` from ``tests/conftest.py`` instead.
+emulator and fail at random. Start the emulator with ``start(port=0)`` and
+connect to its ``port`` instead; ``get_free_tcp_port()`` from
+``tests/conftest.py`` is only for a port that nothing should listen on.
 """
 
 import re

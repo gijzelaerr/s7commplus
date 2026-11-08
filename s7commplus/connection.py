@@ -42,11 +42,13 @@ import contextlib
 import hashlib
 import hmac
 import logging
+import math
 import os
 import ssl
 import struct
 import tempfile
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from types import TracebackType
@@ -62,7 +64,7 @@ from .codec import (
     encode_object_qualifier,
     parse_create_object_attributes,
 )
-from .error import S7AuthenticationError, S7CertificateError, S7ConnectionError, S7Error, S7TlsHandshakeError
+from .error import S7AuthenticationError, S7CertificateError, S7ConnectionError, S7Error, S7TimeoutError, S7TlsHandshakeError
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -176,8 +178,8 @@ def _response_continues(frame: bytes) -> bool:
     return bytes(frame[end : end + 4]) != struct.pack(">BBH", 0x72, version, 0x0000)
 
 
-def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> None:
-    """Validate that application data is the response to one outstanding request."""
+def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> int:
+    """Validate that application data is the response to one outstanding request; return its function code."""
     from .error import S7ConnectionError, S7ProtocolError
 
     if len(response) < 10:
@@ -197,6 +199,7 @@ def _validate_response_header(response: bytes, expected_function: int, expected_
         raise S7ProtocolError(
             f"Response sequence mismatch: expected seq={expected_sequence}, got seq={sequence} for function=0x{function:04X}"
         )
+    return int(function)
 
 
 def _log_create_object_return_value(return_value: int, tls_active: bool) -> None:
@@ -245,6 +248,19 @@ _MAX_STALE_RESPONSES_PER_REQUEST = 16
 _MAX_QUEUED_NOTIFICATION_FRAMES = 1000
 _SYSTEM_EVENT_RETURN_VALUE_ID = 40305
 _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL = 25 * 60.0
+# Default seconds to wait for the reply to an EXPLORE, and for each further
+# part of it. A CPU 1215C (FW V4.2, 6802 variables) took 5.9 to 7.0 s in total
+# for the type-info EXPLORE of browse(), against at most 0.52 s for a
+# GetMultiVariables.
+_DEFAULT_EXPLORE_TIMEOUT = 30.0
+
+
+def _check_timeout(name: str, value: Optional[float], *, optional: bool = True) -> None:
+    """Reject a timeout that is not a positive, finite number of seconds (``None`` passes if ``optional``)."""
+    if value is None and optional:
+        return
+    if value is None or not (math.isfinite(value) and value > 0):
+        raise ValueError(f"{name} must be a positive, finite number of seconds{' or None' if optional else ''}")
 
 
 def _system_event_return_value(payload: bytes) -> Optional[int]:
@@ -502,13 +518,19 @@ def _build_set_operating_state_payload(in_object_id: int, state: int) -> bytes:
     return _build_set_variable_payload(in_object_id, Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ, value)
 
 
-def _check_set_variable_response(payload: bytes) -> None:
-    """Raise when a SetVariable response reports a refused legitimation.
+def _check_set_variable_response(payload: bytes, function: Optional[int] = None) -> None:
+    """Raise when a SetVariable response reports a refused write.
+
+    ``function`` is the response's function code. A generic ERROR frame is
+    always a refusal, whatever its payload decodes to: its first value is the
+    error function code, which has no sign bit.
 
     Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
     """
     from .error import S7ConnectionError
 
+    if function == FunctionCode.ERROR:
+        raise S7ConnectionError("SetVariable answered with the generic error function")
     if not payload:
         raise S7ConnectionError("SetVariable response is empty")
     try:
@@ -1074,12 +1096,28 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
 def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_version: int, object_qualifier_version: int) -> int:
     """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-    PLCSIM Advanced V8 (key family 03) needs the layout of the session's other
-    data requests there too (V2 on a V1 SessionKey session, #66). Other PLCs keep
-    the negotiated protocol version these two requests have always used: neither
-    layout of them has been checked on a hardware PLC.
+    PLCSIM Advanced V8 (key family 03) and the S7-1200 (key family 01) need the
+    layout of the session's other data requests there too, V2 on a V1 SessionKey
+    session. PLCSIM was found in #66. A CPU 1214C FW V4.2 resets the connection on
+    a V1 delete and accepts a V2 one (#136); ``write_symbolic`` is the same
+    SetMultiVariables request as ``write_tags``, which that CPU accepts with V2.
+    The S7-1500 keeps the negotiated protocol version, which these two requests
+    have always used and which hasn't been checked on hardware.
     """
-    return object_qualifier_version if family == KeyFamily.PLCSIM else protocol_version
+    if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200):
+        return object_qualifier_version
+    return protocol_version
+
+
+def _alarm_texts_and_domain_filter(family: Optional[KeyFamily]) -> bool:
+    """Whether an alarm subscription may send the domain filter and the text attributes.
+
+    A CPU 1214C FW V4.2 (key family 01, no TLS) refuses an alarm subscription
+    carrying ``AlarmDomainFilter`` (7731) and ``SendTexts``/``TextLanguages``
+    (8173/8181) with ``INVALID_AID``, and accepts it without them (#173). Every
+    other PLC keeps the S7-1500 reference layout.
+    """
+    return family != KeyFamily.S7_1200
 
 
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
@@ -1110,12 +1148,18 @@ def _strip_response_integrity_id(function_code: int, payload: bytes, session_key
     """Remove the IntegrityId that leads SessionKey response payloads.
 
     The legacy S7-1500 profile keeps GET_MULTI_VARIABLES and EXPLORE payloads
-    whole, because there the IntegrityId follows the body.
+    whole, because there the IntegrityId follows the body. A leading value too
+    large for an IntegrityId is the return value of a PLC that sends it first,
+    as a rejected S7-1215C legitimation does, so that payload stays whole too.
     """
     if legacy_s7_1500 and function_code in (FunctionCode.GET_MULTI_VARIABLES, FunctionCode.EXPLORE):
         return payload
     if session_key_active and len(payload) > 1:
-        resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        try:
+            resp_iid, consumed = decode_uint32_vlq(payload, 0)
+        except ValueError:
+            logger.debug("  Response starts with a value that is not an IntegrityId; keeping it whole")
+            return payload
         logger.debug("  Response IntegrityId: %d (%d bytes)", resp_iid, consumed)
         return payload[consumed:]
     return payload
@@ -1245,6 +1289,7 @@ class S7CommPlusConnection:
     ):
         self._legacy_s7_1500 = legacy_s7_1500
         self._last_raw_response_payload: Optional[bytes] = None
+        self._last_response_function: Optional[int] = None
         self.host = host
         self.port = port
 
@@ -1313,6 +1358,15 @@ class S7CommPlusConnection:
 
         # Password for post-auth legitimation (V1-initial PLCs)
         self._connect_password: str = ""
+        # Bound in seconds for one reply once the handshake is done, and the
+        # time.monotonic() deadline of the handshake while connect() runs it.
+        self._request_timeout = 5.0
+        self._handshake_deadline: Optional[float] = None
+        # The same bound for the reply to an EXPLORE, which can be large.
+        self._explore_timeout = _DEFAULT_EXPLORE_TIMEOUT
+        # Default wait in seconds for an unsolicited notification; None uses
+        # the request timeout.
+        self._notification_timeout: Optional[float] = None
         self._notification_frames: deque[bytes] = deque(maxlen=_MAX_QUEUED_NOTIFICATION_FRAMES)
         self._notification_frame_overflows = 0
         # Reentrant because integrity failures disconnect from inside a
@@ -1402,10 +1456,15 @@ class S7CommPlusConnection:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
+
+    @property
+    def alarm_texts_and_domain_filter(self) -> bool:
+        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family)
 
     @property
     def requires_substreamed(self) -> bool:
@@ -1459,6 +1518,9 @@ class S7CommPlusConnection:
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         *,
         tls_cert_fingerprint: Optional[str] = None,
+        request_timeout: Optional[float] = None,
+        explore_timeout: Optional[float] = _DEFAULT_EXPLORE_TIMEOUT,
+        notification_timeout: Optional[float] = None,
         _session_key_fingerprint: Optional[str] = None,
     ) -> None:
         """Establish S7CommPlus connection.
@@ -1472,7 +1534,8 @@ class S7CommPlusConnection:
         6. Enable IntegrityId tracking (V2+)
 
         Args:
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds, bounding the TCP connect and
+                steps 1-4 together.
             use_tls: Whether to activate TLS after InitSSL.
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
@@ -1486,18 +1549,39 @@ class S7CommPlusConnection:
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals. Defaults to 25 minutes; pass ``None`` to
                 disable automatic renewal.
+            request_timeout: Seconds to wait for the reply to each request
+                after step 4 (and for each further part of a multi-part
+                reply), or ``None`` to use ``timeout``. A reply that does not
+                arrive in time raises ``S7TimeoutError`` and closes the session.
+            explore_timeout: The same bound for the reply to an EXPLORE, whose
+                answer can be large; 30 s by default, or ``None`` to use the
+                request timeout.
+            notification_timeout: Default wait in seconds of
+                :meth:`receive_notification`, or ``None`` to use the request
+                timeout.
         """
         if self._legacy_s7_1500 and use_tls:
             raise ValueError("legacy_s7_1500 requires use_tls=False")
         if legacy_session_key_refresh_interval is not None and legacy_session_key_refresh_interval <= 0:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
+        _check_timeout("timeout", timeout, optional=False)
+        _check_timeout("request_timeout", request_timeout)
+        _check_timeout("explore_timeout", explore_timeout)
+        _check_timeout("notification_timeout", notification_timeout)
         self._session_key_refresh_interval = legacy_session_key_refresh_interval
         self._session_key_refresh_error = None
         self._connect_password = password
         self._session_key_fingerprint_override = _session_key_fingerprint
         self._tls_cert_fingerprint = _check_certificate_pin(tls_cert_fingerprint, use_tls)
         self._peer_certificate_fingerprint = None
+        self._request_timeout = timeout if request_timeout is None else request_timeout
+        self._explore_timeout = self._request_timeout if explore_timeout is None else explore_timeout
+        self._notification_timeout = notification_timeout
         try:
+            # Steps 1-4 share one deadline: the connect timeout bounds the
+            # TCP connect and the whole handshake, as in the async client.
+            self._handshake_deadline = time.monotonic() + timeout
+
             # Step 1: COTP connection (same TSAP for all S7CommPlus versions)
             self._iso_conn.connect(timeout)
 
@@ -1511,6 +1595,10 @@ class S7CommPlusConnection:
             # Step 4: CreateObject (S7CommPlus session setup)
             # CreateObject always uses V1 framing
             self._create_session()
+
+            # From here on every exchange is a request bounded by the request timeout.
+            self._handshake_deadline = None
+            self._iso_conn.set_request_timeout(self._request_timeout)
 
             self._session_key_fingerprint_override = _resolve_session_key_fingerprint(
                 self._public_key_fingerprint, self._session_key_fingerprint_override
@@ -1603,6 +1691,7 @@ class S7CommPlusConnection:
             )
 
         except Exception:
+            self._handshake_deadline = None
             self.disconnect()
             raise
 
@@ -1724,7 +1813,7 @@ class S7CommPlusConnection:
         value += encrypted_response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
         resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR).
@@ -1736,7 +1825,7 @@ class S7CommPlusConnection:
         value += response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
         resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     def collect_explore_frames(self, first_payload: bytes) -> bytes:
         """Collect unauthenticated multi-fragment EXPLORE continuation frames.
@@ -1786,7 +1875,7 @@ class S7CommPlusConnection:
                     f"collect_explore_frames: response too large ({len(all_data)} bytes, {fragment_count} fragments)"
                 )
             try:
-                raw = self._recv_s7_data()
+                raw = self._recv_s7_data(self._explore_timeout)
                 if not raw:
                     break
                 # Strip the 4-byte S7CommPlus fragment header (0x72 ver len:2)
@@ -1909,9 +1998,11 @@ class S7CommPlusConnection:
 
         from .v1_session_key.handshake import authenticate_session_key
 
-        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
-        challenge_payload = self._build_get_var_substreamed(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
-        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail, False)
+        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        # one, after which the renewal completes (#169).
+        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4, False)
         challenge = _parse_get_var_substreamed_response(challenge_response)
         if len(challenge) != 20:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
@@ -1919,7 +2010,7 @@ class S7CommPlusConnection:
         security_key = self._encode_security_key_struct(blob, new_session_key)
         renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
         renewal_response = self._send_request(FunctionCode.SET_VARIABLE, renewal_payload, 4, False)
-        _check_set_variable_response(renewal_response)
+        _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")
 
@@ -2029,17 +2120,18 @@ class S7CommPlusConnection:
             else:
                 self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
 
-        response_frame = self._recv_response_frame(seq_num)
+        reply_timeout = self._reply_timeout(function_code)
+        response_frame = self._recv_response_frame(seq_num, reply_timeout)
 
         # Large responses (e.g. Explore) are split across several S7CommPlus PDUs;
         # any response whose first PDU has no trailer is reassembled the same way.
         if reassemble or _response_continues(response_frame):
-            data = self._recv_reassembled_payload(response_frame)
+            data = self._recv_reassembled_payload(response_frame, reply_timeout)
             if len(data) < 10:
                 from .error import S7ConnectionError
 
                 raise S7ConnectionError("Response too short")
-            _validate_response_header(data, function_code, seq_num)
+            self._last_response_function = _validate_response_header(data, function_code, seq_num)
             logger.debug(f"  Reassembled response ({len(data)} bytes), payload {len(data) - 10} bytes")
             return self._response_payload(function_code, bytes(data[10:]))
 
@@ -2072,7 +2164,7 @@ class S7CommPlusConnection:
 
         logger.debug(f"  Response data ({len(response)} bytes): {response.hex(' ')}")
 
-        _validate_response_header(response, function_code, seq_num)
+        self._last_response_function = _validate_response_header(response, function_code, seq_num)
 
         # Parse the 10-byte response header for debug (responses carry no SessionId)
         resp_opcode = response[0]
@@ -2125,14 +2217,19 @@ class S7CommPlusConnection:
             self._invalidate_integrity_failure()
             raise
 
-    def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
-        """Receive the next response, queueing notifications and consuming non-fatal SystemEvents."""
+    def _recv_response_frame(self, expected_sequence: Optional[int] = None, timeout: Optional[float] = None) -> bytes:
+        """Receive the next response, queueing notifications and consuming non-fatal SystemEvents.
+
+        ``timeout`` bounds the wait in seconds (``None``: :meth:`_receive_timeout`);
+        the frames skipped on the way count against it.
+        """
         from .error import S7ConnectionError, S7ProtocolError
 
         system_events = 0
         stale_responses = 0
+        deadline = time.monotonic() + (self._receive_timeout() if timeout is None else timeout)
         while True:
-            response_frame = self._recv_s7_data()
+            response_frame = self._recv_s7_data(deadline - time.monotonic())
             if not response_frame:
                 raise S7ConnectionError("Connection closed while waiting for an S7CommPlus response")
             version, data_length, consumed = decode_header(response_frame)
@@ -2186,19 +2283,33 @@ class S7CommPlusConnection:
         except (IndexError, ValueError, S7ConnectionError, S7ProtocolError):
             return False
 
-    def receive_notification(self) -> bytes:
+    def receive_notification(self, timeout: Optional[float] = None) -> bytes:
         """Receive one unsolicited S7CommPlus notification frame.
 
         Notifications observed while waiting for a request response are queued,
         so callers do not lose updates when protocol traffic interleaves. This
         method must not run concurrently with :meth:`send_request` because both
         consume the same connection stream.
+
+        Args:
+            timeout: Seconds to wait for the frame, or ``None`` for the
+                ``notification_timeout`` passed to :meth:`connect`, else the
+                request timeout.
+
+        Raises:
+            S7TimeoutError: The wait ran out. When no byte of a frame had
+                arrived the session stays usable; a frame cut off part-way
+                closes it.
         """
+        _check_timeout("timeout", timeout)
         if not self._connected:
             from .error import S7ConnectionError
 
             raise S7ConnectionError("Not connected")
-        frame = self._notification_frames.popleft() if self._notification_frames else self._recv_s7_data()
+        if self._notification_frames:
+            frame = self._notification_frames.popleft()
+        else:
+            frame = self._recv_s7_data(self._notification_wait(timeout), idle_ok=True)
         data = self._verified_incoming_data(frame)
         if not data or data[0] != Opcode.NOTIFICATION:
             from .error import S7ConnectionError
@@ -2211,14 +2322,15 @@ class S7CommPlusConnection:
     _MAX_REASSEMBLED_BYTES = 16 * 1024 * 1024
     _MAX_REASSEMBLED_FRAGMENTS = 4096
 
-    def _recv_reassembled_payload(self, initial_data: bytes = b"") -> bytes:
+    def _recv_reassembled_payload(self, initial_data: bytes = b"", timeout: Optional[float] = None) -> bytes:
         """Receive a possibly-fragmented S7CommPlus response, returning its data section.
 
         A large response is split into several S7CommPlus PDUs. Each fragment is
         ``0x72 <ver> <len:2> <data:len>`` with no trailer; only the final fragment is
         followed by the ``0x72 <ver> 0x0000`` trailer. We concatenate the data parts
         of every fragment until the trailer is seen. Works for single-PDU responses
-        too (one fragment immediately followed by the trailer).
+        too (one fragment immediately followed by the trailer). ``timeout`` bounds
+        the wait for each further part in seconds (``None``: :meth:`_receive_timeout`).
         """
         from .error import S7ConnectionError, S7IntegrityError
 
@@ -2226,7 +2338,7 @@ class S7CommPlusConnection:
 
         def ensure(n: int) -> None:
             while len(buf) < n:
-                chunk = self._recv_s7_data()
+                chunk = self._recv_s7_data(timeout)
                 if not chunk:
                     raise S7ConnectionError("Connection closed during response reassembly")
                 buf.extend(chunk)
@@ -2632,6 +2744,10 @@ class S7CommPlusConnection:
         logger.debug("Session activation: SET_VARIABLE addr 323 = USINT(5)")
         payload = _build_session_activate_payload(self._session_id, self._sequence_number)
         self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
+        if self._last_response_function == FunctionCode.ERROR:
+            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
+            logger.warning("Session activation answered with the generic error function")
+            return
         logger.info("Session activation completed")
 
     def _skip_integrity_ids_after_legitimation(self) -> None:
@@ -2742,16 +2858,60 @@ class S7CommPlusConnection:
         else:
             self._iso_conn.send_data(data)
 
-    def _recv_s7_data(self) -> bytes:
-        """Receive an S7CommPlus frame, routing through TLS when active."""
-        if self._tls_active:
-            while True:
-                try:
-                    return self._ssl_object.read(65536)  # type: ignore[union-attr]
-                except ssl.SSLWantReadError:
-                    self._tls_read_incoming()
-        else:
-            return self._iso_conn.receive_data()
+    def _notification_wait(self, timeout: Optional[float]) -> float:
+        """Seconds a notification wait may take: per call, else notification_timeout, else the request timeout."""
+        if timeout is not None:
+            return timeout
+        if self._notification_timeout is not None:
+            return self._notification_timeout
+        return self._request_timeout
+
+    def _reply_timeout(self, function_code: int) -> float:
+        """Seconds each wait for the reply to ``function_code`` may take: the EXPLORE timeout, else the request timeout."""
+        return self._explore_timeout if function_code == FunctionCode.EXPLORE else self._request_timeout
+
+    def _receive_timeout(self) -> float:
+        """Seconds the next frame may take: what is left of the handshake, else the request timeout."""
+        if self._handshake_deadline is not None:
+            return self._handshake_deadline - time.monotonic()
+        return self._request_timeout
+
+    def _recv_s7_data(self, timeout: Optional[float] = None, *, idle_ok: bool = False) -> bytes:
+        """Receive an S7CommPlus frame, routing through TLS when active.
+
+        Args:
+            timeout: Seconds the whole frame may take, or ``None`` for
+                :meth:`_receive_timeout`.
+            idle_ok: Whether this is a wait for an unsolicited frame. Running
+                out of time before any byte of it arrived then leaves the
+                session usable. Any other timeout closes the session, whose
+                stream position is then unknown.
+        """
+        wait = self._receive_timeout() if timeout is None else timeout
+        try:
+            if self._tls_active:
+                # A TLS record can span several COTP frames; only the first
+                # read of the frame may run out cleanly.
+                deadline = time.monotonic() + wait
+                first_read = True
+                while True:
+                    try:
+                        return self._ssl_object.read(65536)  # type: ignore[union-attr]
+                    except ssl.SSLWantReadError:
+                        self._tls_read_incoming(deadline - time.monotonic(), idle_ok=idle_ok and first_read)
+                        first_read = False
+            return self._iso_conn.receive_data(wait, idle_ok=idle_ok)
+        except S7TimeoutError:
+            if not self._iso_conn.connected:
+                self._close_after_timeout()
+            raise
+
+    def _close_after_timeout(self) -> None:
+        """Close a session whose stream position is unknown, without a DeleteSession exchange."""
+        self._session_ready = False
+        self._stop_session_key_refresh()
+        with self._request_lock:
+            self._disconnect()
 
     def _tls_flush_outgoing(self) -> None:
         """Send all pending TLS records through COTP framing."""
@@ -2759,9 +2919,9 @@ class S7CommPlusConnection:
         if data:
             self._iso_conn.send_data(data)
 
-    def _tls_read_incoming(self) -> None:
-        """Read a COTP frame and feed its payload to the TLS BIO."""
-        data = self._iso_conn.receive_data()
+    def _tls_read_incoming(self, timeout: Optional[float] = None, *, idle_ok: bool = False) -> None:
+        """Read a COTP frame and feed its payload to the TLS BIO (``timeout`` as in :meth:`_recv_s7_data`)."""
+        data = self._iso_conn.receive_data(self._receive_timeout() if timeout is None else timeout, idle_ok=idle_ok)
         self._incoming_bio.write(data)  # type: ignore[union-attr]
 
     def _activate_tls(

@@ -16,17 +16,16 @@ from s7commplus.connection import _resolve_use_tls
 from s7commplus.error import S7ConnectionError, S7TlsHandshakeError
 from s7commplus.protocol import ProtocolVersion
 from s7commplus.server import S7CommPlusServer
-from tests.conftest import get_free_tcp_port
 from tests.test_s7_tls import _certificate_sha256_hex, _generate_self_signed_cert, _has_cryptography
 
 
 @pytest.fixture()
 def plain_server() -> Generator[int, None, None]:
     """A V1 emulator without TLS: it closes the connection on a TLS ClientHello."""
-    port = get_free_tcp_port()
     srv = S7CommPlusServer(protocol_version=ProtocolVersion.V1)
     srv.register_raw_db(1, bytearray(b"\x12\x34" + bytes(14)))
-    srv.start(port=port)
+    srv.start(port=0)
+    port = srv.port
     time.sleep(0.1)
     yield port
     srv.stop()
@@ -36,10 +35,10 @@ def plain_server() -> Generator[int, None, None]:
 def tls_server() -> Generator[tuple[int, str], None, None]:
     """A V2 emulator with TLS; yields its port and the PEM certificate path."""
     cert_path, key_path = _generate_self_signed_cert()
-    port = get_free_tcp_port()
     srv = S7CommPlusServer(protocol_version=ProtocolVersion.V2)
     srv.register_raw_db(1, bytearray(16))
-    srv.start(port=port, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+    srv.start(port=0, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+    port = srv.port
     time.sleep(0.1)
     yield port, cert_path
     srv.stop()

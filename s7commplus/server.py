@@ -30,6 +30,7 @@ import socket
 import ssl
 import struct
 import threading
+from collections.abc import Sequence
 from enum import IntEnum
 from typing import Any, Callable, Optional
 
@@ -216,17 +217,20 @@ class S7CommPlusServer:
         public_key_fingerprint: Optional[str] = None,
         session_challenge: Optional[bytes] = None,
         session_key: Optional[bytes] = None,
+        renewal_session_keys: Sequence[bytes] = (),
         rst_after_symbolic_read: bool = False,
         v1_integrity_id_after_body: bool = True,
         max_response_pdu: Optional[int] = None,
         max_request_bytes: Optional[int] = None,
     ) -> None:
         self._data_blocks: dict[int, DataBlock] = {}
+        self._program_objects: dict[int, tuple[int, Optional[str]]] = {}
         self._cpu_state = CPUState.RUN
         self._protocol_version = protocol_version
         self._next_session_id = 1
 
         self._server_socket: Optional[socket.socket] = None
+        self._port = 0
         self._server_thread: Optional[threading.Thread] = None
         self._client_threads: list[threading.Thread] = []
         self._running = False
@@ -250,6 +254,12 @@ class S7CommPlusServer:
         # negotiated key explicitly to exercise V3 framing end to end.
         self._session_key = session_key
         self._accepted_session_key_setups = 0
+        # The same goes for a renewal: tests provide the keys it will negotiate, in
+        # order. Without one, a renewal is refused. The key is shared by all
+        # connections, so a renewal only suits a server with one client.
+        self._renewal_session_keys = list(renewal_session_keys)
+        self._pending_session_key: Optional[bytes] = None
+        self._accepted_session_key_renewals = 0
 
         # When True, the server closes the TCP connection after responding
         # to a GetMultiVariables request (emulating firmware like S7-1200
@@ -279,6 +289,15 @@ class S7CommPlusServer:
         if max_request_bytes is not None and max_request_bytes <= 0:
             raise ValueError("max_request_bytes must be positive")
         self._max_request_bytes = max_request_bytes
+
+    @property
+    def port(self) -> int:
+        """The TCP port the server listens on while it runs, else 0.
+
+        With ``start(port=0)`` the OS picks a free port at bind time, so tests
+        can run emulators side by side without choosing ports in advance.
+        """
+        return self._port
 
     @property
     def cpu_state(self) -> CPUState:
@@ -330,6 +349,29 @@ class S7CommPlusServer:
         self._data_blocks[db_number] = db
         return db
 
+    def register_program_object(self, rid: int, class_id: int, name: Optional[str] = None) -> None:
+        """Register a program object other than a data block, such as an FB, an OB or a UDT.
+
+        EXPLORE replies list it after the data blocks, with its name as the only
+        attribute, and an EXPLORE of its RID succeeds. It holds no data.
+
+        Args:
+            rid: Relation ID of the object, e.g. ``0x8A120001`` for FB 1.
+            class_id: ClassId of the object, e.g. `Ids.FB_CLASS_RID`.
+            name: ObjectVariableTypeName; None sends the object without a name, as a PLC
+                does for some system objects.
+
+        Raises:
+            ValueError: If the object is a data block; register those with :meth:`register_db`.
+
+        Example::
+
+            server.register_program_object(0x8A120001, Ids.FB_CLASS_RID, "FB1")
+        """
+        if class_id == Ids.DB_CLASS_RID:
+            raise ValueError("Data blocks must be registered with register_db() instead")
+        self._program_objects[rid] = (class_id, name)
+
     def get_db(self, db_number: int) -> Optional[DataBlock]:
         """Get a registered data block."""
         return self._data_blocks.get(db_number)
@@ -347,7 +389,7 @@ class S7CommPlusServer:
 
         Args:
             host: Bind address
-            port: TCP port to listen on
+            port: TCP port to listen on; 0 lets the OS pick one (see :attr:`port`)
             use_tls: Whether to wrap client sockets with TLS after InitSSL
             tls_cert: Path to server TLS certificate (PEM)
             tls_key: Path to server private key (PEM)
@@ -389,11 +431,12 @@ class S7CommPlusServer:
             server_socket.close()
             raise
         self._server_socket = server_socket
+        self._port = server_socket.getsockname()[1]
 
         self._running = True
         self._server_thread = threading.Thread(target=self._server_loop, daemon=True, name="s7commplus-server")
         self._server_thread.start()
-        logger.info(f"S7CommPlus server started on {host}:{port} (TLS={use_tls}, V{self._protocol_version})")
+        logger.info(f"S7CommPlus server started on {host}:{self._port} (TLS={use_tls}, V{self._protocol_version})")
 
     def stop(self) -> None:
         """Stop the server."""
@@ -405,6 +448,7 @@ class S7CommPlusServer:
             except Exception:
                 pass
             self._server_socket = None
+        self._port = 0
 
         if self._server_thread:
             self._server_thread.join(timeout=5.0)
@@ -566,6 +610,9 @@ class S7CommPlusServer:
                             request_version if request_version == ProtocolVersion.V3 else self._protocol_version,
                             split_response,
                         )
+                        if self._pending_session_key is not None:
+                            # The reply went out under the old key; the next request uses the new one.
+                            self._session_key, self._pending_session_key = self._pending_session_key, None
 
                     if rst:
                         logger.debug(f"RST emulation: closing connection to {address}")
@@ -817,6 +864,9 @@ class S7CommPlusServer:
         elif function_code == FunctionCode.SET_VAR_SUBSTREAMED:
             response = self._handle_set_var_substreamed(seq_num, req_session_id, request_data)
             rst = False
+        elif function_code == FunctionCode.SET_VARIABLE:
+            response = self._handle_set_variable(seq_num, req_session_id, request_data)
+            rst = False
         else:
             response = self._build_error_response(seq_num, req_session_id, function_code)
             rst = False
@@ -953,7 +1003,7 @@ class S7CommPlusServer:
         """Build a minimal ServerSessionVersion Struct(314) typed value.
 
         Matches the wire format a real V1-initial S7-1200 PLC emits:
-        flags=0x00, type=STRUCT, structId=VLQ(314), elements..., terminator=0x00.
+        flags=0x00, type=STRUCT, structId=UInt32(314), elements..., terminator=0x00.
 
         Element 319 is the PAOM device string. The client strips it before
         echoing — here we include a short placeholder so the stripping logic
@@ -961,7 +1011,7 @@ class S7CommPlusServer:
         """
         buf = bytearray()
         buf += bytes([0x00, DataType.STRUCT])
-        buf += encode_uint32_vlq(314)  # Struct ID
+        buf += struct.pack(">I", 314)  # Struct ID, a fixed 4-byte word
 
         # Element 315: protocol version as UDINT
         buf += encode_uint32_vlq(315)
@@ -993,7 +1043,8 @@ class S7CommPlusServer:
         response += self._build_response_header(FunctionCode.EXPLORE, seq_num)
 
         # The ExploreId is a fixed UInt32 at the start of the request.
-        if len(request_data) >= 4 and not self._explore_object_exists(struct.unpack_from(">I", request_data)[0]):
+        explore_id = struct.unpack_from(">I", request_data)[0] if len(request_data) >= 4 else None
+        if explore_id is not None and not self._explore_object_exists(explore_id):
             # ReturnValue a real S7-1500 sends for an EXPLORE of an object that does not exist, RID 0 included:
             # error flag (bit 63) set, no error extension (bit 62 clear), error code -12 in the low 16 bits.
             _EXPLORE_NO_SUCH_OBJECT = 0x8020AB001992FFF4
@@ -1004,28 +1055,26 @@ class S7CommPlusServer:
 
         response += encode_uint32_vlq(0)  # Return code: success
 
-        if len(request_data) >= 4 and struct.unpack_from(">I", request_data)[0] == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID:
+        if explore_id == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID:
             response += self._cpu_exec_unit_object()
+            response += struct.pack(">I", 0)
+            return bytes(response)
+
+        # A registered program object is explored on its own, without the rest of the program
+        if explore_id in self._program_objects:
+            response += self._program_object(explore_id)
             response += struct.pack(">I", 0)
             return bytes(response)
 
         # Return list of data blocks as objects using the real S7-1500 IDs:
         # a DataBlock object has ClassId DB_CLASS_RID and a RelationId in the DB area
         # (0x8A0E0000 | number), which is how the client recovers the DB number.
+        # Every block is a child of PLCProgram, as in a live S7-1500 reply (_REAL_PROGRAM_TREE in tests/test_s7_unit.py).
+        response += _start_of_object(Ids.NATIVE_THE_PLC_PROGRAM_RID, Ids.PLC_PROGRAM_CLASS_RID)
+        response += _name_attribute("PLCProgram")
         for db_num, db in sorted(self._data_blocks.items()):
-            response += bytes([ElementID.START_OF_OBJECT])
-            response += struct.pack(">I", Ids.DB_ACCESS_AREA_BASE | (db_num & 0xFFFF))  # Relation ID
-            response += encode_uint32_vlq(Ids.DB_CLASS_RID)  # Class: DataBlock
-            response += encode_uint32_vlq(0x00000000)  # Class flags
-            response += encode_uint32_vlq(0x00000000)  # Attribute ID
-
-            # ObjectVariableTypeName (233) -- DB name as WSTRING
-            response += bytes([ElementID.ATTRIBUTE])
-            response += encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
-            name_bytes = f"DB{db_num}".encode("utf-16-be")
-            response += bytes([0x00, DataType.WSTRING])
-            response += encode_uint32_vlq(len(name_bytes))
-            response += name_bytes
+            response += _start_of_object(Ids.DB_ACCESS_AREA_BASE | (db_num & 0xFFFF), Ids.DB_CLASS_RID)
+            response += _name_attribute(f"DB{db_num}")
 
             # Block_BlockNumber (2521) -- DB number as UDINT
             response += bytes([ElementID.ATTRIBUTE])
@@ -1039,29 +1088,26 @@ class S7CommPlusServer:
             response += bytes([0x00, DataType.UDINT])
             response += encode_uint32_vlq(len(db.data))
 
-            # Variable list -- used by browse to resolve field names
-            if db.variables:
-                for var_name, var in db.variables.items():
-                    response += bytes([ElementID.START_OF_OBJECT])
-                    response += struct.pack(">I", 0)  # child RID
-                    response += encode_uint32_vlq(0)
-                    response += encode_uint32_vlq(0)
-                    response += encode_uint32_vlq(0)
-
-                    response += bytes([ElementID.ATTRIBUTE])
-                    response += encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
-                    vname_bytes = var_name.encode("utf-16-be")
-                    response += bytes([0x00, DataType.WSTRING])
-                    response += encode_uint32_vlq(len(vname_bytes))
-                    response += vname_bytes
-
-                    response += bytes([ElementID.TERMINATING_OBJECT])
-
             response += bytes([ElementID.TERMINATING_OBJECT])
+
+        # Only the program lists the other blocks; the type-info, alarm and area explores never contained them
+        if explore_id == Ids.NATIVE_THE_PLC_PROGRAM_RID:
+            for rid in self._program_objects:
+                response += self._program_object(rid)
+
+        response += bytes([ElementID.TERMINATING_OBJECT])  # PLCProgram
 
         # Final terminator
         response += struct.pack(">I", 0)
         return bytes(response)
+
+    def _program_object(self, rid: int) -> bytes:
+        """A registered program object, with its name as the only attribute."""
+        class_id, name = self._program_objects[rid]
+        obj = _start_of_object(rid, class_id)
+        if name is not None:
+            obj += _name_attribute(name)
+        return obj + bytes([ElementID.TERMINATING_OBJECT])
 
     def _cpu_exec_unit_object(self) -> bytes:
         """theCPUexecUnit as PLCSIM Advanced reports it, reduced to its operating state.
@@ -1089,9 +1135,9 @@ class S7CommPlusServer:
         """Whether an EXPLORE target names an object this emulator has.
 
         These are the native objects the clients and examples explore, plus one
-        object per registered data block. A real PLC rejects any other id.
+        object per registered data block or program object. A real PLC rejects any other id.
         """
-        if explore_id in (
+        if explore_id in self._program_objects or explore_id in (
             Ids.NATIVE_THE_PLC_PROGRAM_RID,
             Ids.NATIVE_THE_ALARM_SUBSYSTEM_RID,
             Ids.NATIVE_THE_CPU_EXEC_UNIT_RID,
@@ -1151,47 +1197,6 @@ class S7CommPlusServer:
         if self._protocol_version < ProtocolVersion.V2:
             response += encode_uint32_vlq(0)
 
-        return bytes(response)
-
-    def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
-        """Handle a single SetVariable write.
-
-        The only attribute this emulator honours is the CPUexecUnit's
-        ``OperatingStateREQ`` (0x877): a ``STOP``/``RUN`` request flips the
-        reported :attr:`cpu_state`, which a following ``get_cpu_state`` reflects.
-        This mirrors only the request/response shape produced by
-        ``_build_set_operating_state_payload``; it is not a verified model of a
-        real PLC's behaviour (see issue #8). Any other address is accepted with a
-        success ReturnValue without changing state.
-        """
-        del session_id
-        return_value = 0
-        try:
-            offset = 4  # InObjectId (fixed-width UInt32)
-            _, consumed = decode_uint32_vlq(request_data, offset)  # AddressCount
-            offset += consumed
-            address, consumed = decode_uint32_vlq(request_data, offset)
-            offset += consumed
-            if address == Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ:
-                # PValue: flags byte, datatype byte, then the VLQ-encoded value.
-                state_value, _ = decode_uint32_vlq(request_data, offset + 2)
-                new_state = {
-                    int(OperatingStateRequest.STOP): CPUState.STOP,
-                    int(OperatingStateRequest.RUN): CPUState.RUN,
-                    int(OperatingStateRequest.RUN_REDUNDANT): CPUState.RUN,
-                }.get(state_value)
-                if new_state is not None:
-                    with self._lock:
-                        self._cpu_state = new_state
-                    logger.debug("SetVariable: OperatingStateREQ=%d -> cpu_state=%s", state_value, new_state.name)
-        except (IndexError, ValueError):
-            return_value = _ITEM_ERROR
-
-        response = bytearray()
-        response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
-        response += encode_uint64_vlq(return_value)
-        if self._protocol_version < ProtocolVersion.V2:
-            response += encode_uint32_vlq(0)  # Legacy V1 IntegrityId
         return bytes(response)
 
     def _handle_set_multi_variables(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
@@ -1460,6 +1465,63 @@ class S7CommPlusServer:
         response += struct.pack(">I", 0)
         return bytes(response)
 
+    def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
+        """Handle SetVariable: the session activation, legitimation and operating-state writes.
+
+        A SessionKey renewal is accepted only for the next key in
+        ``renewal_session_keys``: the emulator cannot derive the new key from the
+        blob, so accepting any other would break the next signed request.
+
+        A ``STOP``/``RUN`` write of the CPUexecUnit's ``OperatingStateREQ``
+        (0x877) flips the reported :attr:`cpu_state`, which a following
+        ``get_cpu_state`` reflects. This mirrors only the request shape produced
+        by ``_build_set_operating_state_payload``; it is not a verified model of
+        a real PLC's behaviour (see issue #8).
+        """
+        try:
+            _count, consumed = decode_uint32_vlq(request_data, 4)
+            offset = 4 + consumed
+            address, consumed = decode_uint32_vlq(request_data, offset)
+            offset += consumed
+            if address == Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ:
+                # PValue: flags byte, datatype byte, then the VLQ-encoded value.
+                state_value, _ = decode_uint32_vlq(request_data, offset + 2)
+        except ValueError:
+            return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        if address == LegitimationId.SESSION_SETUP_LEGITIMATION and not self._accept_session_key_renewal(request_data):
+            return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        if address == Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ:
+            new_state = {
+                int(OperatingStateRequest.STOP): CPUState.STOP,
+                int(OperatingStateRequest.RUN): CPUState.RUN,
+                int(OperatingStateRequest.RUN_REDUNDANT): CPUState.RUN,
+            }.get(state_value)
+            if new_state is not None:
+                with self._lock:
+                    self._cpu_state = new_state
+                logger.debug("SetVariable: OperatingStateREQ=%d -> cpu_state=%s", state_value, new_state.name)
+        response = bytearray()
+        response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
+        response += encode_uint32_vlq(0)  # Return code: success
+        response += struct.pack(">I", 0)
+        return bytes(response)
+
+    def _accept_session_key_renewal(self, request_data: bytes) -> bool:
+        """Accept a renewal whose SecurityKey names the next configured key."""
+        from .v1_session_key.utils import derive_key_id
+
+        with self._lock:
+            if not self._renewal_session_keys:
+                return False
+            key = self._renewal_session_keys[0]
+            if encode_uint64_vlq(int.from_bytes(derive_key_id(key), "little")) not in request_data:
+                logger.warning("SetVariable: rejected a SessionKey renewal for an unexpected key")
+                return False
+            self._renewal_session_keys.pop(0)
+            self._pending_session_key = key
+            self._accepted_session_key_renewals += 1
+        return True
+
     def _build_error_response(self, seq_num: int, session_id: int, function_code: int) -> bytes:
         """Build a generic error response for unsupported function codes."""
         response = bytearray()
@@ -1491,6 +1553,23 @@ class S7CommPlusServer:
 
 #: The error the emulator returns for an item it cannot serve.
 _ITEM_ERROR = 0x8104
+
+
+def _start_of_object(rid: int, class_id: int) -> bytes:
+    """StartOfObject with its RelationId (fixed UInt32), ClassId, and zero ClassFlags and AttributeId."""
+    return bytes([ElementID.START_OF_OBJECT]) + struct.pack(">I", rid) + encode_uint32_vlq(class_id) + bytes([0, 0])
+
+
+def _name_attribute(name: str) -> bytes:
+    """ObjectVariableTypeName (233) attribute carrying ``name`` as a WSTRING."""
+    encoded = name.encode("utf-16-be")
+    return (
+        bytes([ElementID.ATTRIBUTE])
+        + encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
+        + bytes([0x00, DataType.WSTRING])
+        + encode_uint32_vlq(len(encoded))
+        + encoded
+    )
 
 
 def _resolve_classic_blob(access_area: int, lids: list[int]) -> Optional[tuple[int, int, int]]:

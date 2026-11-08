@@ -4,6 +4,7 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 """
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import logging
@@ -11,10 +12,19 @@ import ssl
 import struct
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Awaitable, Callable, Literal, Optional, TypeVar
+from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Concatenate, Literal, Optional, ParamSpec, TypeVar
 
-from .error import S7CertificateError, S7ConnectionError, S7Error, S7IntegrityError, S7ProtocolError, S7TlsHandshakeError
+from .error import (
+    S7CertificateError,
+    S7ConnectionError,
+    S7NotConnectedError,
+    S7Error,
+    S7IntegrityError,
+    S7ProtocolError,
+    S7TimeoutError,
+    S7TlsHandshakeError,
+)
 
 from . import typeinfo
 from .blob_decompressor import find_and_decompress
@@ -22,6 +32,15 @@ from .client import (
     _AUTO_REFRESH_MIN_INTERVAL,
     _block_signature,
     _type_info_times,
+    _AUTO_RECONNECT_ACTIVE,
+    _AUTO_RECONNECT_MARKER,
+    _AUTO_RECONNECT_MIN_INTERVAL,
+    _AUTO_RECONNECT_STAND_DOWN,
+    _ValuePlan,
+    _assemble_values,
+    _encode_values,
+    _raise_failures,
+    _value_plans,
     _LEGACY_KEY_CACHE,
     DBWriteItem,
     OperatingStateChange,
@@ -37,6 +56,9 @@ from .client import (
     _build_symbolic_read_payload,
     _build_symbolic_write_payload,
     _build_write_payload,
+    ProgramObject,
+    _PROGRAM_TREE_EXPLORE,
+    _parse_program_objects,
     _parse_explore_datablocks,
     _parse_cpu_state,
     _parse_read_response,
@@ -53,7 +75,7 @@ from .client import (
     _subscription_groups,
     _subscriptions_interrupted,
 )
-from .catalog import SymbolCatalog, SymbolicTag, TagResult
+from .catalog import SymbolCatalog, SymbolicTag, TagResult, _write_type
 from .codec import (
     SERVER_SESSION_ROLE_SECURED_BIT,
     decode_header,
@@ -66,6 +88,7 @@ from .codec import (
     parse_or_raise_for_return_value,
 )
 from .connection import (
+    _DEFAULT_EXPLORE_TIMEOUT,
     _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
     _MAX_QUEUED_NOTIFICATION_FRAMES,
     _MAX_STALE_RESPONSES_PER_REQUEST,
@@ -74,6 +97,7 @@ from .connection import (
     FamilyOnlyFingerprintError,
     SessionKeyAuthenticationDependencyError,
     SessionKeyCandidateRejectedError,
+    _alarm_texts_and_domain_filter,
     _build_get_var_substreamed_payload,
     _build_session_activate_payload,
     _build_session_setup_frame,
@@ -83,6 +107,7 @@ from .connection import (
     _build_v1_legitimation_payload,
     _check_set_variable_response,
     _check_system_event,
+    _check_timeout,
     _check_v1_legitimation_response,
     _derive_oms_secret,
     _encode_security_key_struct,
@@ -159,12 +184,14 @@ from .protocol import (
     remote_tsap_for_connection_type,
     ProtocolVersion,
 )
+from .transport import _configure_tcp_socket
 from .v1_session_key.keys import KeyFamily
 from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
 
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 # COTP constants
 _COTP_CR = 0xE0
@@ -190,6 +217,40 @@ class AsyncSubscriptionQueue:
 
     def qsize(self) -> int:
         return self._client.subscription_diagnostics(self._subscription_id).queued_notifications
+
+
+def _retry_on_dropped_connection(
+    method: Callable[Concatenate["S7CommPlusAsyncClient", _P], Coroutine[Any, Any, _T]],
+) -> Callable[Concatenate["S7CommPlusAsyncClient", _P], Coroutine[Any, Any, _T]]:
+    """Retry a read coroutine once on a fresh session when auto-reconnect is on.
+
+    The asyncio counterpart of the sync client's decorator, with the same
+    policy (see ``s7commplus.client._retry_on_dropped_connection``): reads
+    only, never writes; only an ``S7ConnectionError``; once, by the outermost
+    decorated call of a task. The wrapper keeps the method's name, docstring
+    and signature, and sets ``_AUTO_RECONNECT_MARKER``.
+    """
+
+    @functools.wraps(method)
+    async def wrapper(self: "S7CommPlusAsyncClient", /, *args: _P.args, **kwargs: _P.kwargs) -> _T:
+        active = _AUTO_RECONNECT_ACTIVE.get()
+        if not self._auto_reconnect or id(self) in active:
+            return await method(self, *args, **kwargs)
+        token = _AUTO_RECONNECT_ACTIVE.set(active | {id(self)})
+        try:
+            generation = self._generation
+            try:
+                return await method(self, *args, **kwargs)
+            except S7ConnectionError as exc:
+                if not await self._recover_dropped_connection(generation, exc):
+                    raise
+            logger.info("Retrying %s() on the new session", method.__name__)
+            return await method(self, *args, **kwargs)
+        finally:
+            _AUTO_RECONNECT_ACTIVE.reset(token)
+
+    setattr(wrapper, _AUTO_RECONNECT_MARKER, True)
+    return wrapper
 
 
 class S7CommPlusAsyncClient:
@@ -218,6 +279,13 @@ class S7CommPlusAsyncClient:
         self._sequence_number: int = 0
         self._protocol_version: int = 0
         self._transport_connected = False
+        self._request_timeout = 5.0
+        # The same bound for the reply to an EXPLORE, which can be large.
+        self._explore_timeout = _DEFAULT_EXPLORE_TIMEOUT
+        self._notification_timeout: Optional[float] = None
+        # True while part of a message (a frame, or a reply still missing
+        # fragments) has been read: a wait cut short then closes the session.
+        self._rx_partial = False
         self._session_ready = False
         self._connected = False
         self._lock = asyncio.Lock()
@@ -240,6 +308,16 @@ class S7CommPlusAsyncClient:
         # the PLC are never resent.
         self.auto_refresh_tags: bool = False
         self._last_auto_refresh_check: Optional[float] = None
+        # Sessions rebuilt by a reconnect. Reconnects are serialized so that one
+        # never tears down the session another has just built, and while one
+        # runs only its task may use the stream (see _blocked_by_rebuild).
+        self._generation = 0
+        self._reconnect_lock = asyncio.Lock()
+        self._rebuild_task: Optional[asyncio.Task[Any]] = None
+        # Opt-in: a read that finds the connection dropped reconnects and retries once.
+        self._auto_reconnect = False
+        self._auto_reconnect_min_interval = _AUTO_RECONNECT_MIN_INTERVAL
+        self._last_auto_reconnect = float("-inf")
         self._subscription_change_counter = 1
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
@@ -274,6 +352,7 @@ class S7CommPlusAsyncClient:
         # V1 SessionKey state (non-TLS V1 sessions only), as in S7CommPlusConnection.
         self._legacy_s7_1500: bool | None = None
         self._last_raw_response_payload: bytes | None = None
+        self._last_response_function: int | None = None
         self._public_key_fingerprint: Optional[str] = None
         self._session_challenge: Optional[bytes] = None
         # ServerSession.Role from the CreateObject response; the
@@ -383,10 +462,15 @@ class S7CommPlusAsyncClient:
     def write_delete_qualifier_version(self) -> int:
         """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
 
-        See ``_write_delete_qualifier_version``: PLCSIM uses :attr:`object_qualifier_version`,
-        other PLCs the negotiated protocol version.
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
+
+    @property
+    def alarm_texts_and_domain_filter(self) -> bool:
+        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family)
 
     def _frame_overhead(self) -> int:
         """Bytes this session's request frames add to a payload."""
@@ -411,8 +495,13 @@ class S7CommPlusAsyncClient:
         password: Optional[str] = None,
         allow_legacy_key_fallback: bool = True,
         legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
+        timeout: float = 5.0,
+        request_timeout: Optional[float] = None,
+        explore_timeout: Optional[float] = 30.0,
+        notification_timeout: Optional[float] = None,
         legacy_s7_1500: bool | None = None,
         connection_type: int | str | None = None,
+        auto_reconnect: bool = False,
     ) -> None:
         """Connect to an S7-1200/1500 PLC using S7CommPlus.
 
@@ -437,6 +526,22 @@ class S7CommPlusAsyncClient:
                 fresh sessions when a legacy PLC omits its key id.
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals, or ``None`` to disable them.
+            timeout: Seconds for the TCP connect and the COTP, InitSSL, TLS
+                and CreateObject handshake together.
+            request_timeout: Seconds to wait for each reply once the handshake
+                is done (and for each further part of a multi-part reply, and
+                for a send the PLC does not accept), or ``None`` to use
+                ``timeout``. Running out raises ``S7TimeoutError`` and closes
+                the session, as its state is then unknown; ``connected`` turns
+                ``False``.
+            explore_timeout: The same bound for the reply to an EXPLORE (sent
+                by :meth:`browse`, :meth:`list_datablocks`, :meth:`explore`,
+                :meth:`get_cpu_state` and :meth:`read_alarms`, among others),
+                whose answer can be large; 30 s by default, or ``None`` to use
+                the request timeout.
+            notification_timeout: Seconds a notification receiver waits by
+                default (subscriptions and alarms), or ``None`` to use the
+                request timeout.
             legacy_s7_1500: Override the non-TLS V1 SessionKey profile (structured
                 browse, V2 object qualifier, trailing IntegrityId, chained fragment
                 HMAC). ``None`` (default) selects it automatically for every V1
@@ -450,6 +555,9 @@ class S7CommPlusAsyncClient:
                 engineering-style operations differently per role is not
                 verified against a PLC, so try ``"es"`` if the default is
                 refused.
+            auto_reconnect: When a read finds the connection dropped, reconnect
+                and run it once more (see :attr:`auto_reconnect`). Writes are
+                never retried. Off by default.
         """
         tls_first, auto_tls = _resolve_use_tls(use_tls)
         if legacy_s7_1500 and tls_first:
@@ -458,6 +566,10 @@ class S7CommPlusAsyncClient:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
         _check_certificate_pin(tls_cert_fingerprint, tls_first)  # validate early
         remote_tsap_for_connection_type(connection_type)  # validate early
+        _check_timeout("timeout", timeout, optional=False)
+        _check_timeout("request_timeout", request_timeout)
+        _check_timeout("explore_timeout", explore_timeout)
+        _check_timeout("notification_timeout", notification_timeout)
         self._forget_tag_catalog()
         self._connect_params = {
             "host": host,
@@ -471,12 +583,19 @@ class S7CommPlusAsyncClient:
             "tls_ca": tls_ca,
             "tls_cert_fingerprint": tls_cert_fingerprint,
             "password": password,
+            # A successful authenticate() replaces both, so a reconnect legitimates the same way.
+            "username": "",
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
+            "timeout": timeout,
+            "request_timeout": request_timeout,
+            "explore_timeout": explore_timeout,
+            "notification_timeout": notification_timeout,
             "legacy_s7_1500": legacy_s7_1500,
             "connection_type": connection_type,
         }
         self._host = host
+        self._auto_reconnect = auto_reconnect
         try:
             await self._open_connection()
         except Exception:
@@ -564,24 +683,35 @@ class S7CommPlusAsyncClient:
         self._session_key_fingerprint_override = fingerprint
         self._tls_cert_fingerprint = _check_certificate_pin(p["tls_cert_fingerprint"], use_tls)
         self._peer_certificate_fingerprint = None
+        self._request_timeout = p["timeout"] if p["request_timeout"] is None else p["request_timeout"]
+        self._explore_timeout = self._request_timeout if p["explore_timeout"] is None else p["explore_timeout"]
+        self._notification_timeout = p["notification_timeout"]
 
-        # TCP connect
-        self._reader, self._writer = await asyncio.open_connection(p["host"], p["port"])
+        # TCP connect and steps 1-4 share one deadline: the connect timeout
+        # bounds the TCP connect and the whole handshake, as in the sync client.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + p["timeout"]
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(p["host"], p["port"]), timeout=p["timeout"])
+        except asyncio.TimeoutError as exc:
+            raise S7ConnectionError(f"TCP connection to {p['host']}:{p['port']} timed out after {p['timeout']}s") from exc
+        self._reader, self._writer = reader, writer
+        sock = writer.get_extra_info("socket")
+        if sock is not None:
+            try:
+                _configure_tcp_socket(sock)
+            except OSError:
+                pass
         self._transport_connected = True
+        self._rx_partial = False
 
         try:
-            # Step 1: COTP handshake with the TSAP for the selected client role
-            await self._cotp_connect(S7COMMPLUS_LOCAL_TSAP, remote_tsap_for_connection_type(p["connection_type"]))
-
-            # Step 2: InitSSL handshake
-            await self._init_ssl()
-
-            # Step 3: TLS activation (between InitSSL and CreateObject)
-            if use_tls:
-                await self._activate_tls(tls_cert=p["tls_cert"], tls_key=p["tls_key"], tls_ca=p["tls_ca"])
-
-            # Step 4: S7CommPlus session setup (CreateObject)
-            await self._create_session()
+            try:
+                await asyncio.wait_for(self._handshake(p), timeout=deadline - loop.time())
+            except asyncio.TimeoutError as exc:
+                raise S7TimeoutError(
+                    f"Connection handshake with {p['host']}:{p['port']} timed out after {p['timeout']}s"
+                ) from exc
             self._session_key_fingerprint_override = _resolve_session_key_fingerprint(
                 self._public_key_fingerprint, self._session_key_fingerprint_override
             )
@@ -669,23 +799,43 @@ class S7CommPlusAsyncClient:
 
         if p["password"] is not None and self._tls_active:
             logger.info("Performing PLC legitimation (password authentication)")
-            await self.authenticate(p["password"])
+            await self.authenticate(p["password"], p["username"])
+
+    async def _handshake(self, p: dict[str, Any]) -> None:
+        """COTP, InitSSL, optional TLS and CreateObject: everything before session setup."""
+        # Step 1: COTP handshake with the TSAP for the selected client role
+        await self._cotp_connect(S7COMMPLUS_LOCAL_TSAP, remote_tsap_for_connection_type(p["connection_type"]))
+
+        # Step 2: InitSSL handshake
+        await self._init_ssl()
+
+        # Step 3: TLS activation (between InitSSL and CreateObject)
+        if p["use_tls"]:
+            await self._activate_tls(tls_cert=p["tls_cert"], tls_key=p["tls_key"], tls_ca=p["tls_ca"])
+
+        # Step 4: S7CommPlus session setup (CreateObject)
+        await self._create_session()
 
     async def authenticate(self, password: str, username: str = "") -> None:
         """Perform PLC password authentication (legitimation).
+
+        Once the PLC confirms the legitimation, the password and username
+        replace those of ``connect()``, so :meth:`reconnect` legitimates the new
+        session the same way. A refused attempt changes nothing.
 
         Args:
             password: PLC password
             username: Username for the new-mode exchange (leave empty for legacy)
 
         Raises:
-            S7ConnectionError: If not connected, TLS is not active, the firmware
-                does not support legitimation, or the password was refused
+            S7NotConnectedError: If not connected.
+            S7ConnectionError: If TLS is not active, the firmware does not
+                support legitimation, or the password was refused.
         """
         from .error import S7ConnectionError
 
         if not self._connected:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         if not self._tls_active:
             raise S7ConnectionError("Legitimation requires TLS. Connect with use_tls=True.")
@@ -735,6 +885,9 @@ class S7CommPlusAsyncClient:
                 f"Legitimation failed, protection level unchanged at {self._protection_level}: the password was refused"
             )
         logger.info(f"PLC legitimation completed, protection level {level_before} -> {self._protection_level}")
+        if self._connect_params is not None:
+            self._connect_params["password"] = password
+            self._connect_params["username"] = username
 
     def _decide_legitimation_mode(self) -> Optional[LegitimationType]:
         """Return the legitimation exchange the PLC firmware expects, None if unsupported."""
@@ -867,7 +1020,7 @@ class S7CommPlusAsyncClient:
         value += encrypted_response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
         resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
 
     async def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR)."""
@@ -878,7 +1031,47 @@ class S7CommPlusAsyncClient:
         value += response
         payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
         resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload)
+        _check_set_variable_response(resp_payload, self._last_response_function)
+
+    @property
+    def connection_generation(self) -> int:
+        """Count of reconnects the client has performed; a change means the session was rebuilt."""
+        return self._generation
+
+    @property
+    def auto_reconnect(self) -> bool:
+        """Whether a read that finds the connection dropped reconnects and runs once more.
+
+        Set by ``connect(auto_reconnect=...)``; a change made later outlasts
+        reconnects. Writes are never retried. Neither is a read that timed out:
+        ``S7TimeoutError`` is not an ``S7ConnectionError``. When the timeout
+        ended the session, the next call finds it dropped and reconnects.
+        """
+        return self._auto_reconnect
+
+    @auto_reconnect.setter
+    def auto_reconnect(self, enabled: bool) -> None:
+        self._auto_reconnect = enabled
+
+    async def reconnect(self) -> None:
+        """Re-establish the connection with the parameters from the last connect().
+
+        The new session is legitimated with the password given to ``connect()``,
+        or with the password and username of the last successful
+        :meth:`authenticate`. Data subscriptions that were live are remembered
+        so :meth:`resubscribe` can recreate them; alarm subscriptions must be
+        created again, and notifications from the gap are not replayed. A failed
+        attempt keeps the parameters, so ``reconnect()`` can be repeated once
+        the PLC is back. Concurrent reconnects run one after the other.
+
+        Raises:
+            RuntimeError: ``connect()`` was never called, or ``disconnect()``
+                cleared its parameters.
+        """
+        if self._connect_params is None:
+            raise S7NotConnectedError("Not connected")
+        logger.info("Reconnecting to the PLC")
+        await self._reconnect()
 
     async def disconnect(self) -> None:
         """Disconnect from PLC."""
@@ -906,6 +1099,34 @@ class S7CommPlusAsyncClient:
             except Exception:
                 pass
 
+        writer = self._reset_session()
+        if writer is not None:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    def _connection_lost(self, reason: str) -> None:
+        """Drop a session whose stream position is unknown (a timeout, or a read cancelled part-way).
+
+        The socket is aborted without a DeleteSession exchange, so no unread
+        rest of a reply can be taken for the next message, and the next request
+        raises ``S7NotConnectedError("Not connected")``. The connect parameters
+        and the subscription and alarm bookkeeping are kept, as after a
+        connection the PLC dropped, so a reconnect can restore them.
+        """
+        logger.warning("Closing the session: %s", reason)
+        self._stop_session_key_refresh()
+        writer = self._reset_session()
+        if writer is not None:
+            writer.transport.abort()
+
+    def _reset_session(self) -> Optional[asyncio.StreamWriter]:
+        """Clear the session state and detach the transport, returning the writer still to close.
+
+        The subscription and alarm bookkeeping is left to the caller.
+        """
         self._connected = False
         self._session_ready = False
         self._transport_connected = False
@@ -937,15 +1158,12 @@ class S7CommPlusAsyncClient:
         self._v1_session_key_family = KeyFamily.S7_1500
         self._notification_frames.clear()
         self._notification_frame_overflows = 0
+        self._rx_partial = False
 
-        if self._writer:
-            try:
-                self._writer.close()
-                await self._writer.wait_closed()
-            except Exception:
-                pass
-            self._writer = None
-            self._reader = None
+        writer = self._writer
+        self._writer = None
+        self._reader = None
+        return writer
 
     async def _invalidate_integrity_failure(self) -> None:
         """Discard authenticated state without writing to an untrusted stream."""
@@ -1000,11 +1218,11 @@ class S7CommPlusAsyncClient:
 
         from .v1_session_key.handshake import authenticate_session_key
 
-        integrity_tail = _v1_integrity_tail(self._v1_session_key_family)
-        challenge_payload = _build_v1_get_var_substreamed_payload(
-            self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
-        )
-        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail)
+        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        # one, after which the renewal completes (#169).
+        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4)
         challenge = _parse_get_var_substreamed_response(challenge_response)
         if len(challenge) != 20:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
@@ -1013,20 +1231,37 @@ class S7CommPlusAsyncClient:
             self._v1_session_key_public_key, self._v1_session_key_family, blob, new_session_key
         )
         renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
-        _check_set_variable_response(await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4))
+        renewal_response = await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4)
+        _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")
 
     async def _reconnect(self) -> None:
         """Tear down and re-establish the connection with the same parameters."""
+        async with self._reconnect_lock:
+            await self._rebuild_session()
+
+    async def _rebuild_session(self) -> None:
+        """Replace the session using the stored parameters; the caller holds the reconnect lock.
+
+        A failed attempt keeps the parameters, so a later reconnect can still
+        succeed once the PLC is reachable again. Until this returns, the stream
+        belongs to this task: other tasks' requests fail with "Not connected"
+        instead of interleaving with the handshake.
+        """
         if self._connect_params is None:
-            raise S7ConnectionError("Not connected")
-        params = self._connect_params.copy()
-        # connect() takes the caller's use_tls, not the resolved one: "auto" tries TLS first again.
-        if params.pop("auto_tls"):
-            params["use_tls"] = "auto"
-        await self.disconnect()
-        await self.connect(**params)
+            raise S7NotConnectedError("Not connected")
+        self._rebuild_task = asyncio.current_task()
+        try:
+            await self._close()
+            await self._open_connection()
+        finally:
+            self._rebuild_task = None
+        self._generation += 1
+
+    def _blocked_by_rebuild(self) -> bool:
+        """Whether another task is rebuilding the session right now."""
+        return self._rebuild_task is not None and asyncio.current_task() is not self._rebuild_task
 
     async def _with_reconnect(self, op: Callable[[], Awaitable[_T]]) -> _T:
         """Run ``op``; if the PLC dropped the socket, reconnect once and retry."""
@@ -1034,9 +1269,40 @@ class S7CommPlusAsyncClient:
             return await op()
         except S7ConnectionError as exc:
             logger.info("Connection dropped by PLC (%s); reconnecting and retrying", exc)
-            await self._reconnect()
+            try:
+                await self._reconnect()
+            finally:
+                # Counts as an automatic attempt, so an auto-reconnecting browse()
+                # does not try again at once when this one failed.
+                self._last_auto_reconnect = time.monotonic()
             return await op()
 
+    async def _recover_dropped_connection(self, generation: int, exc: S7ConnectionError) -> bool:
+        """Prepare the retry of an auto-reconnecting read that found the connection dropped.
+
+        ``generation`` is the session the read started on. Returns ``False``
+        to hand the original error to the caller instead of retrying. Tasks
+        that see the same drop queue on the reconnect lock; the first rebuilds
+        the session and the others retry on it.
+        """
+        async with self._reconnect_lock:
+            if self._generation != generation:
+                return True  # another task already rebuilt the session; retry on it
+            if self._connect_params is None:
+                return False
+            if self._subscriptions.subscription_ids or self._subscriptions.pending_restore or self._alarm_subscription_ids:
+                raise S7ConnectionError(_AUTO_RECONNECT_STAND_DOWN) from exc
+            if time.monotonic() - self._last_auto_reconnect < self._auto_reconnect_min_interval:
+                logger.debug("Connection lost (%s); the last automatic reconnect ended too recently to try again", exc)
+                return False
+            logger.info("Connection lost (%s); reconnecting", exc)
+            try:
+                await self._rebuild_session()
+            finally:
+                self._last_auto_reconnect = time.monotonic()
+            return True
+
+    @_retry_on_dropped_connection
     async def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block."""
         payload = _build_read_payload([(db_number, start, size)], self.object_qualifier_version)
@@ -1095,6 +1361,7 @@ class S7CommPlusAsyncClient:
         """Alias for :meth:`db_write_multi`."""
         await self.db_write_multi(items)
 
+    @_retry_on_dropped_connection
     async def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
         """Read multiple data block regions, one value per item in item order.
 
@@ -1113,6 +1380,7 @@ class S7CommPlusAsyncClient:
             results.extend(_db_read_values(response, len(chunk)))
         return results
 
+    @_retry_on_dropped_connection
     async def read_area(self, area_rid: int, start: int, size: int) -> bytes:
         """Read raw bytes from a controller memory area (M, I, Q, counters, timers)."""
         payload = _build_area_read_payload(area_rid, start, size, self.object_qualifier_version)
@@ -1197,6 +1465,7 @@ class S7CommPlusAsyncClient:
             "on a real PLC (https://github.com/gijzelaerr/s7commplus/issues/8)"
         )
 
+    @_retry_on_dropped_connection
     async def get_cpu_state(self) -> str:
         """Get PLC CPU operating state via S7CommPlus.
 
@@ -1368,7 +1637,7 @@ class S7CommPlusAsyncClient:
             The subscription object IDs, one per group, in item order.
         """
         if not self._connected:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not items:
             raise ValueError("a subscription requires at least one item")
         container_id = self._subscription_container_id
@@ -1396,20 +1665,28 @@ class S7CommPlusAsyncClient:
     async def receive_subscription_notification(
         self, subscription_id: int | None = None, timeout: Optional[float] = None
     ) -> SubscriptionNotification:
-        """Wait for one routed data notification."""
+        """Wait for one routed data notification.
+
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
+        """
+        _check_timeout("timeout", timeout)
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         if subscription_id is not None:
             queued = self._subscriptions.pop(subscription_id)
             if queued is not None:
                 return queued
         while True:
             async with self._lock:
-                if not self._connected:
-                    raise RuntimeError("Not connected")
+                if not self._connected or self._blocked_by_rebuild():
+                    raise S7NotConnectedError("Not connected")
                 if self._notification_frames:
                     frame = self._notification_frames.popleft()
                 else:
-                    receive = self._recv_cotp_dt()
-                    frame = await asyncio.wait_for(receive, timeout) if timeout is not None else await receive
+                    frame = await self._recv_notification_frame(deadline, wait)
                 await self._verified_incoming_data(frame)
             frame_subscription_id = notification_subscription_id(frame)
             if frame_subscription_id in self._alarm_subscription_ids:
@@ -1519,10 +1796,21 @@ class S7CommPlusAsyncClient:
         domains: Optional[list[int]] = None,
         credit_limit: int = 10,
     ) -> int:
-        """Subscribe to PLC alarm events and return the subscription ID."""
+        """Subscribe to PLC alarm events and return the subscription ID.
+
+        See :meth:`S7CommPlusClient.create_alarm_subscription`: on an S7-1200
+        without TLS (key family 01), ``language_ids`` and ``domains`` must be
+        ``None`` (#173).
+        """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
-        payload = build_alarm_subscription_request(self._subscription_container_id, language_ids, domains, credit_limit)
+        payload = build_alarm_subscription_request(
+            self._subscription_container_id,
+            language_ids,
+            domains,
+            credit_limit,
+            texts_and_domain_filter=self.alarm_texts_and_domain_filter,
+        )
         response = await self._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=len(payload) - 11)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
@@ -1551,22 +1839,28 @@ class S7CommPlusAsyncClient:
     async def receive_alarm_notification(
         self, language_ids: Optional[list[LanguageId | int]] = None, timeout: Optional[float] = None
     ) -> AlarmNotification:
-        """Wait for one alarm notification, optionally with a timeout in seconds.
+        """Wait for one alarm notification.
 
+        ``timeout`` bounds the whole call in seconds; the default is the
+        ``notification_timeout`` passed to ``connect()``, else the request
+        timeout. Raises :class:`~s7commplus.error.S7TimeoutError` when it runs
+        out; the session stays usable unless a frame was cut off part-way.
         Data notifications encountered first are routed to their bounded queues.
         """
+        _check_timeout("timeout", timeout)
+        wait = self._notification_wait(timeout)
+        deadline = time.monotonic() + wait
         while True:
             if self._alarm_notification_frames:
                 frame = self._alarm_notification_frames.popleft()
             else:
                 async with self._lock:
-                    if not self._connected:
-                        raise RuntimeError("Not connected")
+                    if not self._connected or self._blocked_by_rebuild():
+                        raise S7NotConnectedError("Not connected")
                     if self._notification_frames:
                         frame = self._notification_frames.popleft()
                     else:
-                        receive = self._recv_cotp_dt()
-                        frame = await asyncio.wait_for(receive, timeout) if timeout is not None else await receive
+                        frame = await self._recv_notification_frame(deadline, wait)
                     await self._verified_incoming_data(frame)
             frame_subscription_id = notification_subscription_id(frame)
             if self._subscriptions.contains(frame_subscription_id):
@@ -1576,6 +1870,26 @@ class S7CommPlusAsyncClient:
                     await self._send_subscription_credit(frame_subscription_id, credit_update)
                 continue
             return parse_alarm_notification(frame, language_ids)
+
+    def _notification_wait(self, timeout: Optional[float]) -> float:
+        """Seconds a notification wait may take: per call, else notification_timeout, else the request timeout."""
+        if timeout is not None:
+            return timeout
+        if self._notification_timeout is not None:
+            return self._notification_timeout
+        return self._request_timeout
+
+    async def _recv_notification_frame(self, deadline: float, wait: float) -> bytes:
+        """Receive one unsolicited frame by ``deadline`` (``time.monotonic()``), else raise S7TimeoutError.
+
+        A wait that runs out before any byte of the frame was read keeps the
+        session; one cut off part-way closes it.
+        """
+        message = f"No notification from the PLC within {wait}s"
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise S7TimeoutError(message)
+        return await self._receive_bounded(self._recv_cotp_dt(), left, message, idle_ok=True)
 
     async def read_alarms(self, language_ids: Optional[list[LanguageId | int]] = None) -> list[Alarm]:
         """Return a snapshot of the PLC's active alarms without consuming notifications.
@@ -1588,6 +1902,7 @@ class S7CommPlusAsyncClient:
         )
         return parse_alarm_explore_response(response, language_ids)
 
+    @_retry_on_dropped_connection
     async def read_symbolic(self, access_area: int, lids: list[int], symbol_crc: int = 0) -> bytes:
         """Read a variable using S7CommPlus symbolic (LID-based) access.
 
@@ -1600,6 +1915,7 @@ class S7CommPlusAsyncClient:
             raise RuntimeError("Symbolic read failed")
         return results[0]
 
+    @_retry_on_dropped_connection
     async def read_symbolic_multi(self, items: Sequence[SymbolicReadItem]) -> list[Optional[bytes]]:
         """Read multiple variables using S7CommPlus symbolic (LID-based) access.
 
@@ -1685,7 +2001,7 @@ class S7CommPlusAsyncClient:
             S7ConnectionError: If not connected.
         """
         if not self._connected:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if _block_signature(await self.list_datablocks()) != self._block_layout_signature:
             logger.info("The PLC data-block list changed; refreshing the tag catalog")
             await self.refresh_tag_catalog()
@@ -1723,6 +2039,7 @@ class S7CommPlusAsyncClient:
         catalog = self._symbol_catalog or await self.refresh_tag_catalog()
         return catalog.resolve(name)
 
+    @_retry_on_dropped_connection
     async def read_tag(self, name: str) -> bytes:
         """Read one symbolic tag by name."""
         result = (await self.read_tags([name]))[0]
@@ -1731,6 +2048,7 @@ class S7CommPlusAsyncClient:
         assert result.value is not None
         return result.value
 
+    @_retry_on_dropped_connection
     async def read_tags(self, names: Sequence[str]) -> list[TagResult]:
         """Read names and return a success/error for every item.
 
@@ -1809,6 +2127,14 @@ class S7CommPlusAsyncClient:
         written and whose ``not_sent`` positions were never sent. A failure of
         the first request propagates unchanged, as for a single request.
 
+        Each value is the tag's raw big-endian bytes in the layout
+        :meth:`read_tags` returns. A STRING is the bytes ``[max length, length,
+        characters...]`` and a WSTRING the same as big-endian UINTs, both padded
+        with zeros to the declared length (``SymbolicTag.string_length``); a
+        DATE_AND_TIME is its eight BCD bytes. :meth:`SymbolicTag.encode_value`
+        builds these from Python values. A CHAR goes out as a USINT, and a
+        STRING, WSTRING or DATE_AND_TIME as an array of that layout.
+
         Writes are deliberately never retried: a transport failure can leave
         the caller unable to know whether the PLC applied the request.
 
@@ -1822,17 +2148,17 @@ class S7CommPlusAsyncClient:
                 nothing is sent.
         """
         if not self._connected:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         if not values:
             return []
         tags, _ = await self._resolve_tags(list(values))
-        unsupported = [tag.name for tag in tags if tag.datatype is None]
+        unsupported = [tag.name for tag in tags if _write_type(tag) is None]
         if unsupported:
             raise ValueError(f"No S7CommPlus wire datatype mapping for: {', '.join(unsupported)}")
         items: list[SymbolicWriteItem] = [
-            (tag.access_area, list(tag.lids), data, 0, tag.datatype)
+            (tag.access_area, list(tag.lids), data, 0, write_type)
             for tag, data in zip(tags, values.values())
-            if tag.datatype is not None
+            if (write_type := _write_type(tag)) is not None
         ]
 
         def build_write(chunk: list[SymbolicWriteItem]) -> bytes:
@@ -1852,23 +2178,115 @@ class S7CommPlusAsyncClient:
             answered += len(chunk)
         return results
 
-    async def list_datablocks(self) -> list[dict[str, Any]]:
+    @_retry_on_dropped_connection
+    async def read_value(self, name: str) -> Any:
+        """Read a tag, struct or array by name as a Python value.
+
+        A leaf tag gives its decoded value (see :func:`s7commplus.values.decode`).
+        The name of a struct, UDT instance or array gives a ``dict`` or ``list``
+        built from all its leaves, read as one batch (split over several requests
+        like :meth:`read_tags` when it is large); a DTL gives a
+        :class:`datetime.datetime`.
+
+        With ``auto_refresh_tags`` set, a name not in the catalog runs the
+        program-change check of :meth:`read_tags` once (rate-limited, and not
+        when this call browsed the catalog itself) and is looked up again; a
+        failed item does too, inside :meth:`read_tags`. A struct or array is read
+        with the members known when the call started, or after that lookup: if a
+        refresh during the read changes them, the call raises ``KeyError`` for a
+        member that is gone and leaves out one that is new.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            RuntimeError: The PLC reported an error for one of the items.
+        """
+        return (await self.read_values([name]))[0]
+
+    @_retry_on_dropped_connection
+    async def read_values(self, names: Sequence[str]) -> list[Any]:
+        """Read several tags, structs or arrays as one batch of leaves; see :meth:`read_value`."""
+        plans = await self._plan_values(names)
+        results = await self.read_tags([tag.name for _, _, tags in plans for tag in tags])
+        return _assemble_values(plans, results)
+
+    async def write_value(self, name: str, value: Any) -> None:
+        """Write a Python value to a tag, struct or array by name.
+
+        Accepts what :meth:`read_value` returns. A ``dict`` for a struct may give
+        only some members; a ``list`` for an array must give every element. Every
+        leaf is encoded before anything is sent, then the leaves are written as
+        one batch through :meth:`write_tags`, which splits a large batch over
+        several requests; such a batch is not atomic. Like every write, it is
+        never retried. With ``auto_refresh_tags`` set, a name not in the catalog
+        runs the program-change check once, as for :meth:`read_value`, before
+        anything is encoded or sent.
+
+        Raises:
+            KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
+            TypeError, ValueError: ``value`` does not fit the PLC type, or a
+                leaf is too large for one request; nothing is sent.
+            RuntimeError: The PLC rejected one of the items, or a failure
+                interrupted a split batch; it is raised from the first failed
+                item's error, and the other items may have been written.
+        """
+        await self.write_values({name: value})
+
+    async def write_values(self, values: Mapping[str, Any]) -> None:
+        """Write several tags, structs or arrays as one batch of leaves; see :meth:`write_value`."""
+        encoded = _encode_values(await self._plan_values(list(values)), values)
+        _raise_failures(await self.write_tags(encoded), "writes")
+
+    async def _plan_values(self, names: Sequence[str]) -> list[_ValuePlan]:
+        """Look up each name's leaf tags; with ``auto_refresh_tags``, an unknown name checks once for a program change.
+
+        Only the lookup is retried after the check, never an encoding or a
+        request. As in :meth:`_resolve_tags`, no check runs when this call
+        browsed the catalog, which is then current.
+        """
+        may_check = bool(self._symbol_catalog)  # refresh_tag_catalog() browses a missing or empty catalog
+        catalog = self._symbol_catalog or await self.refresh_tag_catalog()
+        try:
+            return _value_plans(catalog, names)
+        except KeyError:
+            if not (may_check and await self._auto_refresh_check()):
+                raise
+        return _value_plans(self._symbol_catalog or await self.refresh_tag_catalog(), names)
+
+    async def list_datablocks(self) -> list[ProgramObject]:
         """List all datablocks on the PLC via EXPLORE.
 
         .. warning:: This method is **experimental** and may change.
+
+        See `S7CommPlusClient.list_datablocks`.
         """
         if self._session_key is not None and not self.legacy_s7_1500:
             # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
             # matching TIA Portal's browse pattern
             payload = _build_explore_payload_v3(0x8A11FFFF)
-        else:
-            payload = _build_explore_request(
-                Ids.NATIVE_THE_PLC_PROGRAM_RID, [Ids.OBJECT_VARIABLE_TYPE_NAME, Ids.BLOCK_BLOCK_NUMBER]
-            )
-        response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
-        parse_or_raise_for_return_value(response, "Data block list")
-        return _parse_explore_datablocks(response)
+            response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            parse_or_raise_for_return_value(response, "Data block list")
+            return _parse_explore_datablocks(response)
+        return [obj for obj in await self.program_objects() if obj.is_datablock]
 
+    async def program_objects(self) -> list[ProgramObject]:
+        """List every object of the PLC program: blocks, UDTs and the objects that contain them.
+
+        .. warning:: This method is **experimental** and may change.
+
+        See `S7CommPlusClient.program_objects`.
+
+        Raises:
+            NotImplementedError: On a V1 SessionKey session, which does not explore the program.
+            S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
+        """
+        if self._session_key is not None and not self.legacy_s7_1500:
+            raise NotImplementedError("program_objects() is not supported on V1 SessionKey sessions")
+
+        response = await self._send_request(FunctionCode.EXPLORE, _PROGRAM_TREE_EXPLORE, integrity_tail=5, reassemble=True)
+        parse_or_raise_for_return_value(response, "Program object list")
+        return _parse_program_objects(response)
+
+    @_retry_on_dropped_connection
     async def browse(self) -> list[dict[str, Any]]:
         """Browse the full per-tag symbol tree via EXPLORE + the type-info container.
 
@@ -1894,15 +2312,13 @@ class S7CommPlusAsyncClient:
         root_nodes: list[typeinfo.Node] = []
         blocks = await self.list_datablocks()
         for db_info in blocks:
-            if db_info.get("number", 0) <= 0 or db_info.get("rid", 0) == 0:
+            if not db_info.number or db_info.rid == 0:
                 continue
-            ti_rid = await self._with_reconnect(lambda: self._read_typeinfo_rid(db_info["rid"]))
+            ti_rid = await self._with_reconnect(lambda: self._read_typeinfo_rid(db_info.rid))
             if ti_rid == 0:
                 continue  # load-memory-only DB, skip
             root_nodes.append(
-                typeinfo.Node(
-                    node_type=typeinfo.NodeType.ROOT, name=db_info["name"], access_id=db_info["rid"], relation_id=ti_rid
-                )
+                typeinfo.Node(node_type=typeinfo.NodeType.ROOT, name=db_info.name, access_id=db_info.rid, relation_id=ti_rid)
             )
 
         # Add the native process areas with their known synthetic type-info ids.
@@ -1975,8 +2391,8 @@ class S7CommPlusAsyncClient:
         value = bytes([0x00, DataType.INT]) + struct.pack(">h", credit_limit)
         payload = _build_set_variable_payload(subscription_id, Ids.SUBSCRIPTION_CREDIT_LIMIT, value)
         async with self._lock:
-            if not self._connected or self._writer is None or self._reader is None:
-                raise S7ConnectionError("Not connected")
+            if not self._connected or self._writer is None or self._reader is None or self._blocked_by_rebuild():
+                raise S7NotConnectedError("Not connected")
             sequence = self._next_sequence_number()
             header = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.SET_VARIABLE, 0, sequence, self._session_id, 0x74)
             integrity = encode_uint32_vlq(self._integrity_id_write) if self._with_integrity_id else b""
@@ -2022,7 +2438,10 @@ class S7CommPlusAsyncClient:
         if self._session_key_refresh_error is not None:
             raise self._session_key_refresh_error
         if not (self._connected or self._transport_connected) or self._writer is None or self._reader is None:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
+        if self._blocked_by_rebuild():
+            # Another task's reconnect owns the stream until its handshake is done.
+            raise S7NotConnectedError("Not connected")
 
         seq_num = self._next_sequence_number()
 
@@ -2064,15 +2483,20 @@ class S7CommPlusAsyncClient:
             else:
                 self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
 
-        response_data = await self._recv_response_frame(seq_num)
+        reply_timeout = self._reply_timeout(function_code)
+        response_data = await self._receive_bounded(
+            self._recv_response_frame(seq_num),
+            reply_timeout,
+            f"No reply from the PLC within {reply_timeout}s",
+        )
 
         # Large responses (e.g. Explore) are split across several S7CommPlus PDUs;
         # any response whose first PDU has no trailer is reassembled the same way.
         if reassemble or _response_continues(response_data):
-            data = await self._recv_reassembled_payload(response_data)
+            data = await self._recv_reassembled_payload(response_data, reply_timeout)
             if len(data) < 10:
                 raise S7ConnectionError("Response too short")
-            _validate_response_header(data, function_code, seq_num)
+            self._last_response_function = _validate_response_header(data, function_code, seq_num)
             return self._response_payload(function_code, bytes(data[10:]))
 
         version, data_length, consumed = decode_header(response_data)
@@ -2080,14 +2504,16 @@ class S7CommPlusAsyncClient:
             await self._invalidate_integrity_failure()
             raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
         response = response_data[consumed : consumed + data_length]
-        if self._session_key is not None:
+        if version == ProtocolVersion.V3:
+            if self._session_key is None:
+                raise S7ConnectionError("V3 response received without a session key")
             try:
                 response = _verify_v3_hmac(response, self._session_key)
             except S7IntegrityError:
                 await self._invalidate_integrity_failure()
                 raise
 
-        _validate_response_header(response, function_code, seq_num)
+        self._last_response_function = _validate_response_header(response, function_code, seq_num)
 
         # RESPONSE header is 10 bytes (opcode+res+func+res+seqnr+transport) — responses
         # carry no SessionId field (requests do, hence their 14-byte header). For V2+ the
@@ -2115,6 +2541,33 @@ class S7CommPlusAsyncClient:
             return _verify_v3_hmac(data, self._session_key)
         except S7IntegrityError:
             await self._invalidate_integrity_failure()
+            raise
+
+    def _reply_timeout(self, function_code: int) -> float:
+        """Seconds each wait for the reply to ``function_code`` may take: the EXPLORE timeout, else the request timeout."""
+        return self._explore_timeout if function_code == FunctionCode.EXPLORE else self._request_timeout
+
+    async def _receive_bounded(self, receive: Awaitable[_T], timeout: float, message: str, *, idle_ok: bool = False) -> _T:
+        """Await one receive for at most ``timeout`` seconds.
+
+        A reply that does not arrive in time leaves the session in an unknown
+        state, so the session is closed (see :meth:`_connection_lost`) before
+        ``S7TimeoutError`` (with ``message``) is raised. A wait for an
+        unsolicited frame (``idle_ok``) that runs out before any byte of the
+        frame was read is clean and keeps the session. Running out of time, or
+        being cancelled, part-way through a frame or a multi-part reply always
+        closes it: the unread rest would otherwise be taken for the next
+        message.
+        """
+        try:
+            return await asyncio.wait_for(receive, timeout)
+        except asyncio.TimeoutError as exc:
+            if not idle_ok or self._rx_partial:
+                self._connection_lost(message)
+            raise S7TimeoutError(message) from exc
+        except asyncio.CancelledError:
+            if self._rx_partial:
+                self._connection_lost("a read was cancelled part-way through a frame")
             raise
 
     async def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
@@ -2166,7 +2619,7 @@ class S7CommPlusAsyncClient:
                     continue
             return response_data
 
-    async def _recv_reassembled_payload(self, initial_data: bytes = b"") -> bytes:
+    async def _recv_reassembled_payload(self, initial_data: bytes = b"", timeout: Optional[float] = None) -> bytes:
         """Receive a possibly-fragmented S7CommPlus response, returning its data section.
 
         A large response is split into several S7CommPlus PDUs. Each fragment is
@@ -2175,12 +2628,22 @@ class S7CommPlusAsyncClient:
         of every fragment until the trailer is seen. Works for single-PDU responses
         too (one fragment immediately followed by the trailer). After SessionKey
         auth every fragment must be V3, and its HMAC covers the fragments so far.
+        ``timeout`` bounds the wait for each further part in seconds (``None``:
+        the request timeout).
         """
+        wait = self._request_timeout if timeout is None else timeout
         buf = bytearray(initial_data)
+        # Until the trailer is read the stream sits inside this reply.
+        self._rx_partial = True
 
         async def ensure(n: int) -> None:
             while len(buf) < n:
-                chunk = await self._recv_cotp_dt()
+                chunk = await self._receive_bounded(
+                    self._recv_cotp_dt(),
+                    wait,
+                    f"The PLC's multi-part reply stopped for {wait}s",
+                )
+                self._rx_partial = True
                 if not chunk:
                     raise S7ConnectionError("Connection closed during response reassembly")
                 buf.extend(chunk)
@@ -2234,7 +2697,9 @@ class S7CommPlusAsyncClient:
             await ensure(frag_len)
             fragment_data = bytes(buf[:frag_len])
             del buf[:frag_len]
-            if digest_state is not None:
+            if fragment_version == ProtocolVersion.V3:
+                if digest_state is None:
+                    raise S7ConnectionError("V3 response received without a session key")
                 try:
                     fragment_data = (
                         legacy_verifier.verify(fragment_data)
@@ -2254,12 +2719,13 @@ class S7CommPlusAsyncClient:
             if buf[0] == 0x72 and buf[1] == expected_version and buf[2] == 0 and buf[3] == 0:
                 del buf[:4]  # consume trailer — last fragment
                 break
+        self._rx_partial = False
         return bytes(data)
 
     async def _cotp_connect(self, local_tsap: int, remote_tsap: bytes) -> None:
         """Perform COTP Connection Request / Confirm handshake."""
         if self._writer is None or self._reader is None:
-            raise S7ConnectionError("Not connected")
+            raise S7NotConnectedError("Not connected")
 
         base_pdu = struct.pack(">BBHHB", 6, _COTP_CR, 0x0000, 0x0001, 0x00)
         calling_tsap = struct.pack(">BBH", 0xC1, 2, local_tsap)
@@ -2270,12 +2736,9 @@ class S7CommPlusAsyncClient:
         cr_pdu = struct.pack(">B", 6 + len(params)) + base_pdu[1:] + params
 
         tpkt = struct.pack(">BBH", 3, 0, 4 + len(cr_pdu)) + cr_pdu
-        self._writer.write(tpkt)
-        await self._writer.drain()
+        await self._write_tpkt(tpkt)
 
-        tpkt_header = await self._reader.readexactly(4)
-        _, _, length = struct.unpack(">BBH", tpkt_header)
-        payload = await self._reader.readexactly(length - 4)
+        payload = await self._read_tpkt()
 
         if len(payload) < 7:
             raise S7ConnectionError(f"COTP CC response too short: {len(payload)} bytes")
@@ -2437,7 +2900,12 @@ class S7CommPlusAsyncClient:
             )
             async with self._lock:
                 await self._send_cotp_dt(frame)
-                accepted = _session_setup_accepted(await self._recv_cotp_dt())
+                reply = await self._receive_bounded(
+                    self._recv_cotp_dt(),
+                    self._request_timeout,
+                    f"No session setup reply from the PLC within {self._request_timeout}s",
+                )
+                accepted = _session_setup_accepted(reply)
             if accepted:
                 self._session_key = session_key
                 self._with_integrity_id = True
@@ -2486,6 +2954,10 @@ class S7CommPlusAsyncClient:
         async with self._lock:
             payload = _build_session_activate_payload(self._session_id, self._sequence_number)
             await self._send_request_locked(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
+        if self._last_response_function == FunctionCode.ERROR:
+            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
+            logger.warning("Session activation answered with the generic error function")
+            return
         logger.info("Session activation completed")
 
     async def _post_auth_legitimation(self, password: str = "") -> None:
@@ -2563,30 +3035,25 @@ class S7CommPlusAsyncClient:
             assert self._ssl_object is not None
             while True:
                 try:
-                    return self._ssl_object.read(65536)
+                    frame = self._ssl_object.read(65536)
                 except ssl.SSLWantReadError:
                     await self._tls_read_incoming()
-        else:
-            return await self._recv_cotp_raw()
+                    continue
+                self._rx_partial = False
+                return frame
+        frame = await self._recv_cotp_raw()
+        self._rx_partial = False
+        return frame
 
     async def _send_cotp_raw(self, data: bytes) -> None:
         """Send raw bytes wrapped in COTP DT + TPKT (no TLS)."""
-        if self._writer is None:
-            raise S7ConnectionError("Not connected")
-
         cotp_dt = struct.pack(">BBB", 2, _COTP_DT, 0x80) + data
         tpkt = struct.pack(">BBH", 3, 0, 4 + len(cotp_dt)) + cotp_dt
-        self._writer.write(tpkt)
-        await self._writer.drain()
+        await self._write_tpkt(tpkt)
 
     async def _recv_cotp_raw(self) -> bytes:
         """Receive one TPKT + COTP DT frame and return the payload (no TLS)."""
-        if self._reader is None:
-            raise S7ConnectionError("Not connected")
-
-        tpkt_header = await self._reader.readexactly(4)
-        _, _, length = struct.unpack(">BBH", tpkt_header)
-        payload = await self._reader.readexactly(length - 4)
+        payload = await self._read_tpkt()
 
         if len(payload) < 3:
             raise S7ConnectionError(f"COTP DT response too short: {len(payload)} bytes")
@@ -2594,6 +3061,64 @@ class S7CommPlusAsyncClient:
             raise S7ConnectionError(f"Expected COTP DT, got {payload[1]:#04x}")
 
         return payload[3:]
+
+    async def _write_tpkt(self, tpkt: bytes) -> None:
+        """Write one TPKT frame; a peer that closed or reset the stream is a dropped connection."""
+        writer = self._writer
+        if writer is None:
+            raise S7NotConnectedError("Not connected")
+        try:
+            writer.write(tpkt)
+            await asyncio.wait_for(writer.drain(), self._request_timeout)
+        except asyncio.TimeoutError as exc:
+            # The frame is still queued, so the session cannot be resumed.
+            message = f"The PLC accepted no data for {self._request_timeout}s"
+            self._connection_lost(message)
+            raise S7TimeoutError(message) from exc
+        except OSError as exc:
+            self._close_failed_stream(writer)
+            raise S7ConnectionError(f"Send failed: {exc}") from exc
+
+    async def _read_tpkt(self) -> bytes:
+        """Read one TPKT frame and return what follows its header.
+
+        A peer that closed (end of stream) or reset the connection raises
+        ``S7ConnectionError``, as the synchronous transport does, and closes
+        the session so the next request fails fast with "Not connected".
+        """
+        reader, writer = self._reader, self._writer
+        if reader is None:
+            raise S7NotConnectedError("Not connected")
+        try:
+            # readexactly() consumes nothing until all its bytes are buffered, so a
+            # cancelled header read loses nothing; after it, part of a frame is read.
+            tpkt_header = await reader.readexactly(4)
+            self._rx_partial = True
+            _, _, length = struct.unpack(">BBH", tpkt_header)
+            return await reader.readexactly(length - 4)
+        except asyncio.IncompleteReadError as exc:
+            self._close_failed_stream(writer)
+            raise S7ConnectionError("Connection closed by peer") from exc
+        except OSError as exc:
+            self._close_failed_stream(writer)
+            raise S7ConnectionError(f"Receive failed: {exc}") from exc
+
+    def _close_failed_stream(self, writer: Optional[asyncio.StreamWriter]) -> None:
+        """Close the session whose stream failed, keeping the connect parameters.
+
+        Only the stream that failed is closed: a reconnect may already have
+        replaced it. No DeleteObject is sent over the dead stream, and the
+        subscription registries are left for ``disconnect()`` or a reconnect to
+        clear.
+        """
+        if writer is None or writer is not self._writer:
+            return
+        self._connected = False
+        self._session_ready = False
+        self._transport_connected = False
+        self._reader = None
+        self._writer = None
+        writer.close()
 
     def _next_sequence_number(self) -> int:
         seq = self._sequence_number
