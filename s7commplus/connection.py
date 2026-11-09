@@ -1068,15 +1068,18 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
 
 
 def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_version: int, object_qualifier_version: int) -> int:
-    """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
+    """ObjectQualifier layout version of ``write_symbolic`` and the subscription deletes.
 
     PLCSIM Advanced V8 (key family 03) and the S7-1200 (key family 01) need the
     layout of the session's other data requests there too, V2 on a V1 SessionKey
     session. PLCSIM was found in #66. A CPU 1214C FW V4.2 resets the connection on
-    a V1 delete and accepts a V2 one (#136); ``write_symbolic`` is the same
-    SetMultiVariables request as ``write_tags``, which that CPU accepts with V2.
-    The S7-1500 keeps the negotiated protocol version, which these two requests
-    have always used and which hasn't been checked on hardware.
+    a V1 delete and accepts a V2 one (#136). The data and the alarm subscription
+    delete are the same DeleteObject of the session's subscription container, and
+    the CPU refused the V1 alarm delete with a fatal SystemEvent as well (#136);
+    ``write_symbolic`` is the same SetMultiVariables request as ``write_tags``,
+    which that CPU accepts with V2. The S7-1500 keeps the negotiated protocol
+    version, which these requests have always used and which hasn't been checked
+    on hardware.
     """
     if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200):
         return object_qualifier_version
@@ -1453,7 +1456,7 @@ class S7CommPlusConnection:
 
     @property
     def write_delete_qualifier_version(self) -> int:
-        """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
+        """ObjectQualifier layout version of ``write_symbolic`` and the subscription deletes.
 
         See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
         :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.

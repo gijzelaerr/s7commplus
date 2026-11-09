@@ -1637,10 +1637,11 @@ class TestPlcsimResponseLayout:
 
 
 class TestWriteDeleteQualifierVersion:
-    """write_symbolic and the subscription delete use the V2 ObjectQualifier on PLCSIM and the S7-1200.
+    """write_symbolic and the subscription deletes use the V2 ObjectQualifier on PLCSIM and the S7-1200.
 
-    An S7-1500 V1 SessionKey session keeps the negotiated V1 layout of these two
-    requests, as before #66; every other data path already sends V2.
+    An S7-1500 V1 SessionKey session keeps the negotiated V1 layout of these
+    requests, as before #66; every other data path already sends V2. The alarm
+    subscription delete follows the data one: a CPU 1214C refused it with V1 (#136).
     """
 
     _WRITE_ARGS = (0x8A0E0001, [1], b"\x00\x2a", 0)
@@ -1658,6 +1659,12 @@ class TestWriteDeleteQualifierVersion:
 
         return build_delete_subscription_request(0x70000F90, version)
 
+    @staticmethod
+    def _expected_alarm_delete(version: int) -> bytes:
+        from s7commplus.alarm import build_delete_alarm_subscription_request
+
+        return build_delete_alarm_subscription_request(0x70000F90, version)
+
     @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_sync_client(self, family: str, version: int) -> None:
         from s7commplus.client import S7CommPlusClient
@@ -1673,10 +1680,13 @@ class TestWriteDeleteQualifierVersion:
         area, lids, data, crc = self._WRITE_ARGS
         client.write_symbolic(area, lids, data, crc, datatype=DataType.INT)
         client.delete_subscription(0x70000F91)
+        client.delete_alarm_subscription(0x70000F92)
         (_, write_payload), _ = conn.send_request.call_args_list[0]
         (_, delete_payload), _ = conn.send_request.call_args_list[1]
+        (_, alarm_delete_payload), _ = conn.send_request.call_args_list[2]
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
+        assert alarm_delete_payload == self._expected_alarm_delete(version) != self._expected_alarm_delete(3 - version)
 
     @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_async_client(self, family: str, version: int) -> None:
@@ -1697,12 +1707,15 @@ class TestWriteDeleteQualifierVersion:
         async def run() -> None:
             await client.write_symbolic(area, lids, data, crc, datatype=DataType.INT)
             await client.delete_subscription(0x70000F91)
+            await client.delete_alarm_subscription(0x70000F92)
 
         asyncio.run(run())
         (_, write_payload), _ = client._send_request.call_args_list[0]
         (_, delete_payload), _ = client._send_request.call_args_list[1]
+        (_, alarm_delete_payload), _ = client._send_request.call_args_list[2]
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
+        assert alarm_delete_payload == self._expected_alarm_delete(version) != self._expected_alarm_delete(3 - version)
 
 
 class TestS71200Subscriptions:

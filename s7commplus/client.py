@@ -2328,7 +2328,7 @@ class S7CommPlusClient:
         if self._connection.subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(
-            self._connection.subscription_container_id, self._connection.protocol_version
+            self._connection.subscription_container_id, self._connection.write_delete_qualifier_version
         )
         self._connection.send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:

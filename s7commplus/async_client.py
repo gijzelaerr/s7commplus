@@ -461,7 +461,7 @@ class S7CommPlusAsyncClient:
 
     @property
     def write_delete_qualifier_version(self) -> int:
-        """ObjectQualifier layout version of ``write_symbolic`` and the subscription delete.
+        """ObjectQualifier layout version of ``write_symbolic`` and the subscription deletes.
 
         See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
         :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
@@ -1796,7 +1796,7 @@ class S7CommPlusAsyncClient:
         """
         if self._subscription_container_id == 0:
             raise RuntimeError("PLC did not provide a subscription container object")
-        payload = build_delete_alarm_subscription_request(self._subscription_container_id, self._protocol_version)
+        payload = build_delete_alarm_subscription_request(self._subscription_container_id, self.write_delete_qualifier_version)
         await self._send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
             self._subscriptions.unregister(active_id)
