@@ -22,7 +22,7 @@ complete user guide and API reference.
 from s7commplus import Client
 
 with Client() as client:
-    client.connect("192.168.1.10", 0, 1)
+    client.connect("192.168.1.10", rack=0, slot=1)
     data = client.db_read(1, 0, 4)
 ```
 
