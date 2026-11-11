@@ -10,7 +10,8 @@ the matching dictionary based on the Adler-32 checksum in the zlib header.
 
 Each dictionary is stored as a readable ``.xml`` file in this package
 directory, named ``{adler32}_{name}.xml``. They are loaded once at
-import time and indexed by Adler-32 checksum.
+import time through ``importlib.resources``, so a zipped install works too,
+and indexed by Adler-32 checksum.
 
 `ZLIB_DICT_IDENTITIES` is the structured view of each file name (kind and
 version). `ZLIB_DICT_NAMES` holds the same information as a flat display
@@ -18,7 +19,7 @@ string and is kept for compatibility; prefer `ZLIB_DICT_IDENTITIES` in new code.
 """
 
 from dataclasses import dataclass
-from pathlib import Path as _Path
+from importlib.resources import files as _files
 
 
 @dataclass(frozen=True)
@@ -36,15 +37,13 @@ class PresetIdentity:
     version: int
 
 
-_DIR = _Path(__file__).parent
-
 ZLIB_DICT_IDENTITIES: dict[int, PresetIdentity] = {}
 ZLIB_DICT_NAMES: dict[int, str] = {}
 ZLIB_DICTIONARIES: dict[int, bytes] = {}
 
-for _f in sorted(_DIR.glob("*.xml")):
+for _f in sorted((_r for _r in _files(__name__).iterdir() if _r.name.endswith(".xml")), key=lambda _r: _r.name):
     try:
-        _adler_hex, _rest = _f.stem.split("_", 1)
+        _adler_hex, _rest = _f.name[: -len(".xml")].split("_", 1)
         _adler = int(_adler_hex, 16)
         _kind, _version_hex = _rest.rsplit("_", 1)
         _version = int(_version_hex, 16)
