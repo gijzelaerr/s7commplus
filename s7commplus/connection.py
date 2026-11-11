@@ -64,7 +64,16 @@ from .codec import (
     encode_object_qualifier,
     parse_create_object_attributes,
 )
-from .error import S7AuthenticationError, S7CertificateError, S7ConnectionError, S7Error, S7TimeoutError, S7TlsHandshakeError
+from .error import (
+    S7AuthenticationError,
+    S7CertificateError,
+    S7ConnectionError,
+    S7Error,
+    S7IntegrityError,
+    S7ProtocolError,
+    S7TimeoutError,
+    S7TlsHandshakeError,
+)
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -98,6 +107,18 @@ from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq, encode
 logger = logging.getLogger(__name__)
 
 
+class _HexDump:
+    """Formats bytes as spaced hex only when a log record is actually emitted."""
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def __str__(self) -> str:
+        return self._data.hex(" ")
+
+
 class FamilyOnlyFingerprintError(S7ConnectionError):
     """A legacy PLC advertised only a public-key family identifier."""
 
@@ -119,8 +140,6 @@ class SessionKeyAuthenticationDependencyError(S7ConnectionError):
 
 def _incoming_frame_opcode(frame: bytes) -> int:
     """Return the application opcode from a complete non-SystemEvent frame."""
-    from .error import S7ConnectionError, S7ProtocolError
-
     if not frame:
         raise S7ConnectionError("Connection closed while waiting for an S7CommPlus frame")
     version, data_length, consumed = decode_header(frame)
@@ -137,8 +156,6 @@ def _incoming_frame_opcode(frame: bytes) -> int:
 
 def _incoming_response_sequence(frame: bytes) -> int:
     """Return the sequence number from a complete response frame."""
-    from .error import S7ConnectionError, S7ProtocolError
-
     if not frame:
         raise S7ConnectionError("Connection closed while waiting for an S7CommPlus frame")
     version, data_length, consumed = decode_header(frame)
@@ -180,8 +197,6 @@ def _response_continues(frame: bytes) -> bool:
 
 def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> int:
     """Validate that application data is the response to one outstanding request; return its function code."""
-    from .error import S7ConnectionError, S7ProtocolError
-
     if len(response) < 10:
         raise S7ConnectionError("Response too short")
     opcode = response[0]
@@ -265,8 +280,6 @@ def _check_timeout(name: str, value: Optional[float], *, optional: bool = True) 
 
 def _system_event_return_value(payload: bytes) -> Optional[int]:
     """Return a fixed-width SystemEvent error value, if the event contains one."""
-    from .error import S7ProtocolError
-
     if len(payload) < 16:
         raise S7ProtocolError(f"Malformed S7CommPlus SystemEvent: {payload.hex()}")
     if len(payload) == 16:
@@ -330,8 +343,6 @@ def _system_event_return_value(payload: bytes) -> Optional[int]:
 
 def _check_system_event(payload: bytes) -> None:
     """Raise for fatal/malformed SystemEvents; ignore confirmations/messages."""
-    from .error import S7ProtocolError
-
     return_value = _system_event_return_value(payload)
     if return_value is not None and return_value < 0:
         raise S7ProtocolError(
@@ -357,8 +368,6 @@ def _set_s7_groups(ctx: ssl.SSLContext) -> None:
 
 def _verify_v3_hmac(protected: bytes, verifier: bytes | hmac.HMAC) -> bytes:
     """Verify and remove the V3 HMAC prefix from application data."""
-    from .error import S7IntegrityError
-
     if not protected:
         raise S7IntegrityError("Empty authenticated V3 frame")
     digest_length = protected[0]
@@ -412,8 +421,6 @@ def _response_pvalue_offset(payload: bytes, offset: int, supported: Callable[[in
 
 def _parse_get_var_substreamed_response(payload: bytes) -> bytes:
     """Extract the typed value from a GetVarSubStreamed response payload."""
-    from .error import S7ConnectionError
-
     try:
         return_value, consumed = decode_uint64_vlq(payload, 0)
         if return_value != 0:
@@ -448,8 +455,6 @@ def _parse_get_var_substreamed_response(payload: bytes) -> bytes:
 
 def _parse_protection_level_response(payload: bytes) -> int:
     """Extract the scalar UDInt value from a GetVarSubStreamed response payload."""
-    from .error import S7ConnectionError
-
     try:
         return_value, offset = decode_uint64_vlq(payload, 0)
         if return_value != 0:
@@ -501,8 +506,6 @@ def _check_set_variable_response(payload: bytes, function: Optional[int] = None)
 
     Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
     """
-    from .error import S7ConnectionError
-
     if function == FunctionCode.ERROR:
         raise S7ConnectionError("SetVariable answered with the generic error function")
     if not payload:
@@ -1736,8 +1739,6 @@ class S7CommPlusConnection:
             S7ConnectionError: If not connected, TLS is not active, the firmware
                 does not support legitimation, or the password was refused
         """
-        from .error import S7ConnectionError
-
         if not self._connected:
             raise S7ConnectionError("Not connected")
 
@@ -1803,8 +1804,6 @@ class S7CommPlusConnection:
 
     def _get_effective_protection_level(self) -> Optional[int]:
         """Read the session's effective protection level (see `AccessLevel`), None if request failed."""
-        from .error import S7ConnectionError
-
         payload = _build_get_var_substreamed_payload(self._session_id, Ids.EFFECTIVE_PROTECTION_LEVEL)
         try:
             level = _parse_protection_level_response(
@@ -1877,8 +1876,6 @@ class S7CommPlusConnection:
             All fragment payloads concatenated (first_payload + continuations).
         """
         if self._session_key is not None:
-            from .error import S7ProtocolError
-
             raise S7ProtocolError(
                 "Authenticated Explore continuations require send_request(..., reassemble=True) so cumulative digests "
                 "can be verified"
@@ -1893,8 +1890,6 @@ class S7CommPlusConnection:
         fragment_count = 0
         while True:
             if len(all_data) > self._MAX_REASSEMBLED_BYTES or fragment_count >= self._MAX_REASSEMBLED_FRAGMENTS:
-                from .error import S7ConnectionError
-
                 raise S7ConnectionError(
                     f"collect_explore_frames: response too large ({len(all_data)} bytes, {fragment_count} fragments)"
                 )
@@ -2085,8 +2080,6 @@ class S7CommPlusConnection:
         if self._session_key_refresh_error is not None:
             raise self._session_key_refresh_error
         if not (self._connected or self._session_ready):
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("Not connected")
 
         seq_num = self._next_sequence_number()
@@ -2123,15 +2116,15 @@ class S7CommPlusConnection:
             request = request_header + integrity_id_bytes + payload
 
         logger.debug(f"=== SEND REQUEST === function_code=0x{function_code:04X} seq={seq_num} session=0x{self._session_id:08X}")
-        logger.debug(f"  Request header (14 bytes): {request_header.hex(' ')}")
+        logger.debug("  Request header (14 bytes): %s", _HexDump(request_header))
         if integrity_id_bytes:
-            logger.debug(f"  IntegrityId ({len(integrity_id_bytes)} bytes): {integrity_id_bytes.hex(' ')}")
-        logger.debug(f"  Request payload ({len(payload)} bytes): {payload.hex(' ')}")
+            logger.debug("  IntegrityId (%d bytes): %s", len(integrity_id_bytes), _HexDump(integrity_id_bytes))
+        logger.debug("  Request payload (%d bytes): %s", len(payload), _HexDump(payload))
 
         # After SessionKey auth, all data ops use V3 framing with HMAC
         frame = _frame_request(request, self._protocol_version, self._session_key)
 
-        logger.debug(f"  Full frame ({len(frame)} bytes): {frame.hex(' ')}")
+        logger.debug("  Full frame (%d bytes): %s", len(frame), _HexDump(frame))
         self._send_s7_data(frame)
 
         if self._with_integrity_id:
@@ -2148,22 +2141,18 @@ class S7CommPlusConnection:
         if reassemble or _response_continues(response_frame):
             data = self._recv_reassembled_payload(response_frame, reply_timeout)
             if len(data) < 10:
-                from .error import S7ConnectionError
-
                 raise S7ConnectionError("Response too short")
             self._last_response_function = _validate_response_header(data, function_code, seq_num)
             logger.debug(f"  Reassembled response ({len(data)} bytes), payload {len(data) - 10} bytes")
             return self._response_payload(function_code, bytes(data[10:]))
 
-        logger.debug(f"=== RECV RESPONSE === raw frame ({len(response_frame)} bytes): {response_frame.hex(' ')}")
+        logger.debug("=== RECV RESPONSE === raw frame (%d bytes): %s", len(response_frame), _HexDump(response_frame))
 
         # Parse frame header, use data_length to exclude trailer
         version, data_length, consumed = decode_header(response_frame)
         logger.debug(f"  Frame header: version=V{version}, data_length={data_length}, header_size={consumed}")
 
         if self._session_key is not None and version != ProtocolVersion.V3:
-            from .error import S7IntegrityError
-
             self._invalidate_integrity_failure()
             raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
 
@@ -2171,8 +2160,6 @@ class S7CommPlusConnection:
 
         # V3 responses have a hash-length byte + HMAC prefix before the payload.
         if version == ProtocolVersion.V3:
-            from .error import S7ConnectionError, S7IntegrityError
-
             if self._session_key is None:
                 raise S7ConnectionError("V3 response received without a session key")
             try:
@@ -2182,7 +2169,7 @@ class S7CommPlusConnection:
                 raise
             logger.debug("  V3 HMAC verified")
 
-        logger.debug(f"  Response data ({len(response)} bytes): {response.hex(' ')}")
+        logger.debug("  Response data (%d bytes): %s", len(response), _HexDump(response))
 
         self._last_response_function = _validate_response_header(response, function_code, seq_num)
 
@@ -2201,12 +2188,12 @@ class S7CommPlusConnection:
 
         resp_payload = self._response_payload(function_code, response[resp_offset:])
 
-        logger.debug(f"  Response payload ({len(resp_payload)} bytes): {resp_payload.hex(' ')}")
+        logger.debug("  Response payload (%d bytes): %s", len(resp_payload), _HexDump(resp_payload))
 
         # Check for trailer bytes after data_length
         trailer = response_frame[consumed + data_length :]
         if trailer:
-            logger.debug(f"  Trailer ({len(trailer)} bytes): {trailer.hex(' ')}")
+            logger.debug("  Trailer (%d bytes): %s", len(trailer), _HexDump(trailer))
 
         return resp_payload
 
@@ -2219,8 +2206,6 @@ class S7CommPlusConnection:
 
     def _verified_incoming_data(self, frame: bytes) -> bytes:
         """Return application data after authenticating the complete frame."""
-        from .error import S7IntegrityError
-
         version, data_length, consumed = decode_header(frame)
         data = bytes(frame[consumed : consumed + data_length])
         if self._session_key is None:
@@ -2240,8 +2225,6 @@ class S7CommPlusConnection:
         ``timeout`` bounds the wait in seconds (``None``: :meth:`_receive_timeout`);
         the frames skipped on the way count against it.
         """
-        from .error import S7ConnectionError, S7ProtocolError
-
         system_events = 0
         stale_responses = 0
         deadline = time.monotonic() + (self._receive_timeout() if timeout is None else timeout)
@@ -2310,8 +2293,6 @@ class S7CommPlusConnection:
         """
         _check_timeout("timeout", timeout)
         if not self._connected:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("Not connected")
         if self._notification_frames:
             frame = self._notification_frames.popleft()
@@ -2319,8 +2300,6 @@ class S7CommPlusConnection:
             frame = self._recv_s7_data(self._notification_wait(timeout), idle_ok=True)
         data = self._verified_incoming_data(frame)
         if not data or data[0] != Opcode.NOTIFICATION:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("Expected an S7CommPlus notification")
         return frame
 
@@ -2339,8 +2318,6 @@ class S7CommPlusConnection:
         too (one fragment immediately followed by the trailer). ``timeout`` bounds
         the wait for each further part in seconds (``None``: :meth:`_receive_timeout`).
         """
-        from .error import S7ConnectionError, S7IntegrityError
-
         buf = bytearray(initial_data)
 
         def ensure(n: int) -> None:
@@ -2373,8 +2350,6 @@ class S7CommPlusConnection:
                 _check_system_event(event)
                 system_events += 1
                 if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
-                    from .error import S7ProtocolError
-
                     raise S7ProtocolError("Too many S7CommPlus SystemEvents during response reassembly")
                 continue
             if self._session_key is not None and fragment_version != ProtocolVersion.V3:
@@ -2386,8 +2361,6 @@ class S7CommPlusConnection:
                 expected_version = fragment_version
             elif fragment_version != expected_version:
                 if self._session_key is not None:
-                    from .error import S7IntegrityError
-
                     self._invalidate_integrity_failure()
                     raise S7IntegrityError(
                         f"Authenticated S7CommPlus response changed fragment version from {expected_version} "
@@ -2458,24 +2431,22 @@ class S7CommPlusConnection:
         frame = encode_header(ProtocolVersion.V1, len(request)) + request
         frame += struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
 
-        logger.debug(f"=== InitSSL === sending ({len(frame)} bytes): {frame.hex(' ')}")
+        logger.debug("=== InitSSL === sending (%d bytes): %s", len(frame), _HexDump(frame))
         self._send_s7_data(frame)
 
         # Receive InitSSL response
         response_frame = self._recv_s7_data()
-        logger.debug(f"=== InitSSL === received ({len(response_frame)} bytes): {response_frame.hex(' ')}")
+        logger.debug("=== InitSSL === received (%d bytes): %s", len(response_frame), _HexDump(response_frame))
 
         # Parse S7CommPlus frame header
         version, data_length, consumed = decode_header(response_frame)
         response = response_frame[consumed:]
 
         if len(response) < 10:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("InitSSL response too short")
 
         logger.debug(f"InitSSL response: version=V{version}, data_length={data_length}")
-        logger.debug(f"InitSSL response body ({len(response)} bytes): {response.hex(' ')}")
+        logger.debug("InitSSL response body (%d bytes): %s", len(response), _HexDump(response))
 
     def _create_session(self) -> None:
         """Send CreateObject request to establish an S7CommPlus session.
@@ -2573,23 +2544,21 @@ class S7CommPlusConnection:
         # S7CommPlus trailer (end-of-frame marker)
         frame += struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
 
-        logger.debug(f"=== CreateObject === sending ({len(frame)} bytes): {frame.hex(' ')}")
+        logger.debug("=== CreateObject === sending (%d bytes): %s", len(frame), _HexDump(frame))
         self._send_s7_data(frame)
 
         # Receive response
         response_frame = self._recv_s7_data()
-        logger.debug(f"=== CreateObject === received ({len(response_frame)} bytes): {response_frame.hex(' ')}")
+        logger.debug("=== CreateObject === received (%d bytes): %s", len(response_frame), _HexDump(response_frame))
 
         # Parse S7CommPlus frame header
         version, data_length, consumed = decode_header(response_frame)
         response = response_frame[consumed:]
 
         logger.debug(f"CreateObject response: version=V{version}, data_length={data_length}")
-        logger.debug(f"CreateObject response body ({len(response)} bytes): {response.hex(' ')}")
+        logger.debug("CreateObject response body (%d bytes): %s", len(response), _HexDump(response))
 
         if len(response) < 10:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("CreateObject response too short")
 
         # Response header is 10 bytes: opcode(1)+reserved(2)+func(2)+reserved(2)+seq(2)+transport(1).
@@ -2603,8 +2572,6 @@ class S7CommPlusConnection:
         return_value, consumed = decode_uint64_vlq(response, offset)
         offset += consumed
         if offset >= len(response):
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("CreateObject response truncated before ObjectIdCount")
         object_id_count = response[offset]
         offset += 1
@@ -2615,8 +2582,6 @@ class S7CommPlusConnection:
             object_ids.append(obj_id)
 
         if not object_ids:
-            from .error import S7ConnectionError
-
             raise S7ConnectionError("CreateObject response has no session ObjectId")
 
         # First ObjectId is the session; the second is its subscription container.
@@ -2715,14 +2680,14 @@ class S7CommPlusConnection:
             self._protocol_version,
             security_key,
         )
-        logger.debug(f"=== SetupSession === sending ({len(frame)} bytes): {frame.hex(' ')}")
+        logger.debug("=== SetupSession === sending (%d bytes): %s", len(frame), _HexDump(frame))
         self._send_s7_data(frame)
 
         # Session setup can receive a SystemEvent before the reply. Route it
         # through the same dispatcher as ordinary requests so a fatal event
         # cannot be mistaken for a successful SetMultiVariables response.
         response_frame = self._recv_response_frame(seq_num)
-        logger.debug(f"=== SetupSession === received ({len(response_frame)} bytes): {response_frame.hex(' ')}")
+        logger.debug("=== SetupSession === received (%d bytes): %s", len(response_frame), _HexDump(response_frame))
         version, data_length, consumed = decode_header(response_frame)
         response = response_frame[consumed : consumed + data_length]
         if len(response) < 10:
