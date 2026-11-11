@@ -122,31 +122,6 @@ class ISOTCPConnection:
         self.src_ref = 0x0001  # Source reference
         self.dst_ref = 0x0000  # Destination reference (assigned by peer)
 
-        # Routing parameters (set via connect_routed)
-        self._routing: bool = False
-        self._subnet_id: int = 0
-        self._routing_tsap: int = 0
-
-    def set_routing(self, subnet_id: int, dest_rack: int, dest_slot: int) -> None:
-        """Configure S7 routing parameters for multi-subnet access.
-
-        When routing is enabled, the COTP Connection Request includes
-        additional parameters that instruct the gateway PLC to forward
-        the connection to a target PLC on another subnet.
-
-        .. warning:: This method is experimental and may change in future versions.
-
-        Args:
-            subnet_id: Subnet ID of the target network (2 bytes)
-            dest_rack: Rack number of the destination PLC
-            dest_slot: Slot number of the destination PLC
-        """
-        self._routing = True
-        self._subnet_id = subnet_id & 0xFFFF
-        # Routing TSAP encodes the final target rack/slot the same way
-        # as a normal remote TSAP.
-        self._routing_tsap = 0x0100 | (dest_rack << 5) | dest_slot
-
     def connect(self, timeout: float = 5.0) -> None:
         """
         Establish ISO on TCP connection.
@@ -363,13 +338,6 @@ class ISOTCPConnection:
 
         parameters = calling_tsap + called_tsap + pdu_size_param
 
-        # Append routing parameters when routing is enabled
-        if self._routing:
-            subnet_param = struct.pack(">BBH", self.COTP_PARAM_SUBNET_ID, 2, self._subnet_id)
-            routing_tsap_param = struct.pack(">BBH", self.COTP_PARAM_ROUTING_TSAP, 2, self._routing_tsap)
-            parameters += subnet_param + routing_tsap_param
-            logger.debug(f"COTP CR with routing: subnet={self._subnet_id:#06x}, routing_tsap={self._routing_tsap:#06x}")
-
         # Update PDU length to include parameters
         total_length = 6 + len(parameters)
         pdu = struct.pack(">B", total_length) + base_pdu[1:] + parameters
@@ -543,34 +511,6 @@ class ISOTCPConnection:
             return False
         readable, _, _ = select.select([self.socket], [], [], timeout)
         return bool(readable)
-
-    def check_connection(self) -> bool:
-        """Check if the TCP connection is still alive.
-
-        Uses a non-blocking socket peek to detect broken connections.
-        """
-        if not self.connected or self.socket is None:
-            return False
-
-        try:
-            original_timeout = self.socket.gettimeout()
-            self.socket.settimeout(0)
-            try:
-                data = self.socket.recv(1, socket.MSG_PEEK)
-                if not data:
-                    self.connected = False
-                    return False
-                return True
-            except BlockingIOError:
-                # No data available but connection is still alive
-                return True
-            except (socket.error, OSError):
-                self.connected = False
-                return False
-            finally:
-                self.socket.settimeout(original_timeout)
-        except Exception:
-            return False
 
     def __enter__(self) -> "ISOTCPConnection":
         """Context manager entry."""

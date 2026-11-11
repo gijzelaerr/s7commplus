@@ -1302,8 +1302,8 @@ class S7CommPlusConnection:
     - Version-appropriate authentication (V1/V2/V3/TLS)
     - Frame send/receive (TLS-encrypted when using V17+ firmware)
 
-    Currently implements V1 authentication. V2/V3/TLS authentication
-    layers are planned for future development.
+    Sessions are V1 (optionally with the SessionKey handshake), V2 or V3,
+    with password legitimation where the PLC asks for it.
     """
 
     def __init__(
@@ -2289,16 +2289,6 @@ class S7CommPlusConnection:
                         self._recv_reassembled_payload(response_frame)
                     continue
             return response_frame
-
-    @staticmethod
-    def _is_notification_frame(frame: bytes) -> bool:
-        """Return whether a complete frame contains an unsolicited notification."""
-        from .error import S7ConnectionError, S7ProtocolError
-
-        try:
-            return _incoming_frame_opcode(frame) == Opcode.NOTIFICATION
-        except (IndexError, ValueError, S7ConnectionError, S7ProtocolError):
-            return False
 
     def receive_notification(self, timeout: Optional[float] = None) -> bytes:
         """Receive one unsolicited S7CommPlus notification frame.

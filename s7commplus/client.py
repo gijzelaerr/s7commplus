@@ -68,7 +68,6 @@ from .protocol import (
     ElementID,
     FunctionCode,
     Ids,
-    ObjectId,
     ProtocolVersion,
     block_language_name,
     remote_tsap_for_connection_type,
@@ -3089,86 +3088,3 @@ def _parse_program_objects(response: bytes) -> list[ProgramObject]:
     if stack:
         logger.warning("EXPLORE reply ends inside %d open object(s); their entries are missing from the object list", len(stack))
     return objects
-
-
-# ---------------------------------------------------------------------------
-# Subscription helpers (experimental)
-# ---------------------------------------------------------------------------
-
-_SUBSCRIPTION_RELATION_ID = 0x7FFFC001
-
-
-def _build_subscription_request(items: list[tuple[int, int, int]], cycle_ms: int, session_id: int) -> bytes:
-    """Build a CREATE_OBJECT request for a data change subscription.
-
-    The subscription object is modeled after the S7CommPlusDriver alarm
-    subscription pattern, adapted for data variable monitoring.
-
-    Args:
-        items: List of (db_number, start_offset, size) to monitor.
-        cycle_ms: Cycle time in milliseconds (0 = on change).
-        session_id: Current session ID.
-
-    Returns:
-        CREATE_OBJECT payload.
-    """
-    payload = bytearray()
-
-    # Session container
-    payload += struct.pack(">I", session_id)
-    payload += bytes([0x00, DataType.UDINT])
-    payload += encode_uint32_vlq(0)
-    payload += struct.pack(">I", 0)
-
-    # Start subscription object
-    payload += bytes([ElementID.START_OF_OBJECT])
-    payload += struct.pack(">I", ObjectId.GET_NEW_RID_ON_SERVER)
-    payload += encode_uint32_vlq(Ids.CLASS_SUBSCRIPTION)
-    payload += encode_uint32_vlq(0)
-    payload += encode_uint32_vlq(0)
-
-    # Subscription attributes
-    payload += bytes([ElementID.ATTRIBUTE])
-    payload += encode_uint32_vlq(Ids.OBJECT_VARIABLE_TYPE_NAME)
-    payload += bytes([0x00, DataType.WSTRING])
-    name = f"PySub_{_SUBSCRIPTION_RELATION_ID:#x}".encode("utf-8")
-    payload += encode_uint32_vlq(len(name))
-    payload += name
-
-    payload += bytes([ElementID.ATTRIBUTE])
-    payload += encode_uint32_vlq(Ids.SUBSCRIPTION_FUNCTION_CLASS_ID)
-    payload += bytes([0x00, DataType.USINT])
-    payload += bytes([0x02])
-
-    payload += bytes([ElementID.ATTRIBUTE])
-    payload += encode_uint32_vlq(Ids.SUBSCRIPTION_ACTIVE)
-    payload += bytes([0x00, DataType.BOOL])
-    payload += bytes([0x01])
-
-    payload += bytes([ElementID.ATTRIBUTE])
-    payload += encode_uint32_vlq(Ids.SUBSCRIPTION_CYCLE_TIME)
-    payload += bytes([0x00, DataType.UDINT])
-    payload += encode_uint32_vlq(cycle_ms)
-
-    payload += bytes([ElementID.ATTRIBUTE])
-    payload += encode_uint32_vlq(Ids.SUBSCRIPTION_CREDIT_LIMIT)
-    payload += bytes([0x00, DataType.INT])
-    payload += struct.pack(">h", 10)  # 10 credits
-
-    # Build reference list from items
-    ref_list = bytearray()
-    for db_number, start, size in items:
-        access_area = Ids.DB_ACCESS_AREA_BASE + (db_number & 0xFFFF)
-        ref_list += struct.pack(">I", access_area)
-
-    payload += bytes([ElementID.ATTRIBUTE])
-    payload += encode_uint32_vlq(Ids.SUBSCRIPTION_REFERENCE_LIST)
-    payload += bytes([0x10, DataType.UDINT])  # 0x10 = array
-    payload += encode_uint32_vlq(len(items))
-    payload += ref_list
-
-    # Close subscription object
-    payload += bytes([ElementID.TERMINATING_OBJECT])
-    payload += struct.pack(">I", 0)
-
-    return bytes(payload)
