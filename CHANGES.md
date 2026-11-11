@@ -1,6 +1,44 @@
 CHANGES
 =======
 
+0.5.0 (2026-11-11)
+------------------
+
+A maintenance release: the alarm subscription delete on an S7-1200 without TLS no
+longer ends the session, `AsyncClient` signs the subscription credit update as
+`Client` does, and code that never worked or was never used is gone. Nothing in
+this release was run on a PLC except where an entry says so.
+
+### Upgrading from 0.4.0
+
+Most applications need no changes. Check the following if you use them:
+
+* `upload_block()` and `download_block()` on both clients raise
+  `NotImplementedError` and send nothing. They never implemented a real block
+  transfer: they sent an invented request and ignored the reply. Code that calls
+  them must stop doing so or catch `NotImplementedError` (#182).
+* The classic S7 error tables and helpers were removed from `s7commplus.error`
+  (`check_error`, `error_wrap`, `error_text`, `get_error_message`,
+  `get_protocol_error_message` and the code tables), together with
+  `ISOTCPConnection.set_routing` and `check_connection`. None was used by the
+  library or documented, and this package has no replacement for them; the
+  originals are in `python-snap7` (#182).
+
+### Bug fixes and hardening
+
+* `delete_alarm_subscription()` no longer makes an S7-1200 without TLS (key
+  family 01) end the session with a fatal SystemEvent. It sends the V2
+  ObjectQualifier, like `delete_subscription()` since #172 (#136, #179).
+* `AsyncClient` now sends the subscription credit update of a V1 SessionKey
+  session with V3 framing and the session-key HMAC, as `Client` does.
+  Emulator-tested only (#182).
+* The first README example passed rack and slot positionally, which set the TCP
+  port to 0; it now uses keywords (#182).
+* The zlib preset dictionaries load through `importlib.resources`, so they are
+  found when the package is imported from a zip archive (#182).
+* Requests no longer build hex dumps of every frame for debug logging when DEBUG
+  logging is off (#182).
+
 0.4.0 (2026-11-08)
 ------------------
 
