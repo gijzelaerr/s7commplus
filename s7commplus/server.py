@@ -54,6 +54,7 @@ from .protocol import (
     LegitimationId,
     ObjectId,
     Opcode,
+    OperatingStateRequest,
     ProtocolVersion,
     SoftDataType,
 )
@@ -856,6 +857,9 @@ class S7CommPlusServer:
         elif function_code == FunctionCode.GET_MULTI_VARIABLES:
             response = self._handle_get_multi_variables(seq_num, req_session_id, request_data)
             rst = self._rst_after_symbolic_read and session_id != 0
+        elif function_code == FunctionCode.SET_VARIABLE:
+            response = self._handle_set_variable(seq_num, req_session_id, request_data)
+            rst = False
         elif function_code == FunctionCode.SET_MULTI_VARIABLES:
             response = self._handle_set_multi_variables(seq_num, req_session_id, request_data)
             rst = False
@@ -1467,19 +1471,40 @@ class S7CommPlusServer:
         return bytes(response)
 
     def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
-        """Handle SetVariable: accept the session activation and legitimation writes.
+        """Handle SetVariable: the session activation, legitimation and operating-state writes.
 
         A SessionKey renewal is accepted only for the next key in
         ``renewal_session_keys``: the emulator cannot derive the new key from the
         blob, so accepting any other would break the next signed request.
+
+        A ``STOP``/``RUN`` write of the CPUexecUnit's ``OperatingStateREQ``
+        (0x877) flips the reported :attr:`cpu_state`, which a following
+        ``get_cpu_state`` reflects. This mirrors only the request shape produced
+        by ``_build_set_operating_state_payload``; it is not a verified model of
+        a real PLC's behaviour (see issue #8).
         """
         try:
             _count, consumed = decode_uint32_vlq(request_data, 4)
-            address, _ = decode_uint32_vlq(request_data, 4 + consumed)
+            offset = 4 + consumed
+            address, consumed = decode_uint32_vlq(request_data, offset)
+            offset += consumed
+            if address == Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ:
+                # PValue: flags byte, datatype byte, then the VLQ-encoded value.
+                state_value, _ = decode_uint32_vlq(request_data, offset + 2)
         except ValueError:
             return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
         if address == LegitimationId.SESSION_SETUP_LEGITIMATION and not self._accept_session_key_renewal(request_data):
             return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        if address == Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ:
+            new_state = {
+                int(OperatingStateRequest.STOP): CPUState.STOP,
+                int(OperatingStateRequest.RUN): CPUState.RUN,
+                int(OperatingStateRequest.RUN_REDUNDANT): CPUState.RUN,
+            }.get(state_value)
+            if new_state is not None:
+                with self._lock:
+                    self._cpu_state = new_state
+                logger.debug("SetVariable: OperatingStateREQ=%d -> cpu_state=%s", state_value, new_state.name)
         response = bytearray()
         response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
         response += encode_uint32_vlq(0)  # Return code: success

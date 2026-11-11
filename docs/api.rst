@@ -12,6 +12,9 @@ Clients
    :members:
    :undoc-members:
 
+.. autoclass:: s7commplus.OperatingStateChange
+   :members:
+
 .. autoclass:: s7commplus.ProgramObject
    :members:
 
@@ -73,6 +76,9 @@ Protocol enums
    :members:
 
 .. autoclass:: s7commplus.protocol.AccessLevel
+   :members:
+
+.. autoclass:: s7commplus.protocol.OperatingStateRequest
    :members:
 
 Exceptions
