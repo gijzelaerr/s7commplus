@@ -407,6 +407,99 @@ def test_credit_update_uses_fire_and_forget_transport_flags() -> None:
     assert connection.integrity_id_write == 4
 
 
+_CREDIT_SESSION_KEY = bytes(range(32))
+_CREDIT_REQUEST = "31000004f20000000670000cb8747040002501881d0007000f000004e88969001200000000896a001300896b000400000003000000"
+# Frames the synchronous client sent for subscription 0x70400025, credit 15,
+# sequence 6, session 0x70000CB8 and write IntegrityId 3 before the framing was
+# shared with the asyncio client.
+_CREDIT_FRAMES = [
+    pytest.param(
+        ProtocolVersion.V1,
+        _CREDIT_SESSION_KEY,
+        True,
+        "7203005720ed9fb43d1e10a866f86a7181efc9299d6784313d1dbddadaedf69677cd57fcb2" + _CREDIT_REQUEST + "0072030000",
+        id="v1-session-key",
+    ),
+    pytest.param(
+        ProtocolVersion.V1,
+        None,
+        False,
+        "7201003531000004f20000000670000cb8747040002501881d0007000f000004e88969001200000000896a001300896b00040000000000000072010000",
+        id="v1-plain",
+    ),
+    pytest.param(ProtocolVersion.V2, None, True, "72020036" + _CREDIT_REQUEST + "0072020000", id="v2"),
+    pytest.param(ProtocolVersion.V3, None, True, "72030036" + _CREDIT_REQUEST + "0072030000", id="v3"),
+]
+
+
+def _sync_credit_frame(version: int, session_key: bytes | None, with_integrity_id: bool) -> bytes:
+    connection = S7CommPlusConnection("127.0.0.1")
+    connection._connected = True
+    connection._protocol_version = version
+    connection._session_id = 0x70000CB8
+    connection._with_integrity_id = with_integrity_id
+    connection._integrity_id_write = 3
+    connection._sequence_number = 6
+    connection._session_key = session_key
+    connection._send_s7_data = MagicMock()
+    connection.send_subscription_credit(0x70400025, 15)
+    assert connection._sequence_number == 7
+    assert connection._integrity_id_write == (4 if with_integrity_id else 3)
+    frame: bytes = connection._send_s7_data.call_args.args[0]
+    return frame
+
+
+async def _async_credit_frame(version: int, session_key: bytes | None, with_integrity_id: bool) -> bytes:
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    client._reader = MagicMock()
+    client._writer = MagicMock()
+    client._protocol_version = version
+    client._session_id = 0x70000CB8
+    client._with_integrity_id = with_integrity_id
+    client._integrity_id_write = 3
+    client._sequence_number = 6
+    client._session_key = session_key
+    client._send_cotp_dt = AsyncMock()
+    await client._send_subscription_credit(0x70400025, 15)
+    assert client._sequence_number == 7
+    assert client._integrity_id_write == (4 if with_integrity_id else 3)
+    frame: bytes = client._send_cotp_dt.await_args.args[0]
+    return frame
+
+
+@pytest.mark.parametrize("version, session_key, with_integrity_id, expected", _CREDIT_FRAMES)
+def test_sync_credit_update_frame_is_byte_exact(
+    version: int, session_key: bytes | None, with_integrity_id: bool, expected: str
+) -> None:
+    assert _sync_credit_frame(version, session_key, with_integrity_id).hex() == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version, session_key, with_integrity_id, expected", _CREDIT_FRAMES)
+async def test_async_credit_update_frame_matches_sync(
+    version: int, session_key: bytes | None, with_integrity_id: bool, expected: str
+) -> None:
+    frame = await _async_credit_frame(version, session_key, with_integrity_id)
+
+    assert frame == _sync_credit_frame(version, session_key, with_integrity_id)
+    assert frame.hex() == expected
+
+
+@pytest.mark.asyncio
+async def test_async_credit_update_carries_the_session_key_hmac() -> None:
+    frame = await _async_credit_frame(ProtocolVersion.V1, _CREDIT_SESSION_KEY, True)
+
+    version, length, consumed = decode_header(frame)
+    body = frame[consumed : consumed + length]
+    request = bytes.fromhex(_CREDIT_REQUEST + "00")
+    assert version == ProtocolVersion.V3
+    assert body[0] == 0x20
+    assert body[1:33] == hmac.new(_CREDIT_SESSION_KEY[:24], request, hashlib.sha256).digest()
+    assert body[33:] == request
+    assert frame[consumed + length :] == bytes([0x72, ProtocolVersion.V3, 0, 0])
+
+
 class TestNotificationQueue:
     def test_send_request_queues_interleaved_notification(self) -> None:
         connection = S7CommPlusConnection("127.0.0.1")

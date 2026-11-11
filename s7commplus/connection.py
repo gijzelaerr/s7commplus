@@ -1067,6 +1067,31 @@ def _frame_request(request: bytes, protocol_version: int, session_key: Optional[
     return frame + struct.pack(">BBH", 0x72, protocol_version, 0x0000)
 
 
+def _build_subscription_credit_frame(
+    subscription_id: int,
+    credit_limit: int,
+    sequence: int,
+    session_id: int,
+    integrity_id: Optional[int],
+    protocol_version: int,
+    session_key: Optional[bytes],
+) -> bytes:
+    """Frame the fire-and-forget SetVariable that replenishes a subscription's credits.
+
+    Shared by both clients, so a SessionKey session gets the same V3 framing and
+    HMAC from either. ``integrity_id`` is the write counter, or ``None`` on a
+    session without IntegrityIds.
+    """
+    if not 1 <= credit_limit <= 255:
+        raise ValueError("credit_limit must be between 1 and 255")
+    value = bytes([0x00, DataType.INT]) + struct.pack(">h", credit_limit)
+    payload = _build_set_variable_payload(subscription_id, Ids.SUBSCRIPTION_CREDIT_LIMIT, value)
+    header = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.SET_VARIABLE, 0, sequence, session_id, 0x74)
+    integrity = encode_uint32_vlq(integrity_id) if integrity_id is not None else b""
+    request = header + payload[:-4] + integrity + payload[-4:]
+    return _frame_request(request, protocol_version, session_key)
+
+
 def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_version: int, object_qualifier_version: int) -> int:
     """ObjectQualifier layout version of ``write_symbolic`` and the subscription deletes.
 
@@ -2022,22 +2047,18 @@ class S7CommPlusConnection:
         """Replenish finite notification credits without waiting for a reply."""
         if not 1 <= credit_limit <= 255:
             raise ValueError("credit_limit must be between 1 and 255")
-        value = bytes([0x00, DataType.INT]) + struct.pack(">h", credit_limit)
-        payload = _build_set_variable_payload(subscription_id, Ids.SUBSCRIPTION_CREDIT_LIMIT, value)
         with self._request_lock:
             if not (self._connected or self._session_ready):
                 raise S7ConnectionError("Not connected")
-            sequence = self._next_sequence_number()
-            header = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.SET_VARIABLE, 0, sequence, self._session_id, 0x74)
-            integrity = encode_uint32_vlq(self._integrity_id_write) if self._with_integrity_id else b""
-            request = header + payload[:-4] + integrity + payload[-4:]
-            version = ProtocolVersion.V3 if self._session_key is not None else self._protocol_version
-            if self._session_key is not None:
-                digest = hmac.new(self._session_key[:24], request, hashlib.sha256).digest()
-                body = b"\x20" + digest + request
-            else:
-                body = request
-            frame = encode_header(version, len(body)) + body + struct.pack(">BBH", 0x72, version, 0)
+            frame = _build_subscription_credit_frame(
+                subscription_id,
+                credit_limit,
+                self._next_sequence_number(),
+                self._session_id,
+                self._integrity_id_write if self._with_integrity_id else None,
+                self._protocol_version,
+                self._session_key,
+            )
             self._send_s7_data(frame)
             if self._with_integrity_id:
                 self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF

@@ -110,6 +110,7 @@ from .connection import (
     _check_v1_legitimation_response,
     _derive_oms_secret,
     _encode_security_key_struct,
+    _build_subscription_credit_frame,
     _frame_request,
     _generate_session_key_blob,
     _incoming_frame_opcode,
@@ -2350,17 +2351,18 @@ class S7CommPlusAsyncClient:
         """Send a fire-and-forget update before finite credits expire."""
         if not 1 <= credit_limit <= 255:
             raise ValueError("credit_limit must be between 1 and 255")
-        value = bytes([0x00, DataType.INT]) + struct.pack(">h", credit_limit)
-        payload = _build_set_variable_payload(subscription_id, Ids.SUBSCRIPTION_CREDIT_LIMIT, value)
         async with self._lock:
             if not self._connected or self._writer is None or self._reader is None or self._blocked_by_rebuild():
                 raise S7NotConnectedError("Not connected")
-            sequence = self._next_sequence_number()
-            header = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.SET_VARIABLE, 0, sequence, self._session_id, 0x74)
-            integrity = encode_uint32_vlq(self._integrity_id_write) if self._with_integrity_id else b""
-            request = header + payload[:-4] + integrity + payload[-4:]
-            frame = encode_header(self._protocol_version, len(request)) + request
-            frame += struct.pack(">BBH", 0x72, self._protocol_version, 0)
+            frame = _build_subscription_credit_frame(
+                subscription_id,
+                credit_limit,
+                self._next_sequence_number(),
+                self._session_id,
+                self._integrity_id_write if self._with_integrity_id else None,
+                self._protocol_version,
+                self._session_key,
+            )
             await self._send_cotp_dt(frame)
             if self._with_integrity_id:
                 self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
