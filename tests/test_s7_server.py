@@ -198,6 +198,24 @@ class TestClientServerIntegration:
         with pytest.raises(NotImplementedError):
             S7CommPlusClient().set_plc_operating_state(3)
 
+    def test_block_transfer_refuses_without_sending(self, server: S7CommPlusServer) -> None:
+        """The guessed block upload and download requests raise and send nothing."""
+        with S7CommPlusClient() as client:
+            client.connect("127.0.0.1", port=server.port)
+            assert client._connection is not None
+            sent = client._connection._sequence_number
+            with pytest.raises(NotImplementedError, match="Uploading a block"):
+                client.upload_block(0x08, 1)
+            with pytest.raises(NotImplementedError, match="Downloading a block"):
+                client.download_block(0x08, 1, b"\x00")
+            assert client._connection._sequence_number == sent
+
+    def test_block_transfer_refuses_when_not_connected(self) -> None:
+        with pytest.raises(NotImplementedError):
+            S7CommPlusClient().upload_block(0x08, 1)
+        with pytest.raises(NotImplementedError):
+            S7CommPlusClient().download_block(0x08, 1, b"\x00")
+
     def test_context_manager(self, server: S7CommPlusServer) -> None:
         with S7CommPlusClient() as client:
             client.connect("127.0.0.1", port=server.port)
@@ -676,6 +694,17 @@ class TestAsyncClientServerIntegration:
                 await client.set_plc_operating_state(1)
             assert client._sequence_number == sent
             assert await client.get_cpu_state() in ("RUN", "STOP", "UNKNOWN")
+
+    async def test_block_transfer_refuses_without_sending(self, server: S7CommPlusServer) -> None:
+        """The guessed block upload and download requests raise and send nothing."""
+        async with S7CommPlusAsyncClient() as client:
+            await client.connect("127.0.0.1", port=server.port)
+            sent = client._sequence_number
+            with pytest.raises(NotImplementedError, match="Uploading a block"):
+                await client.upload_block(0x08, 1)
+            with pytest.raises(NotImplementedError, match="Downloading a block"):
+                await client.download_block(0x08, 1, b"\x00")
+            assert client._sequence_number == sent
 
     async def test_explore_xml(self, server: S7CommPlusServer) -> None:
         """Test explore_xml returns None on emulated server (no zlib blobs)."""

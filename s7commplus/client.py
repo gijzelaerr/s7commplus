@@ -1790,60 +1790,44 @@ class S7CommPlusClient:
         return _parse_cpu_state(response)
 
     def upload_block(self, block_type: int, block_number: int) -> bytes:
-        """Upload (read) a program block from the PLC.
+        """Upload (read) a program block from the PLC. Not implemented yet.
 
-        .. warning:: This method is **experimental** and may change.
+        Earlier versions sent a guessed GET_VAR_SUBSTREAMED request that follows
+        no captured exchange, and returned whatever came back without checking
+        the PLC's return value. Until the request is derived from a real block
+        upload and validated on hardware, this refuses without sending anything.
 
         Args:
-            block_type: Block type (e.g. 0x08 for DB, 0x0C for FC).
+            block_type: Block type.
             block_number: Block number.
 
-        Returns:
-            Raw block data.
+        Raises:
+            NotImplementedError: Always.
         """
-        if self._connection is None:
-            raise S7NotConnectedError("Not connected")
-
-        # Use GET_VAR_SUBSTREAMED to read block content
-        payload = bytearray()
-        payload += struct.pack(">I", self._connection.session_id)
-        payload += encode_uint32_vlq(1)  # item count
-        payload += encode_uint32_vlq(1)  # field count
-        payload += encode_uint32_vlq(block_type)
-        payload += encode_uint32_vlq(block_number)
-        payload += struct.pack(">I", 0)
-
-        response = self._connection.send_request(FunctionCode.GET_VAR_SUBSTREAMED, bytes(payload))
-        # Skip return code VLQ
-        offset = 0
-        _, consumed = decode_uint32_vlq(response, offset)
-        offset += consumed
-        return response[offset:]
+        raise NotImplementedError(
+            "Uploading a block is not implemented yet: the request has not been derived from a capture or validated on a real PLC"
+        )
 
     def download_block(self, block_type: int, block_number: int, data: bytes) -> None:
-        """Download (write) a program block to the PLC.
+        """Download (write) a program block to the PLC. Not implemented yet.
 
-        .. warning:: This method is **experimental** and may change.
+        Earlier versions sent a guessed SET_VAR_SUBSTREAMED request that follows
+        no captured exchange, and ignored the PLC's answer, so they could report
+        success when nothing was written. Until the request is derived from a
+        real block download and validated on hardware, this refuses without
+        sending anything.
 
         Args:
             block_type: Block type.
             block_number: Block number.
             data: Raw block data to write.
+
+        Raises:
+            NotImplementedError: Always.
         """
-        if self._connection is None:
-            raise S7NotConnectedError("Not connected")
-
-        from .codec import encode_pvalue_blob
-
-        payload = bytearray()
-        payload += struct.pack(">I", self._connection.session_id)
-        payload += encode_uint32_vlq(1)
-        payload += encode_uint32_vlq(block_type)
-        payload += encode_uint32_vlq(block_number)
-        payload += encode_pvalue_blob(data)
-        payload += struct.pack(">I", 0)
-
-        self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, bytes(payload))
+        raise NotImplementedError(
+            "Downloading a block is not implemented yet: the request has not been derived from a capture or validated on a real PLC"
+        )
 
     def list_datablocks(self) -> list[ProgramObject]:
         """List all datablocks on the PLC via EXPLORE.

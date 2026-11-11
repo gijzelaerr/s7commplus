@@ -292,9 +292,12 @@ symbolic BOOL values can behave differently on some S7-1200 firmware.
 CPU state and blocks
 --------------------
 
-The clients also expose ``get_cpu_state``, ``upload_block``, and
-``download_block``. Block downloads are intrusive operations: verify the
-controller and authorization boundary before using them.
+The clients expose ``get_cpu_state``, which returns ``"RUN"``, ``"STOP"`` or
+``"UNKNOWN"``.
+
+``upload_block`` and ``download_block`` raise ``NotImplementedError`` and send
+nothing. Their requests were guesses that follow no captured exchange and were
+never checked against a PLC.
 
 ``set_plc_operating_state`` raises ``NotImplementedError`` and sends nothing.
 The RUN/STOP request has not been validated on a real PLC yet; see
