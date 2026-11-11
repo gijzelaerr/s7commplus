@@ -20,7 +20,7 @@ from s7commplus.client import (
     _parse_program_objects,
     _parse_explore_datablocks,
 )
-from s7commplus.connection import _parse_get_var_substreamed_response, _verify_v3_hmac
+from s7commplus.connection import S7CommPlusConnection, _parse_get_var_substreamed_response, _verify_v3_hmac
 from s7commplus.protocol import DataType, ElementID, FunctionCode, Ids, LegitimationId, ObjectId, ProtocolVersion
 from s7commplus.server import (
     CPUState,
@@ -1254,7 +1254,20 @@ class TestAcceptedSessionKeyRenewal:
         finally:
             client.disconnect()
 
-    def test_timer_renews_while_requests_keep_working(self, renewal_server: S7CommPlusServer) -> None:
+    def test_timer_renews_while_requests_keep_working(
+        self, renewal_server: S7CommPlusServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The fixture has two renewal keys. Without this, the timer fires a third renewal
+        # 50 ms after the second, it fails on the exhausted key iterator and drops the
+        # connection, and a slow runner's db_read below then fails.
+        renew = S7CommPlusConnection._renew_session_key_locked
+
+        def renew_until_the_last_key(connection: S7CommPlusConnection) -> None:
+            renew(connection)
+            if connection._session_key == self.NEWER_KEY:
+                connection._session_key_refresh_interval = None  # schedule no third renewal
+
+        monkeypatch.setattr(S7CommPlusConnection, "_renew_session_key_locked", renew_until_the_last_key)
         client = S7CommPlusClient()
         client.connect("127.0.0.1", port=renewal_server.port, legacy_session_key_refresh_interval=0.05)
         try:
