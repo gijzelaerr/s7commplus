@@ -497,6 +497,71 @@ def _build_set_variable_payload(in_object_id: int, address: int, value: bytes) -
     return payload
 
 
+# Request layouts for the legacy SessionKey renewal write to address 1830.
+# "reference" is what both clients send by default; a CPU 1214C FW V4.2 (key
+# family 01) accepts it (#169). S7-1500 CPUs without TLS refuse it with a
+# request parsing error (#184). The other layouts are untested candidates for
+# those CPUs; tools/probe_session_key_renewal.py tries each one against a PLC.
+_SESSION_KEY_RENEWAL_LAYOUTS = ("reference", "v1-sequence", "v1-zero", "multi", "multi-v2", "reference-short")
+
+
+def _build_session_key_renewal_request(
+    layout: str, session_id: int, sequence_number: int, security_key: bytes
+) -> tuple[int, bytes, int]:
+    """Build the SecurityKey write of a legacy SessionKey renewal.
+
+    Args:
+        layout: One of ``_SESSION_KEY_RENEWAL_LAYOUTS``.
+
+            - ``reference``: SetVariable with the V2 ObjectQualifier, one extra
+              byte and a four-byte fill.
+            - ``v1-sequence``: SetVariable shaped like the address-323 session
+              activation TIA Portal sends on a V1 SessionKey session: the
+              ObjectQualifier carries the sequence number as a fixed uint32 and
+              the fill is three bytes.
+            - ``v1-zero``: SetVariable with the ObjectQualifier of the session
+              setup request (fixed uint32, zero) and a four-byte fill.
+            - ``multi``: SetMultiVariables with one item, laid out like the
+              session setup request that first wrote the key.
+            - ``multi-v2``: ``multi`` with the V2 ObjectQualifier, as data
+              requests of the non-TLS S7-1500 profile carry it.
+            - ``reference-short``: ``reference`` without the extra byte.
+        session_id: Session the key belongs to.
+        sequence_number: Sequence number the request header will carry.
+        security_key: Encoded SecurityKey struct.
+
+    Returns:
+        Function code, payload and the number of trailing payload bytes the
+        IntegrityId is inserted before.
+    """
+    address = LegitimationId.SESSION_SETUP_LEGITIMATION
+    if layout == "reference":
+        return FunctionCode.SET_VARIABLE, _build_set_variable_payload(session_id, address, security_key), 4
+
+    head = struct.pack(">I", session_id) + encode_uint32_vlq(1) + encode_uint32_vlq(address)
+    if layout == "v1-sequence":
+        qualifier = encode_object_qualifier(key_qualifier=sequence_number, protocol_version=ProtocolVersion.V1)
+        return FunctionCode.SET_VARIABLE, head + security_key + qualifier + bytes(3), 3
+    if layout == "v1-zero":
+        qualifier = encode_object_qualifier(protocol_version=ProtocolVersion.V1)
+        return FunctionCode.SET_VARIABLE, head + security_key + qualifier + bytes(4), 4
+    if layout == "reference-short":
+        return FunctionCode.SET_VARIABLE, head + security_key + encode_object_qualifier() + bytes(4), 4
+    if layout in ("multi", "multi-v2"):
+        qualifier_version = ProtocolVersion.V1 if layout == "multi" else ProtocolVersion.V2
+        payload = struct.pack(">I", session_id)
+        payload += encode_uint32_vlq(1)  # ItemCount
+        payload += encode_uint32_vlq(1)  # AddressCount
+        payload += encode_uint32_vlq(address)
+        payload += encode_uint32_vlq(1)  # ItemNumber
+        payload += security_key
+        payload += bytes([0x00])  # end of the value list
+        payload += encode_object_qualifier(protocol_version=qualifier_version)
+        payload += bytes(4)
+        return FunctionCode.SET_MULTI_VARIABLES, payload, 4
+    raise ValueError(f"Unknown SessionKey renewal layout: {layout!r}")
+
+
 def _check_set_variable_response(payload: bytes, function: Optional[int] = None) -> None:
     """Raise when a SetVariable response reports a refused write.
 
@@ -1369,6 +1434,7 @@ class S7CommPlusConnection:
         self._v1_session_key_family = KeyFamily.S7_1500
         self._session_key_fingerprint_override: Optional[str] = None
         self._session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL
+        self._session_key_renewal_layout = "reference"
         self._session_key_refresh_timer: Optional[threading.Timer] = None
         self._session_key_refresh_generation = 0
         self._session_key_refresh_error: Optional[Exception] = None
@@ -2027,8 +2093,10 @@ class S7CommPlusConnection:
             raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
         blob, new_session_key = authenticate_session_key(challenge, self._v1_session_key_public_key, self._v1_session_key_family)
         security_key = self._encode_security_key_struct(blob, new_session_key)
-        renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
-        renewal_response = self._send_request(FunctionCode.SET_VARIABLE, renewal_payload, 4, False)
+        function_code, renewal_payload, integrity_tail = _build_session_key_renewal_request(
+            self._session_key_renewal_layout, self._session_id, self._sequence_number, security_key
+        )
+        renewal_response = self._send_request(function_code, renewal_payload, integrity_tail, False)
         _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")

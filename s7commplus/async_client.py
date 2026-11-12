@@ -100,6 +100,7 @@ from .connection import (
     _build_get_var_substreamed_payload,
     _build_session_activate_payload,
     _build_session_setup_frame,
+    _build_session_key_renewal_request,
     _build_set_variable_payload,
     _build_v1_get_var_substreamed_payload,
     _build_v1_legitimation_payload,
@@ -278,6 +279,7 @@ class S7CommPlusAsyncClient:
         self._session_id: int = 0
         self._subscription_container_id: int = 0
         self._sequence_number: int = 0
+        self._session_key_renewal_layout = "reference"
         self._protocol_version: int = 0
         self._transport_connected = False
         self._request_timeout = 5.0
@@ -1231,8 +1233,10 @@ class S7CommPlusAsyncClient:
         security_key = _encode_security_key_struct(
             self._v1_session_key_public_key, self._v1_session_key_family, blob, new_session_key
         )
-        renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
-        renewal_response = await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4)
+        function_code, renewal_payload, integrity_tail = _build_session_key_renewal_request(
+            self._session_key_renewal_layout, self._session_id, self._sequence_number, security_key
+        )
+        renewal_response = await self._send_request_locked(function_code, renewal_payload, integrity_tail)
         _check_set_variable_response(renewal_response, self._last_response_function)
         self._session_key = new_session_key
         logger.info("Legacy SessionKey renewed successfully")
