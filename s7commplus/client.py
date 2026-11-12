@@ -773,7 +773,11 @@ class S7CommPlusClient:
             allow_legacy_key_fallback: Try known same-family public keys on
                 fresh sessions when a legacy PLC omits its key id.
             legacy_session_key_refresh_interval: Seconds between legacy
-                SessionKey renewals, or ``None`` to disable them.
+                SessionKey renewals, or ``None`` to disable them. Only an
+                S7-1200 (key family 01) renews; an S7-1500 or PLCSIM session
+                without TLS refuses the renewal, so none is sent and the PLC
+                ends the session when the key expires (after one hour on a
+                CPU 1517-3).
             timeout: Seconds for the TCP connect and the COTP, InitSSL, TLS
                 and CreateObject handshake together.
             request_timeout: Seconds to wait for each reply once the handshake

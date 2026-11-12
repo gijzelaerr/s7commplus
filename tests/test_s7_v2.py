@@ -1703,7 +1703,10 @@ class TestLegacySessionKeyRefresh:
         assert conn._session_key == old_key
 
     def test_short_interval_renews_while_requests_remain_usable(self) -> None:
+        from s7commplus.v1_session_key.keys import KeyFamily
+
         conn = self._authenticated_connection()
+        conn._v1_session_key_family = KeyFamily.S7_1200
         conn._session_key_refresh_interval = 0.01
         renewed = threading.Event()
         conn._renew_session_key_locked = MagicMock(side_effect=renewed.set)
@@ -1737,16 +1740,24 @@ class TestLegacySessionKeyRefresh:
         with pytest.raises(ValueError, match="must be positive"):
             conn.connect(legacy_session_key_refresh_interval=0)
 
-    def test_plcsim_family_does_not_schedule_renewal(self) -> None:
+    @pytest.mark.parametrize("family_name", ["S7_1500", "PLCSIM"])
+    def test_family_that_refuses_renewal_does_not_schedule_it(self, family_name: str) -> None:
         from s7commplus.v1_session_key.keys import KeyFamily
 
         conn = self._authenticated_connection()
-        conn._v1_session_key_family = KeyFamily.PLCSIM
+        conn._v1_session_key_family = KeyFamily[family_name]
         conn._session_key_refresh_interval = 0.01
         conn._schedule_session_key_refresh()
-        # PLCSIM resets the connection on a renewal SecurityKey write, so the
-        # session must not schedule one.
+        # An S7-1500 answers the renewal SecurityKey write with a fatal
+        # SystemEvent (#184) and PLCSIM resets the connection, so the session
+        # must not schedule one.
         assert conn._session_key_refresh_timer is None
+
+    def test_only_the_s7_1200_family_renews(self) -> None:
+        from s7commplus.connection import _renews_session_key
+        from s7commplus.v1_session_key.keys import KeyFamily
+
+        assert {family for family in KeyFamily if _renews_session_key(family)} == {KeyFamily.S7_1200}
 
 
 class TestSessionKeyDescriptors:

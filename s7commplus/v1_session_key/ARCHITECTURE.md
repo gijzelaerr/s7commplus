@@ -55,8 +55,9 @@ uses **V3 framing** with HMAC-SHA256 keyed by the 24-byte session key. It calls
 empty password, before reporting a connected client. This documents the
 implemented call path, not a guarantee for every PLC/firmware combination.
 
-Legacy SessionKeys are renewed every 25 minutes by default, before the PLC's
-key expiry window. Renewal reads a fresh challenge from address 303 and writes
+On an S7-1200 (key family 01) the legacy SessionKey is renewed every 25 minutes
+by default, before the PLC's key expiry window. Renewal reads a fresh challenge
+from address 303 and writes
 a new SecurityKey to address 1830 while holding the same lock as application
 requests. The PLC's response is authenticated with the old key; the new key is
 installed only after that response is verified and accepted. A renewal failure
@@ -67,7 +68,14 @@ The interval is configurable in seconds through
 low-level connection method). Pass `None` to disable automatic renewal. This
 timer applies only to legacy V1-initial SessionKey sessions; TLS sessions do not
 start it. It is also skipped for key family 03 (PLCSIM), whose firmware resets
-the connection on a renewal SecurityKey write (see the family-03 note below).
+the connection on a renewal SecurityKey write (see the family-03 note below),
+and for key family 00 (S7-1500). A CPU 1512C-1 PN FW V2.5 and two CPU 1517-3
+PN/DP (FW V2.9 and V3.0) answer the SecurityKey write to address 1830 with a
+fatal SystemEvent, request parsing error, and the connection is lost; on the
+1517-3 FW V3.0 six request layouts gave the same answer (#184). Without a renewal the 1517-3 ends
+the session one hour after the connect, so a client that stays connected longer
+has to reconnect before then. What a Siemens client does at that point is not
+known.
 
 Activation and firmware-specific failures require protocol evidence, not
 changes to the arithmetic models. The CPU1515/FW2.9 investigation is tracked
