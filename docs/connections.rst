@@ -82,6 +82,11 @@ determine it. The following combinations have been reported on real hardware:
      - V4.2
      - V1, legacy SessionKey
      - Validated (sync and async, reads and browse; writes untested)
+   * - S7-1500 CPU 1512C-1 PN (6ES7 512-1CK00-0AB0)
+     - V2.5
+     - V1, legacy SessionKey
+     - Validated read-only (browse and symbolic reads on optimized blocks, polled for ten days). The SessionKey
+       renewal is refused and the connection is lost (#184)
    * - S7-1515-2 PN
      - V2.9
      - V1, legacy SessionKey
