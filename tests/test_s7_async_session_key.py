@@ -368,6 +368,7 @@ async def test_async_error_frame_never_installs_generated_key() -> None:
 @pytest.mark.asyncio
 async def test_async_short_interval_renews_and_disconnect_stops_it() -> None:
     client = _authenticated_client()
+    client._v1_session_key_family = KeyFamily.S7_1200
     client._session_key_refresh_interval = 0.01
     renewed = asyncio.Event()
     client._renew_session_key_locked = AsyncMock(side_effect=renewed.set)  # type: ignore[method-assign]
@@ -385,6 +386,7 @@ async def test_async_short_interval_renews_and_disconnect_stops_it() -> None:
 @pytest.mark.asyncio
 async def test_async_refresh_failure_is_terminal_and_surfaces_on_next_request() -> None:
     client = _authenticated_client()
+    client._v1_session_key_family = KeyFamily.S7_1200
     client._session_key_refresh_interval = 0.01
     client._renew_session_key_locked = AsyncMock(side_effect=S7ConnectionError("PLC rejected key"))  # type: ignore[method-assign]
     client._schedule_session_key_refresh()
@@ -399,14 +401,14 @@ async def test_async_refresh_failure_is_terminal_and_surfaces_on_next_request() 
 
 
 @pytest.mark.asyncio
-async def test_async_plcsim_family_does_not_schedule_renewal() -> None:
-    from s7commplus.v1_session_key.keys import KeyFamily
-
+@pytest.mark.parametrize("family", [KeyFamily.S7_1500, KeyFamily.PLCSIM])
+async def test_async_family_that_refuses_renewal_does_not_schedule_it(family: KeyFamily) -> None:
     client = _authenticated_client()
-    client._v1_session_key_family = KeyFamily.PLCSIM
+    client._v1_session_key_family = family
     client._session_key_refresh_interval = 0.01
     client._schedule_session_key_refresh()
-    # PLCSIM resets the connection on a renewal SecurityKey write.
+    # An S7-1500 answers the renewal SecurityKey write with a fatal SystemEvent
+    # (#184) and PLCSIM resets the connection.
     assert client._session_key_refresh_task is None
 
 

@@ -122,6 +122,7 @@ from .connection import (
     _resolve_use_tls,
     _parse_protection_level_response,
     _patch_plcsim_server_session_version,
+    _renews_session_key,
     _request_frame_overhead,
     _resolve_session_key_fingerprint,
     _session_setup_accepted,
@@ -526,7 +527,11 @@ class S7CommPlusAsyncClient:
             allow_legacy_key_fallback: Try known same-family public keys on
                 fresh sessions when a legacy PLC omits its key id.
             legacy_session_key_refresh_interval: Seconds between legacy
-                SessionKey renewals, or ``None`` to disable them.
+                SessionKey renewals, or ``None`` to disable them. Only an
+                S7-1200 (key family 01) renews; an S7-1500 or PLCSIM session
+                without TLS refuses the renewal, so none is sent and the PLC
+                ends the session when the key expires (after one hour on a
+                CPU 1517-3).
             timeout: Seconds for the TCP connect and the COTP, InitSSL, TLS
                 and CreateObject handshake together.
             request_timeout: Seconds to wait for each reply once the handshake
@@ -1185,11 +1190,12 @@ class S7CommPlusAsyncClient:
         interval = self._session_key_refresh_interval
         if interval is None or self._session_key is None or not self._connected:
             return
-        if self._v1_session_key_family == KeyFamily.PLCSIM:
-            # PLCSIM Advanced FW 2.8 resets the connection when the SessionKey is
-            # re-sent to address 1830, so an automatic renewal would kill a
-            # long-lived session. Skip it and keep the session alive.
-            logger.info("PLCSIM session: automatic SessionKey renewal disabled (key family 03 resets the connection on renewal)")
+        if not _renews_session_key(self._v1_session_key_family):
+            logger.info(
+                "Automatic SessionKey renewal is not sent for key family %02x, which refuses it; "
+                "the PLC ends the session when the key expires, so reconnect before then",
+                int(self._v1_session_key_family),
+            )
             return
         self._session_key_refresh_task = asyncio.get_running_loop().create_task(self._session_key_refresh_loop(interval))
 

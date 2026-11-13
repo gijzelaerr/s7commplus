@@ -1125,6 +1125,22 @@ def _alarm_texts_and_domain_filter(family: Optional[KeyFamily]) -> bool:
     return family != KeyFamily.S7_1200
 
 
+def _renews_session_key(family: Optional[KeyFamily]) -> bool:
+    """Whether a legacy session of this key family renews its SessionKey on a timer.
+
+    Only a CPU 1214C FW V4.2 (key family 01) is known to accept the SecurityKey
+    write to address 1830 on an established session (#169). S7-1500 CPUs (key
+    family 00: 1512C-1 PN FW V2.5, 1517-3 PN/DP FW V2.9 and V3.0) refuse it with
+    a fatal SystemEvent, request parsing error, and the connection is lost; a
+    1517-3 FW V3.0 did so for six request layouts (#184). PLCSIM Advanced FW V2.8 (key family 03) resets
+    the connection, with the SET_VARIABLE layout and with the session-setup
+    SET_MULTI_VARIABLES one (#83). On those two a renewal would end the session
+    it is meant to extend, so none is sent; the CPU ends the session when the
+    key expires, after one hour on the 1517-3.
+    """
+    return family == KeyFamily.S7_1200
+
+
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
     """Bytes a request frame adds to its payload, for sizing requests.
 
@@ -1578,7 +1594,10 @@ class S7CommPlusConnection:
                 ``use_tls=True``.
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals. Defaults to 25 minutes; pass ``None`` to
-                disable automatic renewal.
+                disable automatic renewal. Only an S7-1200 (key family 01)
+                renews; an S7-1500 or PLCSIM session without TLS refuses the
+                renewal, so none is sent and the PLC ends the session when
+                the key expires (after one hour on a CPU 1517-3).
             request_timeout: Seconds to wait for the reply to each request
                 after step 4 (and for each further part of a multi-part
                 reply), or ``None`` to use ``timeout``. A reply that does not
@@ -1978,12 +1997,12 @@ class S7CommPlusConnection:
         interval = self._session_key_refresh_interval
         if interval is None or self._session_key is None or not self._connected:
             return
-        if self._v1_session_key_family == KeyFamily.PLCSIM:
-            # PLCSIM Advanced FW 2.8 resets the connection when the SessionKey is
-            # re-sent to address 1830, with either the SET_VARIABLE renewal layout
-            # or the session-setup SET_MULTI_VARIABLES one, so an automatic renewal
-            # would kill a long-lived session. Skip it and keep the session alive.
-            logger.info("PLCSIM session: automatic SessionKey renewal disabled (key family 03 resets the connection on renewal)")
+        if not _renews_session_key(self._v1_session_key_family):
+            logger.info(
+                "Automatic SessionKey renewal is not sent for key family %02x, which refuses it; "
+                "the PLC ends the session when the key expires, so reconnect before then",
+                int(self._v1_session_key_family),
+            )
             return
         generation = self._session_key_refresh_generation
         timer = threading.Timer(interval, self._session_key_refresh_callback, args=(generation,))
