@@ -1,6 +1,89 @@
 CHANGES
 =======
 
+0.6.0 (2026-11-14)
+------------------
+
+An S7-1500 session without TLS no longer loses its connection every 25 minutes,
+return values are decoded in full, block interfaces have their own module that
+also reads OBs, FCs and library FBs, and 51 more member types have a name.
+Nothing in this release was run on a PLC except where an entry says so.
+
+### Upgrading from 0.5.0
+
+Most applications need no changes. Check the following if you use them:
+
+* `S7ReturnValueError.error_code` now holds the subsystem's own 32-bit code when
+  the ReturnValue names a source other than the object management system (bits
+  39..32 non-zero). It used to hold the sign-extended low 16 bits, which for
+  those sources is not a `ServiceResult` value. Check `exc.result.source` before
+  comparing `error_code` against `ServiceResult`. Values from the object
+  management system (source 0) are unchanged (#154).
+* `service_result_code()` is deprecated in favour of
+  `ReturnValue.from_int(value).code`. It is unchanged, but the replacement does
+  not always return the same value: when the return value names another
+  subsystem as its source, `ReturnValue.code` is that subsystem's own 32-bit
+  code, while `service_result_code()` keeps returning the sign-extended low 16
+  bits. `0x800000200000FFF4` gives -12 from `service_result_code()` and 65524
+  from `ReturnValue.code` (#154).
+* Constructing `S7ReturnValueError` directly with a `return_value` outside the
+  signed or unsigned 64-bit range now raises `ValueError` (#154).
+* `legacy_session_key_refresh_interval` has no effect on an S7-1500 session
+  without TLS (key family 00); see the first bug fix below (#186).
+* `parse_block_interface()` raises `BlockInterfaceError` for malformed XML. It
+  is both an `xml.etree.ElementTree.ParseError` and a `ValueError`, so existing
+  handlers keep working (#153).
+* `Member.data_type` and `SOFTDATATYPE` now spell `IEC_Counter` and `IEC_Timer`
+  as `IEC_COUNTER` and `IEC_TIMER`, the spelling of the PLC's `Type` attribute.
+  The 51 newly named types (see the new features below) no longer come back as
+  `SoftType#<id>`. Update code that compares against the old spelling or against
+  `SoftType#<id>` for one of those types (#189).
+
+### New features
+
+* `ReturnValue` decodes a full S7CommPlus return value into its failure,
+  extension and from-responder flags, generic category, error source and code.
+  `GenericError` lists the generic categories, `ServiceResult` covers the full
+  OMS code table, and `ErrorSource` names every subsystem.
+  `S7ReturnValueError.result` holds the decoded value, and the error message
+  names the code, category and source (#154).
+* `BlockInterface`, `BlockInterfaceError`, `resolve_id_path()`,
+  `Member.element_type` and `Member.referenced_type` were added.
+  `block_interface_from_explore()` and `parse_block_interface()` keep working
+  and now delegate to `BlockInterface` (#153).
+* `find_preset_stream()` returns the offset of the preferred preset-dictionary
+  stream in an EXPLORE payload. Callers that need a specific stream can pass the
+  offset to `decompress_blob()`. It takes a tuple of kinds, most preferred
+  first, or a single kind (#153).
+* `BlockInterface`, `BlockInterfaceError`, `resolve_id_path()` and
+  `find_preset_stream()` are exported from `s7commplus` (#153).
+* `SOFTDATATYPE` names 51 more SoftDataType ids: the IEC timer and counter
+  variants, `Remote`, `ErrorStruct`, `NREF`, `CREF`, and the hardware, OB,
+  event, connection, DB and OPC UA system types. `Member.data_type` returns
+  these names instead of `SoftType#<id>`. The ids and names were confirmed by
+  browsing test blocks on an S7-1500 (6ES7 512-1CK01, FW V2.9). Their values
+  are not decoded yet (#170, #189).
+
+### Bug fixes and hardening
+
+* An S7-1500 session without TLS (key family 00) no longer loses its connection
+  every 25 minutes. The CPU refuses the legacy SessionKey renewal with a fatal
+  SystemEvent, so the client no longer sends it; only an S7-1200 (key family 01)
+  renews. Such a session now lasts until the CPU ends it, after one hour on a
+  CPU 1517-3. The refusal was seen on a CPU 1512C-1 PN FW V2.5 and on two CPU
+  1517-3 PN/DP (FW V2.9 and V3.0); the change itself was not run on a PLC
+  (#184, #186).
+* `parse_block_interface()` and `block_interface_from_explore()` now return the
+  variables of OBs, FCs and library FBs, named constants included. Their
+  interfaces keep a section's variables inside the section header, which the
+  parser skipped, so these blocks came back with no members or with Temp only
+  (#153).
+
+### Documentation
+
+* The hardware table lists the CPU 1512C-1 PN FW V2.5 (V1 SessionKey session
+  without TLS, validated read-only) (#185, #187).
+
 0.5.0 (2026-11-11)
 ------------------
 
