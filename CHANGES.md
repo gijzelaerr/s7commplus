@@ -1,13 +1,13 @@
 CHANGES
 =======
 
-0.6.0 (2026-11-13)
+0.6.0 (2026-11-14)
 ------------------
 
 An S7-1500 session without TLS no longer loses its connection every 25 minutes,
-return values are decoded in full, and block interfaces have their own module
-that also reads OBs, FCs and library FBs. Nothing in this release was run on a
-PLC except where an entry says so.
+return values are decoded in full, block interfaces have their own module that
+also reads OBs, FCs and library FBs, and 51 more member types have a name.
+Nothing in this release was run on a PLC except where an entry says so.
 
 ### Upgrading from 0.5.0
 
@@ -33,6 +33,11 @@ Most applications need no changes. Check the following if you use them:
 * `parse_block_interface()` raises `BlockInterfaceError` for malformed XML. It
   is both an `xml.etree.ElementTree.ParseError` and a `ValueError`, so existing
   handlers keep working (#153).
+* `Member.data_type` and `SOFTDATATYPE` now spell `IEC_Counter` and `IEC_Timer`
+  as `IEC_COUNTER` and `IEC_TIMER`, the spelling of the PLC's `Type` attribute.
+  The 51 newly named types (see the new features below) no longer come back as
+  `SoftType#<id>`. Update code that compares against the old spelling or against
+  `SoftType#<id>` for one of those types (#189).
 
 ### New features
 
@@ -52,6 +57,12 @@ Most applications need no changes. Check the following if you use them:
   first, or a single kind (#153).
 * `BlockInterface`, `BlockInterfaceError`, `resolve_id_path()` and
   `find_preset_stream()` are exported from `s7commplus` (#153).
+* `SOFTDATATYPE` names 51 more SoftDataType ids: the IEC timer and counter
+  variants, `Remote`, `ErrorStruct`, `NREF`, `CREF`, and the hardware, OB,
+  event, connection, DB and OPC UA system types. `Member.data_type` returns
+  these names instead of `SoftType#<id>`. The ids and names were confirmed by
+  browsing test blocks on an S7-1500 (6ES7 512-1CK01, FW V2.9). Their values
+  are not decoded yet (#170, #189).
 
 ### Bug fixes and hardening
 
