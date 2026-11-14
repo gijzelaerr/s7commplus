@@ -19,6 +19,7 @@ import pytest
 
 from s7commplus.blob_decompressor import iter_preset_streams
 from s7commplus.block_interface import (
+    SOFTDATATYPE,
     BlockInterface,
     BlockInterfaceError,
     Member,
@@ -429,6 +430,115 @@ def test_parse_block_interface_types():
     ]
 
 
+def test_softdatatype_names_confirmed_ids():
+    """Pin the name of every SoftDataType id that was confirmed on hardware.
+
+    The ids were confirmed by browsing blocks that declare each type on an S7-1500 (6ES7 512-1CK01, FW V2.9).
+    New names use the PLC's spelling from the member's Type attribute, or TIA's type keyword when the member has none.
+    A failure means an entry of ``SOFTDATATYPE`` was renamed or removed, which changes ``Member.data_type`` for users.
+    """
+    # Source: https://github.com/gijzelaerr/s7commplus/issues/170#issuecomment-6831952583
+    confirmed_datatypes_s7_1500 = {
+        0: "Void",
+        1: "Bool",
+        2: "Byte",
+        3: "Char",
+        4: "Word",
+        5: "Int",
+        6: "DWord",
+        7: "DInt",
+        8: "Real",
+        9: "Date",
+        10: "TimeOfDay",
+        11: "Time",
+        12: "S5Time",
+        14: "DateAndTime",
+        19: "String",
+        20: "Pointer",
+        22: "Any",
+        23: "BlockFB",
+        24: "BlockFC",
+        28: "Counter",
+        29: "Timer",
+        30: "IEC_COUNTER",
+        31: "IEC_TIMER",
+        48: "LReal",
+        49: "ULInt",
+        50: "LInt",
+        51: "LWord",
+        52: "USInt",
+        53: "UInt",
+        54: "UDInt",
+        55: "SInt",
+        61: "WChar",
+        62: "WString",
+        63: "Variant",
+        64: "LTime",
+        65: "LTimeOfDay",
+        66: "LDT",
+        67: "DTL",
+        68: "IEC_LTIMER",
+        69: "IEC_SCOUNTER",
+        70: "IEC_DCOUNTER",
+        71: "IEC_LCOUNTER",
+        72: "IEC_UCOUNTER",
+        73: "IEC_USCOUNTER",
+        74: "IEC_UDCOUNTER",
+        75: "IEC_ULCOUNTER",
+        96: "Remote",
+        97: "ErrorStruct",
+        98: "NREF",
+        101: "CREF",
+        128: "AOM_IDENT",
+        129: "EVENT_ANY",
+        130: "EVENT_ATT",
+        134: "EVENT_HWINT",
+        144: "HW_ANY",
+        145: "HW_IOSYSTEM",
+        146: "HW_DPMASTER",
+        147: "HW_DEVICE",
+        148: "HW_DPSLAVE",
+        149: "HW_IO",
+        150: "HW_MODULE",
+        151: "HW_SUBMODULE",
+        152: "HW_HSC",
+        153: "HW_PWM",
+        154: "HW_PTO",
+        155: "HW_INTERFACE",
+        156: "HW_IEPORT",
+        160: "OB_ANY",
+        161: "OB_DELAY",
+        162: "OB_TOD",
+        163: "OB_CYCLIC",
+        164: "OB_ATT",
+        168: "CONN_ANY",
+        169: "CONN_PRG",
+        170: "CONN_OUC",
+        171: "CONN_R_ID",
+        173: "PORT",
+        174: "RTM",
+        175: "PIP",
+        192: "OB_PCYCLE",
+        193: "OB_HWINT",
+        195: "OB_DIAG",
+        196: "OB_TIMEERROR",
+        197: "OB_STARTUP",
+        200: "OPC_UA_LocalizedTextEncodingMask",
+        201: "OPC_UA_ByteStringActualLength",
+        208: "DB_ANY",
+        209: "DB_WWW",
+        210: "DB_DYN",
+    }
+    assert {
+        softdatatype: SOFTDATATYPE[softdatatype] for softdatatype in confirmed_datatypes_s7_1500
+    } == confirmed_datatypes_s7_1500
+
+
+def test_parse_block_interface_names_unknown_softdatatype_by_id():
+    xml = '<BlockInterface><Part><Payload><Root><Member ID="1" Name="m" RID="0x0200004f" StdO="0" LID="1" /></Root></Payload></Part></BlockInterface>'
+    assert parse_block_interface(xml) == [Member("m", "SoftType#79", 1, 0, 0x0200004F, id=1)]
+
+
 def test_member_without_id_matches_no_path_segment():
     # regression: a missing ID defaults to 0, and segment "0" resolved to this member
     xml = (
@@ -688,7 +798,7 @@ def test_block_interface_from_live_s7_1500_nested_struct_db():
                     id=51,
                 ),
                 # The PLC stores this name already mojibake'd (UTF-8 "¬ß" for "§" etc.); it is asserted as sent.
-                Member("Special_!¬ß$%&/()=?`¬¥\\+~*'#_-:.,<>|@^¬∞‚Ç¨¬µ{[]}", "SoftType#149", 18, 240, 0x02000095, id=52),
+                Member("Special_!¬ß$%&/()=?`¬¥\\+~*'#_-:.,<>|@^¬∞‚Ç¨¬µ{[]}", "HW_IO", 18, 240, 0x02000095, id=52),
             ],
         ),
         leaf("Leaf1", 288),
