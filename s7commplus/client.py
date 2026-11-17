@@ -69,6 +69,8 @@ from .protocol import (
     FunctionCode,
     Ids,
     ProtocolVersion,
+    ReturnValue,
+    ServiceResult,
     block_language_name,
     remote_tsap_for_connection_type,
 )
@@ -256,14 +258,15 @@ def _db_read_values(response: bytes, count: int) -> list[bytes]:
 def _write_item_errors(response: bytes, count: int) -> dict[int, int]:
     """Return the PLC error of each refused item in a SetMultiVariables answer, numbered from 1.
 
-    A request refused as a whole (non-zero return value) refuses each of its
-    ``count`` items with that value. An answer naming an item outside
-    ``1..count``, or one item twice, raises ``RuntimeError``.
+    A request refused as a whole (see `_write_errors_or_refusal`) refuses each
+    of its ``count`` items with the request's return value. An answer naming an
+    item outside ``1..count``, or one item twice, raises ``RuntimeError``.
     """
-    return_value, _ = decode_uint64_vlq(response, 0)
-    if return_value != 0:
+    errors = _write_errors_or_refusal(response, expected_count=count)
+    if errors is None:
+        return_value, _ = decode_uint64_vlq(response, 0)
         return dict.fromkeys(range(1, count + 1), return_value)
-    return _parse_write_response_errors(response, expected_count=count)
+    return errors
 
 
 def _write_refused(item_errors: dict[int, int]) -> S7WriteError:
@@ -2582,12 +2585,46 @@ def _parse_write_response(response: bytes) -> None:
 
 
 def _parse_write_response_errors(response: bytes, expected_count: Optional[int] = None) -> dict[int, int]:
-    """Return the per-item PLC errors in a SetMultiVariables response."""
-    return_value, consumed = decode_uint64_vlq(response, 0)
-    offset = consumed
-    if return_value != 0:
-        raise RuntimeError(f"Write failed with return value {return_value}")
+    """Return the per-item PLC errors in a SetMultiVariables response.
 
+    Raises:
+        RuntimeError: If the PLC refused the request as a whole (see
+            `_write_errors_or_refusal`), or the answer names an item outside
+            ``1..expected_count`` or one item twice.
+    """
+    errors = _write_errors_or_refusal(response, expected_count)
+    if errors is None:
+        return_value, _ = decode_uint64_vlq(response, 0)
+        raise RuntimeError(f"Write failed with return value {return_value}")
+    return errors
+
+
+def _write_errors_or_refusal(response: bytes, expected_count: Optional[int]) -> Optional[dict[int, int]]:
+    """Return the per-item errors of a SetMultiVariables response, or ``None`` if it was refused as a whole.
+
+    When the PLC refuses some items of a request, it sets the ReturnValue to
+    SERVICE_EXECUTED_WITH_PARTIAL_ERROR and lists the refused items (#193); an
+    S7-1500 (CPU 1512C-1 PN, FW V2.9) answers a one-item write of the wrong
+    type with ``0x202C800000E50013`` and the item's own error. Such a reply is
+    returned per item when its list names at least one item. A reply with any
+    other non-zero ReturnValue, or a partial error without a readable item
+    list, is a request refused as a whole: no item can be taken as written.
+    """
+    return_value, offset = decode_uint64_vlq(response, 0)
+    if return_value == 0:
+        return _parse_write_error_list(response, offset, expected_count)
+    result = ReturnValue.from_int(return_value)
+    if result.source != 0 or result.code != ServiceResult.SERVICE_EXECUTED_WITH_PARTIAL_ERROR:
+        return None
+    try:
+        errors = _parse_write_error_list(response, offset, expected_count)
+    except ValueError:  # the item list is cut off
+        return None
+    return errors or None
+
+
+def _parse_write_error_list(response: bytes, offset: int, expected_count: Optional[int]) -> dict[int, int]:
+    """Parse the error list of a SetMultiVariables reply, starting at ``offset``."""
     errors: dict[int, int] = {}
     while offset < len(response):
         err_item_nr, consumed = decode_uint32_vlq(response, offset)

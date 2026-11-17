@@ -18,6 +18,9 @@ from s7commplus.client import (
     _parse_read_response,
     _build_write_payload,
     _parse_write_response,
+    _parse_write_response_errors,
+    _record_tag_writes,
+    _write_item_errors,
     _build_explore_request,
     _parse_program_objects,
     _parse_cpu_state,
@@ -28,6 +31,8 @@ from s7commplus.client import (
     _build_symbolic_write_payload,
     _build_substreamed_write_payload,
 )
+from s7commplus.catalog import SymbolicTag, TagResult
+from s7commplus.typeinfo import Softdatatype
 from s7commplus.connection import S7CommPlusConnection, _strip_paom_string_in_session_version, _verify_v3_hmac
 from s7commplus.codec import encode_header, encode_object_qualifier, encode_pvalue_blob
 from s7commplus.codec import _pvalue_element_size as _element_size
@@ -525,6 +530,67 @@ class TestParseWriteResponse:
         response = self._build_response(return_value=0, errors=[(1, 0xDEAD)])
         with pytest.raises(RuntimeError, match="Write failed"):
             _parse_write_response(response)
+
+    # SetMultiVariables reply of an S7-1500 (6ES7 512-1CK01, FW V2.9, V2 over TLS) to a one-item
+    # write that sent UINT to a HW_IO member, which is a WORD on the wire (#193).
+    PARTIAL_ERROR_REPLY = bytes.fromhex(
+        "908b90808083ca8013"  # ReturnValue 0x202C800000E50013: SERVICE_EXECUTED_WITH_PARTIAL_ERROR (19)
+        "01"  # item 1
+        "c082b19080c5edfffe"  # error 0x800989001176FFFE: INVALID_VALUE_TYPE (-2)
+        "00"  # end of the error list
+    )
+    PARTIAL_ERROR = 0x202C800000E50013
+    ITEM_ERROR = 0x800989001176FFFE
+
+    @staticmethod
+    def _tag_results(count: int) -> list[TagResult]:
+        return [TagResult(tag=SymbolicTag(f"DB.m{i}", 0x8A0E0001, (i,), Softdatatype.UINT, DataType.UINT)) for i in range(count)]
+
+    def test_captured_partial_error_names_the_refused_item(self) -> None:
+        assert _parse_write_response_errors(self.PARTIAL_ERROR_REPLY) == {1: self.ITEM_ERROR}
+        assert _write_item_errors(self.PARTIAL_ERROR_REPLY, 1) == {1: self.ITEM_ERROR}
+        with pytest.raises(RuntimeError, match=f"^Write failed: item 1: error {self.ITEM_ERROR}$"):
+            _parse_write_response(self.PARTIAL_ERROR_REPLY)
+
+    def test_captured_partial_error_fails_its_tag_with_the_item_error(self) -> None:
+        results = self._tag_results(1)
+        _record_tag_writes(results, 0, 1, self.PARTIAL_ERROR_REPLY)
+        assert str(results[0].error) == f"Symbolic write failed for 'DB.m0': PLC error {self.ITEM_ERROR}"
+
+    # Not captured: the PLC's ReturnValue and item error from above, in a reply to a
+    # three-item request that names only item 2.
+    def test_partial_error_leaves_the_other_items_written(self) -> None:
+        response = self._build_response(self.PARTIAL_ERROR, [(2, self.ITEM_ERROR)])
+        assert _parse_write_response_errors(response, expected_count=3) == {2: self.ITEM_ERROR}
+        assert _write_item_errors(response, 3) == {2: self.ITEM_ERROR}
+        results = self._tag_results(4)
+        _record_tag_writes(results, 1, 3, response)  # the request carried tags 1, 2 and 3
+        assert [result.success for result in results] == [True, True, False, True]
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            encode_uint64_vlq(0x202C800000E50013) + b"\x00",  # no item named
+            encode_uint64_vlq(0x202C800000E50013),  # no item list at all
+            encode_uint64_vlq(0x202C800000E50013) + b"\x01\xc0\x82",  # item error cut off
+            # Another code, or code 19 of another subsystem, followed by a readable item list.
+            encode_uint64_vlq(0x8020AB001992FFF4) + bytes.fromhex("01c082b19080c5edfffe00"),
+            encode_uint64_vlq(0x202C800100000013) + bytes.fromhex("01c082b19080c5edfffe00"),
+        ],
+    )
+    def test_any_other_error_reply_refuses_the_whole_request(self, response: bytes) -> None:
+        return_value = decode_uint64_vlq(response, 0)[0]
+        with pytest.raises(RuntimeError, match=f"^Write failed with return value {return_value}$"):
+            _parse_write_response_errors(response, expected_count=2)
+        assert _write_item_errors(response, 2) == {1: return_value, 2: return_value}
+        results = self._tag_results(2)
+        _record_tag_writes(results, 0, 2, response)
+        assert [str(result.error) for result in results] == [f"Write failed with return value {return_value}"] * 2
+
+    @pytest.mark.parametrize("errors", [[(3, 0x8104)], [(1, 0x8104), (1, 0x8104)]])
+    def test_partial_error_naming_an_unexpected_or_duplicate_item_raises(self, errors: list[tuple[int, int]]) -> None:
+        with pytest.raises(RuntimeError, match="unexpected or duplicate item"):
+            _write_item_errors(self._build_response(self.PARTIAL_ERROR, errors), 2)
 
 
 class TestBuildWritePayload:
