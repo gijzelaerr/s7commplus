@@ -118,4 +118,4 @@ Every class below is also importable from ``s7commplus``. ``S7RequestError``,
 ``RuntimeError`` subclasses.
 
 .. automodule:: s7commplus.error
-   :members: S7Error, S7ConnectionError, S7NotConnectedError, S7CertificateError, S7TlsHandshakeError, S7ProtocolError, S7ReturnValueError, S7TimeoutError, S7AuthenticationError, S7RateLimitError, S7WriteError, S7SubscriptionError, S7RequestError
+   :members: S7Error, S7ConnectionError, S7NotConnectedError, S7CertificateError, S7TlsHandshakeError, S7ProtocolError, S7IntegrityError, S7ReturnValueError, S7TimeoutError, S7AuthenticationError, S7RateLimitError, S7WriteError, S7SubscriptionError, S7RequestError

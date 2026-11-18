@@ -67,3 +67,13 @@ def test_a_refused_write_item_raises_s7_request_error_with_the_same_message() ->
     reply = bytes.fromhex("908b90808083ca801301c082b19080c5edfffe00")
     with pytest.raises(S7RequestError, match=f"^Write failed: item 1: error {0x800989001176FFFE}$"):
         _parse_write_response(reply)
+
+
+def test_the_api_page_lists_exactly_the_exported_error_classes() -> None:
+    # docs/api.rst says every class it lists is importable from s7commplus.
+    api = (PACKAGE.parent / "docs" / "api.rst").read_text(encoding="utf-8")
+    match = re.search(r"automodule:: s7commplus\.error\n   :members: (.*)", api)
+    assert match is not None
+    listed = set(match.group(1).split(", "))
+    exported = {name for name in s7commplus.__all__ if name.startswith("S7") and name.endswith("Error")}
+    assert listed == exported
