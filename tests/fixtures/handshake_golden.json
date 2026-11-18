@@ -1,0 +1,402 @@
+{
+ "create_object-no_object_id": {
+  "async": {
+   "result": "error: unpack_from requires a buffer of at least 13 bytes for unpacking 4 bytes at offset 9 (actual buffer size is 12)",
+   "sent": [
+    "7201003a31000004ca0000000100000120360000011d00040000000000a1000000d3821f0000a3822c001280c3c901a1000000d3817f0000a2a20000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 0,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": null,
+    "session_challenge": null,
+    "session_id": 0,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: CreateObject response has no session ObjectId",
+   "sent": [
+    "720100b031000004ca0000000100000120360000011d00040000000000a1000000d3821f0000a3816900150a7337636f6d6d706c7573a38221001513313a3a3a362e303a3a7337636f6d6d706c7573a3822800150a7337636f6d6d706c7573a38229001500a3822a00150a7337636f6d6d706c7573a3822b000401a3822c001280c3c901a3822d001500a1000000d3817f0000a38169001515537562736372697074696f6e436f6e7461696e6572a2a20000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 0,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": null,
+    "session_challenge": null,
+    "session_id": 0,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  }
+ },
+ "create_object-s7_1215c": {
+  "async": {
+   "result": null,
+   "sent": [
+    "7201003a31000004ca0000000100000120360000011d00040000000000a1000000d3821f0000a3822c001280c3c901a1000000d3817f0000a2a20000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": "01:BD426B091F08731A",
+    "sequence_number": 2,
+    "server_session_role": 536870914,
+    "server_session_roles": null,
+    "server_session_version": "00170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": "be767496ceed7704d7aa07662c3659f9303bfdce",
+    "session_id": 949,
+    "session_key": null,
+    "subscription_container_id": 936,
+    "with_integrity_id": false
+   }
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    "720100b031000004ca0000000100000120360000011d00040000000000a1000000d3821f0000a3816900150a7337636f6d6d706c7573a38221001513313a3a3a362e303a3a7337636f6d6d706c7573a3822800150a7337636f6d6d706c7573a38229001500a3822a00150a7337636f6d6d706c7573a3822b000401a3822c001280c3c901a3822d001500a1000000d3817f0000a38169001515537562736372697074696f6e436f6e7461696e6572a2a20000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": "bd426b091f08731a",
+    "public_key_fingerprint": "01:BD426B091F08731A",
+    "sequence_number": 2,
+    "server_session_role": 536870914,
+    "server_session_roles": null,
+    "server_session_version": "00170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": "be767496ceed7704d7aa07662c3659f9303bfdce",
+    "session_id": 949,
+    "session_key": null,
+    "subscription_container_id": 936,
+    "with_integrity_id": false
+   }
+  }
+ },
+ "create_object-short": {
+  "async": {
+   "result": "S7ConnectionError: CreateObject response too short",
+   "sent": [
+    "7201003a31000004ca0000000100000120360000011d00040000000000a1000000d3821f0000a3822c001280c3c901a1000000d3817f0000a2a20000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 0,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": null,
+    "session_challenge": null,
+    "session_id": 0,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: CreateObject response too short",
+   "sent": [
+    "720100b031000004ca0000000100000120360000011d00040000000000a1000000d3821f0000a3816900150a7337636f6d6d706c7573a38221001513313a3a3a362e303a3a7337636f6d6d706c7573a3822800150a7337636f6d6d706c7573a38229001500a3822a00150a7337636f6d6d706c7573a3822b000401a3822c001280c3c901a3822d001500a1000000d3817f0000a38169001515537562736372697074696f6e436f6e7461696e6572a2a20000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 0,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": null,
+    "session_challenge": null,
+    "session_id": 0,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  }
+ },
+ "session_setup-v1-key-accepted": {
+  "async": {
+   "result": true,
+   "sent": [
+    "7202019b310000054200000001000004ca34000004ca02028e268232010017000007088e090004008e0a0002008e0b0017000007218e220005ed90d4a6f8b4d5ebd08e23000482108e24000400008e0c0017000007218e22000598e1b095c28abca09a8e2300048482018e24000400008e0d0014008150404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f0002170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f0015008240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": "101112131415161718191a1b1c1d1e1f2021222324252627",
+    "subscription_container_id": 0,
+    "with_integrity_id": true
+   }
+  },
+  "sync": {
+   "result": true,
+   "sent": [
+    "7202019b310000054200000001000004ca34000004ca02028e268232010017000007088e090004008e0a0002008e0b0017000007218e220005ed90d4a6f8b4d5ebd08e23000482108e24000400008e0c0017000007218e22000598e1b095c28abca09a8e2300048482018e24000400008e0d0014008150404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f0002170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f0015008240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": "101112131415161718191a1b1c1d1e1f2021222324252627",
+    "subscription_container_id": 0,
+    "with_integrity_id": true
+   }
+  }
+ },
+ "session_setup-v1-key-refused": {
+  "async": {
+   "result": false,
+   "sent": [
+    "7202019b310000054200000001000004ca34000004ca02028e268232010017000007088e090004008e0a0002008e0b0017000007218e220005ed90d4a6f8b4d5ebd08e23000482108e24000400008e0c0017000007218e22000598e1b095c28abca09a8e2300048482018e24000400008e0d0014008150404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f0002170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f0015008240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  },
+  "sync": {
+   "result": false,
+   "sent": [
+    "7202019b310000054200000001000004ca34000004ca02028e268232010017000007088e090004008e0a0002008e0b0017000007218e220005ed90d4a6f8b4d5ebd08e23000482108e24000400008e0c0017000007218e22000598e1b095c28abca09a8e2300048482018e24000400008e0d0014008150404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f0002170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f0015008240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  }
+ },
+ "session_setup-v1-no_key-accepted": {
+  "async": {
+   "result": true,
+   "sent": [
+    "72010088310000054200000001000004ca34000004ca0101823201170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  },
+  "sync": {
+   "result": true,
+   "sent": [
+    "7202006d310000054200000001000004ca34000004ca0101823201170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f0015008240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  }
+ },
+ "session_setup-v1-no_key-refused": {
+  "async": {
+   "result": false,
+   "sent": [
+    "72010088310000054200000001000004ca34000004ca0101823201170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072010000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  },
+  "sync": {
+   "result": false,
+   "sent": [
+    "7202006d310000054200000001000004ca34000004ca0101823201170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f0015008240001506323b313037348241000300030000000004e88969001200000000896a001300896b0004000000000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 1,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  }
+ },
+ "session_setup-v2-tls-accepted": {
+  "async": {
+   "result": true,
+   "sent": [
+    "72020086310000054200000001000004ca34000004ca0101823201170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b313037348241000300030000000004e88969001200000000896a001300896b000400000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 2,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  },
+  "sync": {
+   "result": true,
+   "sent": [
+    "7202006b310000054200000001000004ca34000004ca0101823201170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f0015008240001506323b313037348241000300030000000004e88969001200000000896a001300896b000400000000000072020000"
+   ],
+   "state": {
+    "integrity_ids": [
+     0,
+     0
+    ],
+    "protocol_version": 2,
+    "public_key_checksum": null,
+    "public_key_fingerprint": null,
+    "sequence_number": 2,
+    "server_session_role": null,
+    "server_session_roles": null,
+    "server_session_version": "170000013a823b00048400823c00048300823d00048480c200823e00048480c100823f00151b313b36455337203231352d31414734302d30584230203b56342e328240001506323b3130373482410003000300",
+    "session_challenge": null,
+    "session_id": 1226,
+    "session_key": null,
+    "subscription_container_id": 0,
+    "with_integrity_id": false
+   }
+  }
+ }
+}
