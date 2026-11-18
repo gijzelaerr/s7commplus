@@ -64,7 +64,7 @@
    "frames_read": 1,
    "invalidated": false,
    "notifications_queued": [],
-   "result": "S7ConnectionError: Response too short"
+   "result": "720300242017b1da7048c23b772e51760eeda93dfe22b4fc0c20b54e37c1862aedc4299f0332000072030000"
   },
   "sync": {
    "frames_read": 1,
@@ -300,7 +300,7 @@
    "frames_read": 1,
    "invalidated": false,
    "notifications_queued": [],
-   "result": "S7ProtocolError: Unexpected S7CommPlus opcode 0x20 while waiting for a response"
+   "result": "7203002e2021e5f3c8456015dec03e7b95050673c2a58d501af7c2cf6cdf4e6dc3c49d84d1320000054c000000283400010272030000"
   }
  }
 }

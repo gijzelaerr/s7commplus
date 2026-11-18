@@ -30,6 +30,7 @@ from .error import (
 
 from . import typeinfo
 from ._session_core import SessionCore
+from ._session_core import _Incoming, _ReplyWait
 from .blob_decompressor import find_and_decompress
 from .client import (
     _AUTO_REFRESH_MIN_INTERVAL,
@@ -90,7 +91,6 @@ from .connection import (
     _DEFAULT_EXPLORE_TIMEOUT,
     _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
     _MAX_QUEUED_NOTIFICATION_FRAMES,
-    _MAX_STALE_RESPONSES_PER_REQUEST,
     _MAX_SYSTEM_EVENTS_PER_RESPONSE,
     _S7_CIPHERS,
     FamilyOnlyFingerprintError,
@@ -109,9 +109,6 @@ from .connection import (
     _derive_oms_secret,
     _encode_security_key_struct,
     _build_subscription_credit_frame,
-    _incoming_frame_opcode,
-    _incoming_response_sequence,
-    _is_stale_response_sequence,
     _check_certificate_pin,
     _check_plaintext_fallback,
     _parse_get_var_substreamed_response,
@@ -2445,15 +2442,8 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _verified_incoming_data(self, frame: bytes) -> bytes:
         """Return application data after authenticating the complete frame."""
-        version, data_length, consumed = decode_header(frame)
-        data = bytes(frame[consumed : consumed + data_length])
-        if self._session_key is None:
-            return data
-        if version != ProtocolVersion.V3:
-            await self._invalidate_integrity_failure()
-            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
         try:
-            return _verify_v3_hmac(data, self._session_key)
+            return self._authenticated_data(frame)
         except S7IntegrityError:
             await self._invalidate_integrity_failure()
             raise
@@ -2487,52 +2477,18 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
         """Receive the next response, queueing unsolicited application frames."""
-        system_events = 0
-        stale_responses = 0
+        wait = _ReplyWait()
         while True:
             response_data = await self._recv_cotp_dt()
-            if not response_data:
-                raise S7ConnectionError("Connection closed while waiting for an S7CommPlus response")
-            version, data_length, consumed = decode_header(response_data)
-            if version == ProtocolVersion.SYSTEM_EVENT:
-                _check_system_event(bytes(response_data[consumed : consumed + data_length]))
-                system_events += 1
-                if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
-                    raise S7ProtocolError("Too many S7CommPlus SystemEvents while waiting for a response")
-                continue
-            if self._session_key is not None:
-                await self._verified_incoming_data(response_data)
-            if data_length < 10:
+            try:
+                step = self._sort_incoming(response_data, expected_sequence, wait)
+            except S7IntegrityError:
+                await self._invalidate_integrity_failure()
+                raise
+            if step is _Incoming.REPLY:
                 return response_data
-            opcode = _incoming_frame_opcode(response_data)
-            if opcode == Opcode.NOTIFICATION:
-                # See S7CommPlusConnection._recv_response_frame: a notification split
-                # over several PDUs is not reassembled.
-                if len(self._notification_frames) == self._notification_frames.maxlen:
-                    self._notification_frame_overflows += 1
-                self._notification_frames.append(response_data)
-                continue
-            if opcode not in (Opcode.RESPONSE, Opcode.RESPONSE2):
-                raise S7ProtocolError(f"Unexpected S7CommPlus opcode 0x{opcode:02X} while waiting for a response")
-            if expected_sequence is not None:
-                sequence = _incoming_response_sequence(response_data)
-                if _is_stale_response_sequence(sequence, expected_sequence):
-                    stale_responses += 1
-                    logger.warning(
-                        "Ignoring stale S7CommPlus response sequence %d while waiting for sequence %d",
-                        sequence,
-                        expected_sequence,
-                    )
-                    if stale_responses > _MAX_STALE_RESPONSES_PER_REQUEST:
-                        raise S7ProtocolError(
-                            f"Too many stale S7CommPlus responses while waiting for sequence {expected_sequence}"
-                        )
-                    if _response_continues(response_data):
-                        # Drain (and verify) the rest of a split stale response so its
-                        # fragments are not read as the next response.
-                        await self._recv_reassembled_payload(response_data)
-                    continue
-            return response_data
+            if step is _Incoming.DRAIN:
+                await self._recv_reassembled_payload(response_data)
 
     async def _recv_reassembled_payload(self, initial_data: bytes = b"", timeout: Optional[float] = None) -> bytes:
         """Receive a possibly-fragmented S7CommPlus response, returning its data section.

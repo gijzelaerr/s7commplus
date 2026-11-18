@@ -27,10 +27,11 @@ tested against an isolated, non-safety-critical controller.
   authentication, request sequencing, and V3 integrity protection
 - `s7commplus/_session_core.py`: `SessionCore`, which both `connection.py` and
   `async_client.py` inherit: session state and the I/O-free steps they share
-  (request encoding and reply checks, CreateObject, SessionSetup). Put
-  protocol logic both clients need here, not in one client; the clients keep
-  only their I/O. `tests/test_request_path_pinning.py` and
-  `tests/test_handshake_pinning.py` record what both send and keep
+  (request encoding and reply checks, sorting the frames that arrive before
+  a reply, CreateObject, SessionSetup). Put protocol logic both clients need
+  here, not in one client; the clients keep only their I/O.
+  `tests/test_request_path_pinning.py`, `tests/test_handshake_pinning.py` and
+  `tests/test_dispatcher_pinning.py` record what both send and keep
 - `s7commplus/_handshake.py`: CreateObject and SessionSetup builders and the
   V1 SessionKey blob helpers, without I/O; `connection.py` re-exports them
 - `s7commplus/transport.py`: TCP, TPKT, and COTP transport

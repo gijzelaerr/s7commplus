@@ -18,6 +18,8 @@ import hashlib
 import hmac
 import logging
 import struct
+from collections import deque
+from enum import Enum, auto
 from typing import NamedTuple, Optional
 
 from ._handshake import (
@@ -184,6 +186,124 @@ def _strip_response_integrity_id(function_code: int, payload: bytes, session_key
     return payload
 
 
+# Member id of the return value in a SystemEvent Struct.
+_SYSTEM_EVENT_RETURN_VALUE_ID = 40305
+_MAX_SYSTEM_EVENTS_PER_RESPONSE = 16
+_MAX_STALE_RESPONSES_PER_REQUEST = 16
+
+
+def _incoming_frame_opcode(frame: bytes) -> int:
+    """Return the application opcode from a complete non-SystemEvent frame."""
+    if not frame:
+        raise S7ConnectionError("Connection closed while waiting for an S7CommPlus frame")
+    version, data_length, consumed = decode_header(frame)
+    data = bytes(frame[consumed : consumed + data_length])
+    if version == ProtocolVersion.V3 and data:
+        hash_length = data[0]
+        if len(data) <= 1 + hash_length:
+            raise S7ProtocolError("Truncated S7CommPlus V3 integrity envelope")
+        data = data[1 + hash_length :]
+    if not data:
+        raise S7ProtocolError("S7CommPlus frame has no application opcode")
+    return data[0]
+
+
+def _incoming_response_sequence(frame: bytes) -> int:
+    """Return the sequence number from a complete response frame."""
+    if not frame:
+        raise S7ConnectionError("Connection closed while waiting for an S7CommPlus frame")
+    version, data_length, consumed = decode_header(frame)
+    data = bytes(frame[consumed : consumed + data_length])
+    if version == ProtocolVersion.V3 and data:
+        hash_length = data[0]
+        if len(data) <= 1 + hash_length:
+            raise S7ProtocolError("Truncated S7CommPlus V3 integrity envelope")
+        data = data[1 + hash_length :]
+    if len(data) < 10:
+        raise S7ConnectionError("Response too short")
+    return int(struct.unpack_from(">H", data, 7)[0])
+
+
+def _is_stale_response_sequence(sequence: int, expected_sequence: int) -> bool:
+    """Return whether a 16-bit response sequence precedes the expected one."""
+    distance = (expected_sequence - sequence) & 0xFFFF
+    return 0 < distance < 0x8000
+
+
+def _system_event_return_value(payload: bytes) -> Optional[int]:
+    """Return a fixed-width SystemEvent error value, if the event contains one."""
+    if len(payload) < 16:
+        raise S7ProtocolError(f"Malformed S7CommPlus SystemEvent: {payload.hex()}")
+    if len(payload) == 16:
+        return None
+
+    # A non-Struct suffix is an informational message (for example LOGOUT).
+    if len(payload) < 20 or int.from_bytes(payload[16:20], "big") != DataType.STRUCT:
+        return None
+    if len(payload) < 24:
+        raise S7ProtocolError(f"Malformed S7CommPlus SystemEvent Struct: {payload.hex()}")
+
+    offset = 24  # fixed-width PValue header + Struct id
+    scalar_sizes: dict[int, int] = {
+        DataType.BOOL: 1,
+        DataType.USINT: 1,
+        DataType.UINT: 2,
+        DataType.UDINT: 4,
+        DataType.ULINT: 8,
+        DataType.SINT: 1,
+        DataType.INT: 2,
+        DataType.DINT: 4,
+        DataType.LINT: 8,
+        DataType.BYTE: 1,
+        DataType.WORD: 2,
+        DataType.DWORD: 4,
+        DataType.LWORD: 8,
+        DataType.REAL: 4,
+        DataType.LREAL: 8,
+        DataType.TIMESTAMP: 8,
+        DataType.TIMESPAN: 8,
+        DataType.RID: 4,
+        DataType.AID: 4,
+    }
+
+    while offset + 4 <= len(payload):
+        member_id = int.from_bytes(payload[offset : offset + 4], "big")
+        offset += 4
+        if member_id == 0:
+            break
+        if offset + 4 > len(payload):
+            raise S7ProtocolError(f"Malformed S7CommPlus SystemEvent member: {payload.hex()}")
+
+        flags = payload[offset + 1]
+        datatype = payload[offset + 3]
+        offset += 4
+        if flags != 0:
+            raise S7ProtocolError(f"Unsupported S7CommPlus SystemEvent member flags 0x{flags:02X}: {payload.hex()}")
+
+        size = scalar_sizes.get(datatype)
+        if size is None or offset + size > len(payload):
+            raise S7ProtocolError(f"Unsupported or truncated S7CommPlus SystemEvent datatype 0x{datatype:02X}: {payload.hex()}")
+        if member_id == _SYSTEM_EVENT_RETURN_VALUE_ID:
+            if datatype != DataType.LINT:
+                raise S7ProtocolError(f"Malformed S7CommPlus SystemEvent ReturnValue: {payload.hex()}")
+            return int.from_bytes(payload[offset : offset + size], "big", signed=True)
+        offset += size
+
+    # The reference driver treats a data Struct without ReturnValue as fatal.
+    raise S7ProtocolError(f"S7CommPlus SystemEvent Struct has no ReturnValue: {payload.hex()}")
+
+
+def _check_system_event(payload: bytes) -> None:
+    """Raise for fatal/malformed SystemEvents; ignore confirmations/messages."""
+    return_value = _system_event_return_value(payload)
+    if return_value is not None and return_value < 0:
+        raise S7ProtocolError(
+            f"Fatal S7CommPlus SystemEvent return_value={return_value}: {payload.hex()}",
+            error_code=return_value,
+        )
+    logger.debug("Ignoring non-fatal S7CommPlus SystemEvent (%d bytes)", len(payload))
+
+
 class _PendingRequest(NamedTuple):
     """A request that `SessionCore._encode_request` framed, for sending and for checking its reply."""
 
@@ -193,6 +313,24 @@ class _PendingRequest(NamedTuple):
     #: Which IntegrityId counter the request used: True for the read counter,
     #: False for the write counter, None when it carried no IntegrityId.
     reads: Optional[bool]
+
+
+class _Incoming(Enum):
+    """What a reply wait does with a frame; see `SessionCore._sort_incoming`."""
+
+    REPLY = auto()
+    SKIP = auto()
+    DRAIN = auto()
+
+
+class _ReplyWait:
+    """Counts the SystemEvents and stale replies one wait for a reply skipped."""
+
+    __slots__ = ("system_events", "stale_responses")
+
+    def __init__(self) -> None:
+        self.system_events = 0
+        self.stale_responses = 0
 
 
 class SessionCore:
@@ -223,6 +361,8 @@ class SessionCore:
     _server_session_roles: Optional[int]
     _session_key_fingerprint_override: Optional[str]
     _v1_session_key_public_key: bytes
+    _notification_frames: deque[bytes]
+    _notification_frame_overflows: int
 
     @property
     def legacy_s7_1500(self) -> bool:
@@ -637,3 +777,82 @@ class SessionCore:
             logger.info("SecurityKey accepted by PLC, IntegrityId tracking enabled")
         logger.info("Session setup completed successfully")
         return True
+
+    # --- Sorting the frames that arrive while a reply is awaited ---
+
+    def _authenticated_data(self, frame: bytes) -> bytes:
+        """Return a frame's application data, authenticated when a SessionKey is set.
+
+        Raises:
+            S7IntegrityError: A SessionKey session received a frame that is
+                not V3, or whose HMAC is wrong. The caller must then close the
+                session: its stream can no longer be trusted.
+        """
+        version, data_length, consumed = decode_header(frame)
+        data = bytes(frame[consumed : consumed + data_length])
+        if self._session_key is None:
+            return data
+        if version != ProtocolVersion.V3:
+            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
+        return _verify_v3_hmac(data, self._session_key)
+
+    def _sort_incoming(self, frame: bytes, expected_sequence: Optional[int], wait: _ReplyWait) -> _Incoming:
+        """Decide what to do with one frame received while waiting for a reply.
+
+        Non-fatal SystemEvents are skipped and notifications queued (both
+        return `_Incoming.SKIP`). A stale reply, one to an earlier request, is
+        skipped too, or must first be drained when more of its fragments
+        follow (`_Incoming.DRAIN`). Anything else that is a response is the
+        reply (`_Incoming.REPLY`). ``wait`` counts what this wait skipped.
+
+        Raises:
+            S7IntegrityError: As for `_authenticated_data`; the caller must
+                close the session.
+            S7ProtocolError: A fatal or malformed SystemEvent, too many
+                SystemEvents or stale replies, or an unexpected opcode.
+        """
+        if not frame:
+            raise S7ConnectionError("Connection closed while waiting for an S7CommPlus response")
+        version, data_length, consumed = decode_header(frame)
+        if version == ProtocolVersion.SYSTEM_EVENT:
+            _check_system_event(bytes(frame[consumed : consumed + data_length]))
+            wait.system_events += 1
+            if wait.system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
+                raise S7ProtocolError("Too many S7CommPlus SystemEvents while waiting for a response")
+            return _Incoming.SKIP
+        data = self._authenticated_data(frame)
+        if self._session_key is None and version == ProtocolVersion.V3 and data:
+            # Without a SessionKey nothing verifies the V3 envelope, but the
+            # application data still starts after it.
+            hash_length = data[0]
+            if len(data) <= 1 + hash_length:
+                raise S7ProtocolError("Truncated S7CommPlus V3 integrity envelope")
+            data = data[1 + hash_length :]
+        if len(data) < 10:
+            return _Incoming.REPLY
+        opcode = data[0]
+        if opcode == Opcode.NOTIFICATION:
+            # Notifications are queued as single frames. One the PLC splits over
+            # several PDUs is not reassembled: its continuation fragments would
+            # fail the next read, and no split notification has been observed.
+            if len(self._notification_frames) == self._notification_frames.maxlen:
+                self._notification_frame_overflows += 1
+            self._notification_frames.append(frame)
+            return _Incoming.SKIP
+        if opcode not in (Opcode.RESPONSE, Opcode.RESPONSE2):
+            raise S7ProtocolError(f"Unexpected S7CommPlus opcode 0x{opcode:02X} while waiting for a response")
+        if expected_sequence is not None:
+            sequence = int.from_bytes(data[7:9], "big")
+            if _is_stale_response_sequence(sequence, expected_sequence):
+                wait.stale_responses += 1
+                logger.warning(
+                    "Ignoring stale S7CommPlus response sequence %d while waiting for sequence %d",
+                    sequence,
+                    expected_sequence,
+                )
+                if wait.stale_responses > _MAX_STALE_RESPONSES_PER_REQUEST:
+                    raise S7ProtocolError(f"Too many stale S7CommPlus responses while waiting for sequence {expected_sequence}")
+                # Drain (and verify) the rest of a split stale response so its
+                # fragments are not read as the next response.
+                return _Incoming.DRAIN if _response_continues(frame) else _Incoming.SKIP
+        return _Incoming.REPLY

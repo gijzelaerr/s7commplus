@@ -5,7 +5,11 @@ reply dispatcher, which skips non-fatal SystemEvents, queues notifications,
 drops stale replies and returns the reply. It records what the dispatcher
 returned or raised, how many frames it read, what it queued and whether it
 closed the session for an integrity failure. The golden file was first
-recorded from the two separate implementations. Set
+recorded from the two separate implementations, which agreed on all but two
+cases; the shared dispatcher takes the length of a SessionKey frame after its
+HMAC (as the sync client did) and reads past the V3 envelope of a frame
+without a SessionKey (as the async client did), and the file was re-recorded
+with those two changes. Set
 ``S7_RECORD_DISPATCHER=1`` to rewrite it.
 """
 
@@ -185,3 +189,8 @@ def test_sync_dispatcher_matches_the_recording(name: str) -> None:
 @pytest.mark.parametrize("name", list(CASES))
 def test_async_dispatcher_matches_the_recording(name: str) -> None:
     assert _run_async(name) == _GOLDEN[name]["async"]
+
+
+@pytest.mark.parametrize("name", list(CASES))
+def test_sync_and_async_dispatchers_agree(name: str) -> None:
+    assert _run_sync(name) == _run_async(name)
