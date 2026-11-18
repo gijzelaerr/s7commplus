@@ -2605,8 +2605,10 @@ def _write_errors_or_refusal(response: bytes, expected_count: Optional[int]) -> 
     When the PLC refuses some items of a request, it sets the ReturnValue to
     SERVICE_EXECUTED_WITH_PARTIAL_ERROR and lists the refused items (#193); an
     S7-1500 (CPU 1512C-1 PN, FW V2.9) answers a one-item write of the wrong
-    type with ``0x202C800000E50013`` and the item's own error. Such a reply is
-    returned per item when its list names at least one item. A reply with any
+    type with ``0x202C800000E50013`` and the item's own error. In a mixed batch
+    the same PLC writes the good items and lists only the refused ones; when it
+    refuses every item it still answers code 19 and lists them all. Such a
+    reply is returned per item when its list names at least one item. A reply with any
     other non-zero ReturnValue, or a partial error without a readable item
     list, is a request refused as a whole: no item can be taken as written.
     """
