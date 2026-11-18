@@ -50,6 +50,7 @@ s7commplus = [
     "v1_session_key/MODEL_BENCHMARKS.md",
     "v1_session_key/LICENSE-HarpoS7",
     "zlib_dicts/*.xml",
+    "zlib_dicts/NOTICE-S7CommPlusDriver",
 ]
 
 [tool.setuptools.packages.find]

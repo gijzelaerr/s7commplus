@@ -1,0 +1,18 @@
+The zlib preset dictionaries in this directory (the *.xml files) were
+extracted from S7CommPlusDriver by Thomas Wiens:
+
+  https://github.com/thomas-v2/S7CommPlusDriver
+  src/S7CommPlusDriver/Core/BlobDecompressor.cs
+
+  Copyright (C) 2023 Thomas Wiens
+
+S7CommPlusDriver is free software: you can redistribute it and/or modify it
+under the terms of the GNU Lesser General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option)
+any later version. See https://www.gnu.org/licenses/lgpl-3.0.html and
+https://www.gnu.org/licenses/gpl-3.0.html for the license texts.
+
+Each file holds one dictionary, named by the Adler-32 checksum that identifies
+it in a zlib header. The rest of the s7commplus package is under the MIT
+license in the repository's LICENSE file; this notice does not change the
+license of these files.
