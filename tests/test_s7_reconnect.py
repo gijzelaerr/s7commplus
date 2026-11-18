@@ -146,6 +146,19 @@ async def test_async_refused_authenticate_keeps_the_stored_credentials() -> None
     assert client._connect_params == {"password": "known", "username": ""}
 
 
+@pytest.mark.parametrize(("level", "password"), [(1, "secret"), (3, "")], ids=["full_access", "no_password"])
+async def test_async_authenticate_that_sends_nothing_keeps_the_stored_credentials(level: int, password: str) -> None:
+    client = S7CommPlusAsyncClient()
+    client._connect_params = {"password": "known", "username": ""}
+    client._connection._connected = True
+    client._connection._tls_active = True
+    client._connection._protection_level = level
+    with _legitimation(client, level_after=1), patch.object(client._connection, "_send_request", AsyncMock()) as sent:
+        await client.authenticate(password, "operator")  # nothing to legitimate
+    sent.assert_not_awaited()
+    assert client._connect_params == {"password": "known", "username": ""}
+
+
 async def test_async_reconnect_reuses_the_password_and_username_of_authenticate(tls_server: tuple[int, str]) -> None:
     port, cert_path = tls_server
     client = S7CommPlusAsyncClient()

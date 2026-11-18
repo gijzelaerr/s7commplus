@@ -264,12 +264,24 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
     @property
     def secured_session(self) -> bool:
-        """Whether the PLC advertised a secured session requiring SessionKey auth."""
+        """Whether the PLC advertised a secured session requiring SessionKey auth.
+
+        Read from the ServerSession.Role attribute of the CreateObject
+        response (bit 0x20000000, observed set on secured PLCs in TIA Portal
+        captures; not verified against a live PLC). ``False`` when the PLC did
+        not report a role, which includes every PLC that does not implement
+        the attribute.
+        """
         return self._connection.secured_session
 
     @property
     def server_session_roles(self) -> Optional[int]:
-        """The ServerSession.Roles mask (attribute 305), or ``None``."""
+        """The ServerSession.Roles mask (attribute 305), or ``None``.
+
+        The mask of every role the session may take, as opposed to the single
+        `Role` that `secured_session` reads. The individual bit meanings are
+        not decoded; ``None`` when the PLC did not send the attribute.
+        """
         return self._connection.server_session_roles
 
     @property
@@ -284,17 +296,31 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
     @property
     def session_oms_version(self) -> Optional[tuple[int, Optional[int]]]:
-        """(SystemOMS, ProjectOMS) negotiated for the session, or ``None``."""
+        """(SystemOMS, ProjectOMS) negotiated for the session, or ``None``.
+
+        SystemOMS is the OMS session version (64..448, V1..V7); ProjectOMS is
+        the loaded project's version, where an explicit 0 means the controller
+        has no project loaded and ``None`` means the element was not sent.
+        ``None`` for the whole tuple before connect or when unreadable.
+        """
         return self._connection.session_oms_version
 
     @property
     def object_qualifier_version(self) -> int:
-        """Protocol version whose ObjectQualifier layout data requests use."""
+        """Protocol version whose ObjectQualifier layout data requests use.
+
+        The opt-in non-TLS profile sends the V2 layout although the session
+        negotiated V1; its PLCs reset the connection on the V1 layout.
+        """
         return self._connection.object_qualifier_version
 
     @property
     def write_delete_qualifier_version(self) -> int:
-        """ObjectQualifier layout version of ``write_symbolic`` and the subscription deletes."""
+        """ObjectQualifier layout version of ``write_symbolic`` and the subscription deletes.
+
+        See ``_write_delete_qualifier_version``: PLCSIM and the S7-1200 use
+        :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
+        """
         return self._connection.write_delete_qualifier_version
 
     @property
