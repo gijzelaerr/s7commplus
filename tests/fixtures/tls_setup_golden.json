@@ -92,7 +92,7 @@
    "sequence_number": 1
   },
   "sync": {
-   "result": null,
+   "result": "S7ConnectionError: InitSSL response too short",
    "sent": [
     "7201001231000005b30000000000000000300000000072010000"
    ],

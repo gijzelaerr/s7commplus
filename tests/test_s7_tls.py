@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from s7commplus.error import S7CertificateError, S7ConnectionError
-from s7commplus import connection
+from s7commplus import _tls, connection
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.legitimation import build_new_response, derive_legitimation_key
@@ -600,7 +600,7 @@ class TestTlsKeyLog:
             with caplog.at_level(logging.WARNING, logger="s7commplus.connection"):
                 with connection._tls_key_log(ctx) as keylog_path:
                     Path(keylog_path).write_bytes(secret_line.encode())
-                    monkeypatch.setattr(connection.os, "unlink", refuse_unlink)
+                    monkeypatch.setattr(_tls.os, "unlink", refuse_unlink)
             assert f"Could not remove the TLS key log {keylog_path}" in caplog.text
             assert "11" * 32 not in caplog.text
             assert ctx.keylog_filename is None

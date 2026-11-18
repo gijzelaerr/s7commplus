@@ -80,7 +80,6 @@ from .client import (
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
 from .codec import (
     SERVER_SESSION_ROLE_SECURED_BIT,
-    decode_header,
     encode_header,
     parse_create_object_session_id,
     parse_or_raise_for_return_value,
@@ -89,7 +88,6 @@ from .connection import (
     _DEFAULT_EXPLORE_TIMEOUT,
     _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
     _MAX_QUEUED_NOTIFICATION_FRAMES,
-    _S7_CIPHERS,
     FamilyOnlyFingerprintError,
     SessionKeyAuthenticationDependencyError,
     SessionKeyCandidateRejectedError,
@@ -100,7 +98,6 @@ from .connection import (
     _check_set_variable_response,
     _check_timeout,
     _check_v1_legitimation_response,
-    _derive_oms_secret,
     _encode_security_key_struct,
     _build_subscription_credit_frame,
     _check_certificate_pin,
@@ -111,12 +108,10 @@ from .connection import (
     _renews_session_key,
     _request_frame_overhead,
     _resolve_session_key_fingerprint,
-    _set_s7_groups,
     _sends_session_activation,
     _tls_key_log,
     _write_delete_qualifier_version,
     _response_continues,
-    _verify_pinned_certificate,
 )
 from .subscription import (
     SubscriptionDiagnostics,
@@ -829,58 +824,18 @@ class S7CommPlusAsyncClient(SessionCore):
         """Activate TLS over the COTP connection."""
         if self._writer is None:
             raise S7ConnectionError("Cannot activate TLS: not connected")
-
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-
-        ctx.set_ciphers(_S7_CIPHERS)
-        _set_s7_groups(ctx)
-        ctx.options |= ssl.OP_NO_TICKET
-        ctx.options |= 0x00080000  # SSL_OP_NO_ENCRYPT_THEN_MAC
-        ctx.options |= 0x00000001  # SSL_OP_NO_EXTENDED_MASTER_SECRET (OpenSSL 3.0+)
-
-        if tls_cert and tls_key:
-            ctx.load_cert_chain(tls_cert, tls_key)
-
-        if tls_ca:
-            ctx.load_verify_locations(tls_ca)
-        else:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-
-        # BIO-based TLS: encrypt/decrypt in memory so the TLS records can be tunneled
-        # through COTP DT frames (TPKT/COTP stay unencrypted) — `start_tls` would instead
-        # wrap the whole TCP stream, encrypting TPKT/COTP too, which the PLC rejects.
-        self._incoming_bio = ssl.MemoryBIO()
-        self._outgoing_bio = ssl.MemoryBIO()
-
-        # The OMS exporter secret, which new legitimation needs, is derived
-        # from the handshake's key log (see _tls_key_log).
+        ctx = self._setup_ssl_context(cert_path=tls_cert, key_path=tls_key, ca_path=tls_ca)
         with _tls_key_log(ctx) as keylog_path:
-            self._ssl_object = ctx.wrap_bio(
-                self._incoming_bio,
-                self._outgoing_bio,
-                server_side=False,
-                server_hostname=self._host if ctx.check_hostname else None,
-            )
-
+            # Read the host only when it is checked: it is set by connect().
+            self._start_tls_session(ctx, self._host if ctx.check_hostname else None)
+            # TLS handshake: records tunnel through COTP frames
             try:
                 await self._do_tls_handshake()
             except ssl.SSLCertVerificationError as exc:
                 raise S7CertificateError(f"PLC TLS certificate failed verification: {exc.verify_message}") from exc
             except (ssl.SSLError, OSError, EOFError, asyncio.TimeoutError, S7Error) as exc:
                 raise S7TlsHandshakeError(f"TLS handshake with the PLC did not complete: {exc}") from exc
-            self._tls_active = True
-
-            # Pin the PLC certificate before any application data is trusted.
-            # Not an assert: the check must also hold under ``python -O``.
-            if self._ssl_object is None:
-                raise S7ConnectionError("TLS session was closed during the handshake")
-            self._peer_certificate_fingerprint = _verify_pinned_certificate(self._ssl_object, self._tls_cert_fingerprint)
-
-            self._oms_secret = _derive_oms_secret(self._ssl_object, keylog_path)
-
-        logger.info("TLS activated (tunneled inside COTP frames)")
+            self._tls_session_established(keylog_path)
 
     async def _do_tls_handshake(self) -> None:
         """Perform the TLS handshake, tunneling records through COTP DT frames."""
@@ -983,14 +938,6 @@ class S7CommPlusAsyncClient(SessionCore):
         await self._close()
         self._session_key_refresh_error = None
         self._connect_params = None
-
-    def peer_certificate_fingerprint(self) -> Optional[bytes]:
-        """SHA-256 of the PLC's TLS certificate, or None without TLS.
-
-        The raw 32-byte digest; ``.hex()`` gives the hex string that
-        ``tls_cert_fingerprint`` takes.
-        """
-        return self._peer_certificate_fingerprint
 
     async def _close(self) -> None:
         """Tear down the session and transport, keeping the connect parameters and any renewal failure."""
@@ -2466,32 +2413,9 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _init_ssl(self) -> None:
         """Send InitSSL request (required before CreateObject)."""
-        seq_num = self._next_sequence_number()
-
-        request = struct.pack(
-            ">BHHHHIB",
-            Opcode.REQUEST,
-            0x0000,
-            FunctionCode.INIT_SSL,
-            0x0000,
-            seq_num,
-            0x00000000,
-            0x30,
-        )
-        request += struct.pack(">I", 0)
-
-        frame = encode_header(ProtocolVersion.V1, len(request)) + request
-        frame += struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
-        await self._send_cotp_dt(frame)
-
-        response_data = await self._recv_cotp_dt()
-        version, data_length, consumed = decode_header(response_data)
-        response = response_data[consumed : consumed + data_length]
-
-        if len(response) < 10:
-            raise S7ConnectionError("InitSSL response too short")
-
-        logger.debug(f"InitSSL response received, version=V{version}")
+        pending = self._encode_init_ssl()
+        await self._send_cotp_dt(pending.frame)
+        self._check_init_ssl_reply(await self._recv_cotp_dt())
 
     async def _create_session(self) -> None:
         """Send CreateObject to establish S7CommPlus session."""

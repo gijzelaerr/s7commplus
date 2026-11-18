@@ -28,16 +28,19 @@ tested against an isolated, non-safety-critical controller.
 - `s7commplus/_session_core.py`: `SessionCore`, which both `connection.py` and
   `async_client.py` inherit: session state and the I/O-free steps they share
   (request encoding and reply checks, sorting the frames that arrive before
-  a reply, reassembling a split reply, CreateObject, SessionSetup, password
-  legitimation). Put protocol
-  logic both clients need here, not in one client; the clients keep only
-  their I/O.
+  a reply, reassembling a split reply, InitSSL and the TLS session setup,
+  CreateObject, SessionSetup, password legitimation). Put protocol logic both
+  clients need here, not in one client; the clients keep only their I/O.
   `tests/test_request_path_pinning.py`, `tests/test_handshake_pinning.py`,
-  `tests/test_dispatcher_pinning.py`, `tests/test_reassembly_pinning.py` and
-  `tests/test_legitimation_pinning.py` record what both send and keep
+  `tests/test_dispatcher_pinning.py`, `tests/test_reassembly_pinning.py`,
+  `tests/test_legitimation_pinning.py` and `tests/test_tls_setup_pinning.py`
+  record what both send and keep
 - `s7commplus/_handshake.py`: CreateObject, SessionSetup and legitimation
   request builders and reply checks, and the V1 SessionKey blob helpers,
   without I/O; `connection.py` re-exports them
+- `s7commplus/_tls.py`: TLS inside COTP without I/O: the cipher and group
+  settings, certificate pinning and the OMS exporter secret from the key log;
+  `connection.py` re-exports them
 - `s7commplus/transport.py`: TCP, TPKT, and COTP transport
 - `s7commplus/protocol.py`: protocol constants and enums; excluded from
   pre-commit because its formatting is intentionally preserved

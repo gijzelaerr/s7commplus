@@ -4,7 +4,10 @@ The TLS handshake itself is random on the wire, so it is covered end to end by
 the emulator tests in ``test_s7_tls.py``. These cases record what is
 deterministic: the InitSSL request each client sends and what it makes of the
 reply, and the settings of the context it hands to the handshake. The golden
-file was first recorded from the two separate implementations. Set
+file was first recorded from the two separate implementations, which agreed
+on everything but an InitSSL reply with nine bytes of data: the sync connection
+counted the frame trailer as data and accepted it. Both now refuse it, and the
+file was re-recorded with that change. Set
 ``S7_RECORD_TLS_SETUP=1`` to rewrite it.
 """
 
@@ -151,3 +154,12 @@ def test_sync_tls_context_matches_the_recording() -> None:
 
 def test_async_tls_context_matches_the_recording() -> None:
     assert _async_context() == _GOLDEN["context"]["async"]
+
+
+@pytest.mark.parametrize("name", list(INIT_SSL_REPLIES))
+def test_sync_and_async_init_ssl_agree(name: str) -> None:
+    assert _sync_init_ssl(name) == _async_init_ssl(name)
+
+
+def test_sync_and_async_tls_contexts_agree() -> None:
+    assert _sync_context() == _async_context()

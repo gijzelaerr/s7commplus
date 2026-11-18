@@ -1448,7 +1448,7 @@ class TestV3ResponseIntegrity:
 
     def test_valid_digest_uses_constant_time_comparison(self) -> None:
         protected = self._protected(b"authenticated response")
-        with patch("s7commplus.connection.hmac.compare_digest", wraps=hmac.compare_digest) as compare:
+        with patch("s7commplus._session_core.hmac.compare_digest", wraps=hmac.compare_digest) as compare:
             assert _verify_v3_hmac(protected, self.KEY) == b"authenticated response"
         compare.assert_called_once()
 
