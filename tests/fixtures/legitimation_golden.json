@@ -1,0 +1,582 @@
+{
+ "authenticate-full_access": {
+  "async": {
+   "result": null,
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 1
+   }
+  },
+  "sync": {
+   "result": null,
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 1
+   }
+  }
+ },
+ "authenticate-legacy-accepted": {
+  "async": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 1
+   }
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 1
+   }
+  }
+ },
+ "authenticate-legacy-level_unreadable": {
+  "async": {
+   "result": "S7ConnectionError: Legitimation outcome is unverifiable: the PLC stopped reporting its protection level",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": null
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: Legitimation outcome is unverifiable: the PLC stopped reporting its protection level",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": null
+   }
+  }
+ },
+ "authenticate-legacy-refused": {
+  "async": {
+   "result": "S7ConnectionError: Legitimation failed, protection level unchanged at 3: the password was refused",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: Legitimation failed, protection level unchanged at 3: the password was refused",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "authenticate-legacy-set_refused": {
+  "async": {
+   "result": "S7ConnectionError: Legitimation rejected by PLC: return_value=0x800989001176FFFE",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: Legitimation rejected by PLC: return_value=0x800989001176FFFE",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "700001230182301002142aa0e41c489345ae5a6379539a9663757beb2230000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "authenticate-legacy-short_challenge": {
+  "async": {
+   "result": "S7ConnectionError: Unexpected legacy challenge length: 5",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: Unexpected legacy challenge length: 5",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "authenticate-new-accepted": {
+  "async": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "70000123018e36001400309684b6c8432d6fa5d5a57c46e4936167049ef5e04514e35111d7f7f467ef3ce49caf1089bb5a2c8864d033e266c2bbf4000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": "eb8a50f5e24c1bafa487cf73ac0a798a294f1f40db099138c53904d483bfe9fc",
+    "protection_level": 1
+   }
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1266,
+     "70000123018e36001400309684b6c8432d6fa5d5a57c46e4936167049ef5e04514e35111d7f7f467ef3ce49caf1089bb5a2c8864d033e266c2bbf4000004e88969001200000000896a001300896b000400000000000000",
+     4
+    ],
+    [
+     1414,
+     "700001232004018e32000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": "eb8a50f5e24c1bafa487cf73ac0a798a294f1f40db099138c53904d483bfe9fc",
+    "protection_level": 1
+   }
+  }
+ },
+ "authenticate-new-no_oms_secret": {
+  "async": {
+   "result": "S7ConnectionError: New legitimation requires the TLS OMS exporter secret, which could not be derived from this TLS session.",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: New legitimation requires the TLS OMS exporter secret, which could not be derived from this TLS session.",
+   "sent": [
+    [
+     1414,
+     "70000123200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "authenticate-no_level": {
+  "async": {
+   "result": "S7ConnectionError: PLC does not report a protection level, so legitimation cannot be verified",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": null
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: PLC does not report a protection level, so legitimation cannot be verified",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": null
+   }
+  }
+ },
+ "authenticate-no_password": {
+  "async": {
+   "result": null,
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": null,
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "authenticate-no_tls": {
+  "async": {
+   "result": "S7ConnectionError: Legitimation requires TLS. Connect with use_tls=True.",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: Legitimation requires TLS. Connect with use_tls=True.",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "authenticate-no_version": {
+  "async": {
+   "result": "S7ConnectionError: PLC firmware version does not support legitimation",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: PLC firmware version does not support legitimation",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "authenticate-not_connected": {
+  "async": {
+   "result": "S7NotConnectedError: Not connected",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  },
+  "sync": {
+   "result": "S7ConnectionError: Not connected",
+   "sent": [],
+   "state": {
+    "oms_secret": null,
+    "protection_level": 3
+   }
+  }
+ },
+ "post_auth-plcsim-accepted": {
+  "async": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b0004000000010014001703303132333435363738393a3b3c3d3e3f40414243707700000000",
+     4
+    ]
+   ]
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b0004000000010014001703303132333435363738393a3b3c3d3e3f40414243707700000000",
+     4
+    ]
+   ]
+  }
+ },
+ "post_auth-s7_1200-accepted": {
+  "async": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000501000000",
+     3
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b000400000005010014001701303132333435363738393a3b3c3d3e3f40414243707705000000",
+     3
+    ]
+   ]
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000501000000",
+     3
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b000400000005010014001701303132333435363738393a3b3c3d3e3f40414243707705000000",
+     3
+    ]
+   ]
+  }
+ },
+ "post_auth-s7_1500-accepted": {
+  "async": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b000400000005010014001700303132333435363738393a3b3c3d3e3f40414243707705000000",
+     3
+    ]
+   ]
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b000400000005010014001700303132333435363738393a3b3c3d3e3f40414243707705000000",
+     3
+    ]
+   ]
+  }
+ },
+ "post_auth-s7_1500-no_session_key": {
+  "async": {
+   "result": "S7ConnectionError: Post-auth legitimation failed: no session key",
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ]
+  },
+  "sync": {
+   "result": "S7ConnectionError: Post-auth legitimation failed: no session key",
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ]
+  }
+ },
+ "post_auth-s7_1500-refused": {
+  "async": {
+   "result": "S7ConnectionError: Post-auth legitimation rejected by PLC: return_value=0x800989001176FFFE",
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b000400000005010014001700303132333435363738393a3b3c3d3e3f40414243707705000000",
+     3
+    ]
+   ]
+  },
+  "sync": {
+   "result": "S7ConnectionError: Post-auth legitimation rejected by PLC: return_value=0x800989001176FFFE",
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ],
+    [
+     1404,
+     "000003b32004018e36000004e88969001200000000896a001300896b000400000005010014001700303132333435363738393a3b3c3d3e3f40414243707705000000",
+     3
+    ]
+   ]
+  }
+ },
+ "post_auth-s7_1500-short_challenge": {
+  "async": {
+   "result": "S7ConnectionError: Post-auth legitimation failed: expected a 20-byte challenge",
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ]
+  },
+  "sync": {
+   "result": "S7ConnectionError: Post-auth legitimation failed: expected a 20-byte challenge",
+   "sent": [
+    [
+     1414,
+     "000003b3200401822f000004e88969001200000000896a001300896b00040000000100000000",
+     4
+    ]
+   ]
+  }
+ }
+}
