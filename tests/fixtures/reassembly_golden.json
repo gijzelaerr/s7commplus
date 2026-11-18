@@ -1,0 +1,236 @@
+{
+ "bad_header": {
+  "async": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "S7ConnectionError: Expected S7CommPlus fragment header (0x72)",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "S7ConnectionError: Expected S7CommPlus fragment header (0x72)"
+  }
+ },
+ "connection_closed": {
+  "async": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "S7ConnectionError: Connection closed during response reassembly",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "S7ConnectionError: Connection closed during response reassembly"
+  }
+ },
+ "headers_split_across_chunks": {
+  "async": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+  }
+ },
+ "keyed-chained": {
+  "async": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+  }
+ },
+ "keyed-system_event_between": {
+  "async": {
+   "chunks_read": 3,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 3,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+  }
+ },
+ "keyed-tampered_second": {
+  "async": {
+   "chunks_read": 1,
+   "invalidated": true,
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 1,
+   "invalidated": true,
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed"
+  }
+ },
+ "keyed-unauthenticated_fragment": {
+  "async": {
+   "chunks_read": 1,
+   "invalidated": true,
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V2; reconnect",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 1,
+   "invalidated": true,
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V2; reconnect"
+  }
+ },
+ "legacy-independent": {
+  "async": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+  }
+ },
+ "legacy-tampered": {
+  "async": {
+   "chunks_read": 1,
+   "invalidated": true,
+   "result": "S7IntegrityError: Invalid V3 continuation HMAC",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 1,
+   "invalidated": true,
+   "result": "S7IntegrityError: Invalid V3 continuation HMAC"
+  }
+ },
+ "one_chunk_for_all": {
+  "async": {
+   "chunks_read": 0,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 0,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+  }
+ },
+ "single_pdu": {
+  "async": {
+   "chunks_read": 0,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f10111213",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 0,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f10111213"
+  }
+ },
+ "standalone_trailer": {
+  "async": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f10111213",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f10111213"
+  }
+ },
+ "system_event_between_fragments": {
+  "async": {
+   "chunks_read": 3,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 3,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+  }
+ },
+ "three_fragments": {
+  "async": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5",
+   "rx_partial": false
+  },
+  "sync": {
+   "chunks_read": 2,
+   "invalidated": false,
+   "result": "32000005860000002834000102030405060708090a0b0c0d0e0f101112136465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8bc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+  }
+ },
+ "too_large": {
+  "async": {
+   "chunks_read": 3,
+   "invalidated": false,
+   "result": "S7ConnectionError: Reassembled response exceeds limits (262140 bytes, 4 fragments)",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 3,
+   "invalidated": false,
+   "result": "S7ConnectionError: Reassembled response exceeds limits (262140 bytes, 4 fragments)"
+  }
+ },
+ "too_many_system_events": {
+  "async": {
+   "chunks_read": 17,
+   "invalidated": false,
+   "result": "S7ProtocolError: Too many S7CommPlus SystemEvents during response reassembly",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 17,
+   "invalidated": false,
+   "result": "S7ProtocolError: Too many S7CommPlus SystemEvents during response reassembly"
+  }
+ },
+ "v3_without_key": {
+  "async": {
+   "chunks_read": 0,
+   "invalidated": false,
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 0,
+   "invalidated": false,
+   "result": "S7ConnectionError: V3 response received without a session key"
+  }
+ },
+ "version_change": {
+  "async": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "S7ConnectionError: S7CommPlus response changed fragment version from 2 to 1",
+   "rx_partial": true
+  },
+  "sync": {
+   "chunks_read": 1,
+   "invalidated": false,
+   "result": "S7ConnectionError: S7CommPlus response changed fragment version from 2 to 1"
+  }
+ }
+}
