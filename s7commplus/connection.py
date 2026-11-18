@@ -50,12 +50,25 @@ import tempfile
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from types import TracebackType
 from typing import Any, Optional, Type
 
 # The framing helpers moved to _session_core; the names stay importable from here.
 from ._handshake import (
+    _LEGITIMATION_ACCEPTED as _LEGITIMATION_ACCEPTED,
+    _LEGITIMATION_REJECTED as _LEGITIMATION_REJECTED,
+    _build_get_var_substreamed_payload as _build_get_var_substreamed_payload,
+    _build_set_variable_payload as _build_set_variable_payload,
+    _build_v1_get_var_substreamed_payload as _build_v1_get_var_substreamed_payload,
+    _build_v1_legitimation_payload as _build_v1_legitimation_payload,
+    _check_set_variable_response as _check_set_variable_response,
+    _check_v1_legitimation_response as _check_v1_legitimation_response,
+    _parse_get_var_substreamed_response as _parse_get_var_substreamed_response,
+    _parse_protection_level_response as _parse_protection_level_response,
+    _response_pvalue_offset as _response_pvalue_offset,
+    _v1_integrity_tail as _v1_integrity_tail,
+    _v1_legitimation_integrity_tail as _v1_legitimation_integrity_tail,
     SessionKeyAuthenticationDependencyError as SessionKeyAuthenticationDependencyError,
     _PLCSIM_SERVER_SESSION_VERSION_REWRITES as _PLCSIM_SERVER_SESSION_VERSION_REWRITES,
     _build_session_setup_frame as _build_session_setup_frame,
@@ -97,7 +110,6 @@ from .codec import (
     encode_object_qualifier,
 )
 from .error import (
-    S7AuthenticationError,
     S7CertificateError,
     S7ConnectionError,
     S7Error,
@@ -107,17 +119,11 @@ from .error import (
     S7TlsHandshakeError,
 )
 from .legitimation import (
-    build_legacy_response,
-    build_new_response,
-    decide_legitimation_mode,
-    derive_legitimation_key,
     extract_session_oms_version,
-    extract_session_version_string,
     oms_session_version_name,
 )
 from .protocol import (
     S7COMMPLUS_LOCAL_TSAP,
-    AccessLevel,
     remote_tsap_for_connection_type,
     DataType,
     FunctionCode,
@@ -126,9 +132,8 @@ from .protocol import (
     LegitimationType,
     Opcode,
     ProtocolVersion,
-    ServiceResult,
 )
-from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
+from .vlq import encode_uint32_vlq
 
 logger = logging.getLogger(__name__)
 
@@ -200,139 +205,6 @@ def _set_s7_groups(ctx: ssl.SSLContext) -> None:
         "the default group list, which offers X25519. If a PLC still rejects the "
         "handshake, restrict groups via OPENSSL_CONF (Groups = x25519)."
     )
-
-
-def _build_get_var_substreamed_payload(
-    in_object_id: int,
-    address: int,
-    key_qualifier: int = 0,
-    sequence_field: int = 1,
-    protocol_version: int = ProtocolVersion.V2,
-) -> bytes:
-    """Build the request set used by ``GetVarSubStreamedRequest``.
-
-    The IntegrityId is inserted by :meth:`send_request` immediately before
-    the final four-byte fill field.
-    """
-    payload = struct.pack(">I", in_object_id)
-    payload += bytes([0x20, DataType.UDINT, 0x01])  # one-element address array
-    payload += encode_uint32_vlq(address)
-    payload += encode_object_qualifier(key_qualifier=key_qualifier, protocol_version=protocol_version)
-    payload += struct.pack(">H", sequence_field)
-    payload += struct.pack(">I", 0)  # fill
-    return payload
-
-
-def _response_pvalue_offset(payload: bytes, offset: int, supported: Callable[[int, int], bool]) -> int:
-    """Locate a PValue directly after ReturnValue or after a zero marker."""
-    if offset + 2 <= len(payload) and supported(payload[offset], payload[offset + 1]):
-        return offset
-    if payload[offset : offset + 1] == b"\x00":
-        offset += 1
-    if offset + 2 > len(payload):
-        raise ValueError("missing PValue header")
-    return offset
-
-
-def _parse_get_var_substreamed_response(payload: bytes) -> bytes:
-    """Extract the typed value from a GetVarSubStreamed response payload."""
-    try:
-        return_value, consumed = decode_uint64_vlq(payload, 0)
-        if return_value != 0:
-            raise S7ConnectionError(f"GetVarSubStreamed failed: return_value=0x{return_value:X}")
-
-        offset = _response_pvalue_offset(
-            payload,
-            consumed,
-            lambda flags, datatype: datatype == DataType.BLOB or (datatype == DataType.USINT and bool(flags & 0x10)),
-        )
-        flags = payload[offset]
-        datatype = payload[offset + 1]
-        offset += 2
-
-        if datatype == DataType.BLOB:
-            _blob_root_id, consumed = decode_uint32_vlq(payload, offset)
-            offset += consumed
-        elif datatype != DataType.USINT or not (flags & 0x10):
-            raise ValueError(f"unsupported PValue flags=0x{flags:02X} datatype=0x{datatype:02X}")
-
-        length, consumed = decode_uint32_vlq(payload, offset)
-        offset += consumed
-        end = offset + length
-        if end > len(payload):
-            raise ValueError(f"declared value length {length} exceeds response payload")
-        return bytes(payload[offset:end])
-    except S7ConnectionError:
-        raise
-    except (IndexError, ValueError) as exc:
-        raise S7ConnectionError(f"Malformed GetVarSubStreamed response: {exc}") from exc
-
-
-def _parse_protection_level_response(payload: bytes) -> int:
-    """Extract the scalar UDInt value from a GetVarSubStreamed response payload."""
-    try:
-        return_value, offset = decode_uint64_vlq(payload, 0)
-        if return_value != 0:
-            raise S7ConnectionError(f"GetVarSubStreamed for the protection level failed: return_value={return_value}")
-
-        offset = _response_pvalue_offset(
-            payload,
-            offset,
-            lambda flags, datatype: datatype == DataType.UDINT and not flags & 0x10,
-        )
-        flags = payload[offset]
-        datatype = payload[offset + 1]
-        offset += 2
-
-        if datatype != DataType.UDINT or flags & 0x10:
-            raise ValueError(f"expected a scalar UDInt, got flags=0x{flags:02X} datatype=0x{datatype:02X}")
-
-        value, _ = decode_uint32_vlq(payload, offset)
-        return value
-    except S7ConnectionError:
-        raise
-    except (IndexError, ValueError) as exc:
-        raise S7ConnectionError(f"Malformed protection level response: {exc}") from exc
-
-
-def _build_set_variable_payload(in_object_id: int, address: int, value: bytes) -> bytes:
-    """Build a SetVariable request set around an already encoded PValue."""
-    payload = struct.pack(">I", in_object_id)
-    payload += encode_uint32_vlq(1)
-    payload += encode_uint32_vlq(address)
-    payload += value
-    payload += encode_object_qualifier()
-    # Byte after the ObjectQualifier in this plain SetVariable. Real PLCs
-    # accept it (this legitimation path is field proven). Independent capture
-    # analysis notes TIA's own SetMultiVariables carries no extra byte between
-    # the KeyQualifier value and the 4 byte fill; the PLC parser tolerates
-    # both shapes.
-    payload += bytes([0x00])
-    payload += struct.pack(">I", 0)  # fill; IntegrityId is inserted before it
-    return payload
-
-
-def _check_set_variable_response(payload: bytes, function: Optional[int] = None) -> None:
-    """Raise when a SetVariable response reports a refused write.
-
-    ``function`` is the response's function code. A generic ERROR frame is
-    always a refusal, whatever its payload decodes to: its first value is the
-    error function code, which has no sign bit.
-
-    Reference: thomas-v2/S7CommPlusDriver/Legitimation/Legitimation.cs
-    """
-    if function == FunctionCode.ERROR:
-        raise S7ConnectionError("SetVariable answered with the generic error function")
-    if not payload:
-        raise S7ConnectionError("SetVariable response is empty")
-    try:
-        return_value, _ = decode_uint64_vlq(payload, 0)
-    except ValueError as exc:
-        raise S7ConnectionError(f"Malformed SetVariable response: {exc}") from exc
-    # The low 16 bits of the status word are a signed error code; the reference
-    # driver casts them with (Int16) and rejects negatives, i.e. the sign bit.
-    if return_value & 0x8000:
-        raise S7ConnectionError(f"Legitimation rejected by PLC: return_value=0x{return_value:X}")
 
 
 # OMS legitimation derives its session key from the TLS exporter secret
@@ -436,11 +308,6 @@ def _derive_oms_secret(ssl_object: ssl.SSLObject, keylog_path: str) -> Optional[
 # --- V1 SessionKey helpers, shared by S7CommPlusConnection and the async client. ---
 
 
-def _v1_integrity_tail(family: KeyFamily) -> int:
-    """Trailing fill bytes of V1 SessionKey substreamed requests: 3 on the S7-1200, 4 on the S7-1500."""
-    return 3 if family == KeyFamily.S7_1200 else 4
-
-
 def _resolve_session_key_fingerprint(public_key_fingerprint: Optional[str], override: Optional[str]) -> Optional[str]:
     """Return the key candidate to try, given the fingerprint the PLC advertised.
 
@@ -490,146 +357,6 @@ def _build_session_activate_payload(session_id: int, sequence_number: int) -> by
     payload += oq
     payload += bytes(3)  # trailing zeros (IntegrityId spliced before these)
     return payload
-
-
-def _build_v1_get_var_substreamed_payload(
-    family: KeyFamily, in_object_id: int, address: int, sequence_number: int, seq_field: int = 1
-) -> bytes:
-    """Build the family-specific GET_VAR_SUBSTREAMED layout captured on V1 SessionKey sessions.
-
-    S7-1200 captures use the request's sequence number as a fixed-width
-    ObjectQualifier, a VLQ request field, and a three-byte fill. S7-1500
-    captures use a zero-valued VLQ qualifier, a two-byte request field, and a
-    four-byte fill. The IntegrityId is inserted before that fill.
-    """
-    if family == KeyFamily.S7_1200:
-        oq = encode_object_qualifier(key_qualifier=sequence_number, protocol_version=ProtocolVersion.V1)
-        payload = struct.pack(">I", in_object_id)
-        payload += bytes([0x20, DataType.UDINT])
-        payload += encode_uint32_vlq(1)  # field count
-        payload += encode_uint32_vlq(address)
-        payload += oq
-        payload += encode_uint32_vlq(seq_field)
-        payload += bytes(3)  # fill
-        return payload
-    return _build_get_var_substreamed_payload(in_object_id, address, sequence_field=seq_field)
-
-
-def _v1_legitimation_integrity_tail(family: KeyFamily) -> int:
-    """Trailing fill bytes of the legitimation ``SET_VAR_SUBSTREAMED`` request.
-
-    PLCSIM's layout leaves four bytes for the IntegrityId; the real-PLC layouts
-    are unchanged from before (three), matching master.
-    """
-    return 4 if family == KeyFamily.PLCSIM else 3
-
-
-def _build_v1_legitimation_payload(session_id: int, sequence_number: int, legitimation_blob: bytes, family: KeyFamily) -> bytes:
-    """SET_VAR_SUBSTREAMED writing the solved legitimation blob to address 1846.
-
-    Two layouts, chosen by key family. PLCSIM (family 03) needs the item intro
-    without an item-number byte, an object qualifier with key qualifier 1, and a
-    four-byte trailing fill (captured from HarpoS7). The real-PLC families keep
-    the pre-existing layout byte-for-byte: an item-number byte after the
-    qualifier, the sequence number as the key qualifier, and a ``VLQ(seq)`` plus
-    three-byte fill — none of them has been seen with the PLCSIM layout, and the
-    change must not silently alter their requests.
-    """
-    if family == KeyFamily.PLCSIM:
-        oq = encode_object_qualifier(key_qualifier=1, protocol_version=ProtocolVersion.V1)
-        payload = struct.pack(">I", session_id)
-        payload += bytes([0x20, 0x04, 0x01])
-        payload += encode_uint32_vlq(LegitimationId.LEGITIMATE)  # 1846
-        payload += oq
-        payload += bytes([0x00, DataType.BLOB, 0x00])
-        payload += encode_uint32_vlq(len(legitimation_blob))
-        payload += legitimation_blob
-        payload += struct.pack(">I", 0)  # trailing fill (the IntegrityId is spliced before it)
-        return payload
-
-    oq = encode_object_qualifier(key_qualifier=sequence_number, protocol_version=ProtocolVersion.V1)
-    payload = struct.pack(">I", session_id)
-    payload += bytes([0x20, 0x04])
-    payload += encode_uint32_vlq(1)  # ItemNumber
-    payload += encode_uint32_vlq(LegitimationId.LEGITIMATE)  # 1846
-    payload += oq
-    payload += encode_uint32_vlq(1)  # ItemNumber for the value
-    payload += bytes([0x00, DataType.BLOB, 0x00])
-    payload += encode_uint32_vlq(len(legitimation_blob))
-    payload += legitimation_blob
-    payload += encode_uint32_vlq(sequence_number)
-    payload += bytes(3)  # trailing fill (the IntegrityId is spliced before it)
-    return payload
-
-
-_LEGITIMATION_ACCEPTED = frozenset(
-    {
-        ServiceResult.OK,
-        ServiceResult.SESSION_PRE_LEGITIMIZED,
-        ServiceResult.SERVICE_LEGITIMATED_FOR_LEVEL1,
-        ServiceResult.SERVICE_LEGITIMATED_FOR_LEVEL2,
-        ServiceResult.SERVICE_LEGITIMATED_FOR_LEVEL3,
-    }
-)
-_LEGITIMATION_REJECTED = frozenset(
-    {
-        ServiceResult.SERVICE_SESSION_DELEGITIMATED,
-        ServiceResult.SERVICE_SESSION_DELEGITIMATED_LEGACY,
-    }
-)
-
-
-def _check_v1_legitimation_response(payload: bytes, raw_payload: Optional[bytes] = None) -> None:
-    """Raise when the PLC rejects the legitimation blob.
-
-    ``payload`` has had a leading IntegrityId stripped, but this PLC family may
-    send the return value first, so the stripped bytes can start inside it.
-    ``raw_payload`` is the response before stripping.
-
-    Two readings are checked, in two passes:
-
-    1. Any reading decoding to a negative value is a rejection — an
-       IntegrityId never decodes as negative, so a negative is always the
-       return value. This is the check ``master`` performs.
-    2. Positive codes are only trusted from ``payload``, the return-value
-       position: ``raw_payload`` may start with an IntegrityId, which is a
-       positive number that could masquerade as any code. In that position
-       the delegitimated code means the wrong password, and the level
-       outcomes (already legitimized, legitimated to a level) mean success.
-       When ``payload`` is empty or does not decode, there is no
-       return-value reading at all, so no positive code is interpreted.
-    """
-    payload_reading: Optional[tuple[int, int]] = None  # (signed_value, raw_value) from payload
-    for candidate in (raw_payload, payload):
-        if not candidate:
-            continue
-        try:
-            return_value, _ = decode_uint64_vlq(candidate, 0)
-        except ValueError:
-            continue
-        signed = return_value if return_value < (1 << 63) else return_value - (1 << 64)
-        if candidate is payload:
-            payload_reading = (signed, return_value)
-        if signed < 0:
-            # Pass 1: a negative reading is always the return value, in either
-            # reading position, and always a rejection.
-            low = signed & 0xFFFF
-            if (low - 0x10000 if low & 0x8000 else low) in _LEGITIMATION_REJECTED:
-                raise S7AuthenticationError(
-                    f"Post-auth legitimation rejected by PLC (wrong password): return_value=0x{return_value:X}"
-                )
-            raise S7ConnectionError(f"Post-auth legitimation rejected by PLC: return_value=0x{return_value:X}")
-
-    if payload_reading is None:
-        return
-
-    # Pass 2: positive codes, only from the return-value reading of payload —
-    # never from raw_payload, whose first value may be an IntegrityId.
-    signed, return_value = payload_reading
-    if signed in _LEGITIMATION_REJECTED:
-        raise S7AuthenticationError(f"Post-auth legitimation rejected by PLC (wrong password): return_value=0x{return_value:X}")
-    if signed in _LEGITIMATION_ACCEPTED:
-        logger.debug("Legitimation response accepted (return_value=%d)", signed)
 
 
 def _build_subscription_credit_frame(
@@ -1270,78 +997,28 @@ class S7CommPlusConnection(SessionCore):
         """
         if not self._connected:
             raise S7ConnectionError("Not connected")
-
-        if not self._tls_active:
-            raise S7ConnectionError("Legitimation requires TLS. Connect with use_tls=True.")
-
-        level_before = self._protection_level
-        if level_before is None:
-            raise S7ConnectionError("PLC does not report a protection level, so legitimation cannot be verified")
-
-        if level_before <= AccessLevel.FULL_ACCESS:
-            logger.info("PLC already grants full access, legitimation is not required")
+        plan = self._plan_legitimation(password)
+        if plan is None:
             return
-        if not password:
-            logger.warning(f"PLC restricts access (level {level_before}) but no password was provided")
-            return
-
-        # Step 1: Auto-detect legacy vs new from the firmware version
-        mode = self._decide_legitimation_mode()
-        if mode is None:
-            raise S7ConnectionError("PLC firmware version does not support legitimation")
-        logger.info(f"Using {mode.name.lower()} legitimation")
-
-        # Step 2: Get challenge from PLC via GetVarSubStreamed
-        challenge = self._get_legitimation_challenge()
-        logger.info(f"Received legitimation challenge ({len(challenge)} bytes)")
-
+        mode, level_before = plan
+        reply = self._legitimation_reply(mode, self._get_legitimation_challenge(), password, username)
         if mode is LegitimationType.LEGACY:
-            # A legacy challenge is XORed with a SHA-1 password hash, so it is that long.
-            if len(challenge) != 20:
-                raise S7ConnectionError(f"Unexpected legacy challenge length: {len(challenge)}")
-            self._send_legitimation_legacy(build_legacy_response(password, challenge))
+            self._send_legitimation_legacy(reply)
         else:
-            if self._oms_secret is None:
-                raise S7ConnectionError(
-                    "New legitimation requires the TLS OMS exporter secret, which could not be derived from this TLS session."
-                )
-            self._send_legitimation_new(build_new_response(password, challenge, self._oms_secret, username))
-            # The PLC rolls the key after every attempt; mirror it so a second
-            # legitimation on the same session encrypts with the same key.
-            self._oms_secret = derive_legitimation_key(self._oms_secret)
-
-        # Step 3: Renew protection level, which is what verifies the outcome
+            self._send_legitimation_new(reply)
+        self._legitimation_sent(mode)
+        # Renewing the protection level is what verifies the outcome.
         self._protection_level = self._get_effective_protection_level()
-        if self._protection_level is None:
-            raise S7ConnectionError("Legitimation outcome is unverifiable: the PLC stopped reporting its protection level")
-        if self._protection_level >= level_before:
-            raise S7ConnectionError(
-                f"Legitimation failed, protection level unchanged at {self._protection_level}: the password was refused"
-            )
-        logger.info(f"PLC legitimation completed, protection level {level_before} -> {self._protection_level}")
-
-    def _decide_legitimation_mode(self) -> Optional[LegitimationType]:
-        """Return the legitimation exchange the PLC firmware expects, None if unsupported."""
-        if self._server_session_version is None:
-            return None
-        version_string = extract_session_version_string(self._server_session_version)
-        if version_string is None:
-            logger.warning("ServerSessionVersion carries no device string, cannot pick a legitimation mode")
-            return None
-        logger.debug(f"PLC device string: {version_string}")
-        return decide_legitimation_mode(version_string)
+        self._check_legitimation_outcome(level_before)
 
     def _get_effective_protection_level(self) -> Optional[int]:
         """Read the session's effective protection level (see `AccessLevel`), None if request failed."""
-        payload = _build_get_var_substreamed_payload(self._session_id, Ids.EFFECTIVE_PROTECTION_LEVEL)
         try:
-            level = _parse_protection_level_response(
-                self.send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=4)
-            )
+            reply = self.send_request(FunctionCode.GET_VAR_SUBSTREAMED, self._protection_level_payload(), integrity_tail=4)
+            return _parse_protection_level_response(reply)
         except S7ConnectionError as exc:
             logger.warning(f"PLC did not report a protection level: {exc}")
             return None
-        return level
 
     def _get_legitimation_challenge(self) -> bytes:
         """Request legitimation challenge from PLC.
@@ -1351,33 +1028,24 @@ class S7CommPlusConnection(SessionCore):
         Returns:
             Challenge bytes from PLC (typically 20 bytes)
         """
-        payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
-        resp_payload = self.send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=4)
-        return _parse_get_var_substreamed_response(resp_payload)
+        reply = self.send_request(FunctionCode.GET_VAR_SUBSTREAMED, self._legitimation_challenge_payload(), integrity_tail=4)
+        return _parse_get_var_substreamed_response(reply)
 
     def _send_legitimation_new(self, encrypted_response: bytes) -> None:
         """Send new-style legitimation response (AES-256-CBC encrypted).
 
         Uses SetVariable with address Legitimate (1846).
         """
-        value = bytes([0x00, DataType.BLOB, 0x00])
-        value += encode_uint32_vlq(len(encrypted_response))
-        value += encrypted_response
-        payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
-        resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload, self._last_response_function)
+        reply = self.send_request(FunctionCode.SET_VARIABLE, self._new_legitimation_payload(encrypted_response), integrity_tail=4)
+        _check_set_variable_response(reply, self._last_response_function)
 
     def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR).
 
         Uses SetVariable with address ServerSessionResponse (304).
         """
-        value = bytes([0x10, DataType.USINT])
-        value += encode_uint32_vlq(len(response))
-        value += response
-        payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
-        resp_payload = self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload, self._last_response_function)
+        reply = self.send_request(FunctionCode.SET_VARIABLE, self._legacy_legitimation_payload(response), integrity_tail=4)
+        _check_set_variable_response(reply, self._last_response_function)
 
     def collect_explore_frames(self, first_payload: bytes) -> bytes:
         """Collect unauthenticated multi-fragment EXPLORE continuation frames.
@@ -1913,19 +1581,6 @@ class S7CommPlusConnection(SessionCore):
             return
         logger.info("Session activation completed")
 
-    def _skip_integrity_ids_after_legitimation(self) -> None:
-        """Skip one IntegrityId on both counters after the S7-1200 legitimation.
-
-        An S7-1215C on FW V4.2 resets the connection when the first data
-        request after legitimation carries the next id of either counter, and
-        accepts it one id later. The handshake itself must start at id 0: the
-        same PLC rejects a session activation sent with id 1. S7-1500 FW 2.6
-        does not need the skip.
-        """
-        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.S7_1200:
-            self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
-            self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
-
     def _post_auth_legitimation(self, password: str = "") -> None:
         """Perform the post-SessionKey legitimation handshake.
 
@@ -1939,41 +1594,14 @@ class S7CommPlusConnection(SessionCore):
         """
         # Step 1: Read legitimation challenge from session, address 303
         logger.debug("Post-auth legitimation: reading challenge from address 303")
-        challenge_resp = self.send_request(
-            FunctionCode.GET_VAR_SUBSTREAMED,
-            self._build_get_var_substreamed(self._session_id, LegitimationId.SERVER_SESSION_REQUEST),
-            integrity_tail=_v1_integrity_tail(self._v1_session_key_family),
-        )
-
-        # Never substitute the earlier CreateObject challenge when this read
-        # fails: it belongs to a different authentication exchange.
-        legit_challenge = _parse_get_var_substreamed_response(challenge_resp)
-        if len(legit_challenge) != 20:
-            raise S7ConnectionError("Post-auth legitimation failed: expected a 20-byte challenge")
-
-        # Step 2: Solve the challenge with the family's scheme
-        from .v1_session_key.legitimation import solve_legitimate_challenge
-
-        session_key = self._session_key
-        if session_key is None:
-            raise S7ConnectionError("Post-auth legitimation failed: no session key")
-        legit_blob = solve_legitimate_challenge(
-            legit_challenge,
-            self._v1_session_key_public_key,
-            self._v1_session_key_family,
-            session_key,
-            password,
-        )
-        logger.info(f"Legitimation blob generated ({len(legit_blob)} bytes)")
-
-        # Step 3: Write solved blob via SET_VAR_SUBSTREAMED to address 1846
+        with self._request_lock:  # the payload carries the next sequence number
+            payload, tail = self._post_auth_challenge_request()
+            challenge_reply = self.send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=tail)
+        blob = self._solve_post_auth_challenge(challenge_reply, password)
         logger.debug("Post-auth legitimation: writing solved blob to address 1846")
-        payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, legit_blob, self._v1_session_key_family)
-        response = self.send_request(
-            FunctionCode.SET_VAR_SUBSTREAMED,
-            payload,
-            integrity_tail=_v1_legitimation_integrity_tail(self._v1_session_key_family),
-        )
+        with self._request_lock:
+            payload, tail = self._post_auth_blob_request(blob)
+            response = self.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=tail)
         _check_v1_legitimation_response(response, self._last_raw_response_payload)
         logger.info("Post-auth legitimation completed")
 

@@ -23,6 +23,13 @@ from enum import Enum, auto
 from typing import NamedTuple, Optional
 
 from ._handshake import (
+    _build_get_var_substreamed_payload,
+    _build_set_variable_payload,
+    _build_v1_get_var_substreamed_payload,
+    _build_v1_legitimation_payload,
+    _parse_get_var_substreamed_response,
+    _v1_integrity_tail,
+    _v1_legitimation_integrity_tail,
     _build_session_setup_frame,
     _encode_security_key_struct,
     _generate_session_key_blob,
@@ -32,12 +39,23 @@ from ._handshake import (
 )
 from .codec import SERVER_SESSION_ROLE_SECURED_BIT, decode_header, encode_header, parse_create_object_attributes
 from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
+from .legitimation import (
+    build_legacy_response,
+    build_new_response,
+    decide_legitimation_mode,
+    derive_legitimation_key,
+    extract_session_version_string,
+)
 from .protocol import (
     FLAGS_34_FUNCTION_CODES,
     READ_FUNCTION_CODES,
+    AccessLevel,
     DataType,
     ElementID,
     FunctionCode,
+    Ids,
+    LegitimationId,
+    LegitimationType,
     ObjectId,
     Opcode,
     ProtocolVersion,
@@ -353,7 +371,6 @@ class SessionCore:
     _last_response_function: Optional[int]
     _tls_active: bool
     _subscription_container_id: int
-    _server_session_version: Optional[bytes]
     _public_key_fingerprint: Optional[str]
     _public_key_checksum: Optional[bytes]
     _session_challenge: Optional[bytes]
@@ -363,6 +380,9 @@ class SessionCore:
     _v1_session_key_public_key: bytes
     _notification_frames: deque[bytes]
     _notification_frame_overflows: int
+    _protection_level: Optional[int]
+    _oms_secret: Optional[bytes]
+    _server_session_version: Optional[bytes]
 
     @property
     def legacy_s7_1500(self) -> bool:
@@ -856,3 +876,166 @@ class SessionCore:
                 # fragments are not read as the next response.
                 return _Incoming.DRAIN if _response_continues(frame) else _Incoming.SKIP
         return _Incoming.REPLY
+
+    # --- Password legitimation ---
+    #
+    # The clients run the exchange themselves, one request at a time, so that
+    # each step stays a method of its own; these build its requests and make
+    # its decisions.
+
+    def _decide_legitimation_mode(self) -> Optional[LegitimationType]:
+        """Return the legitimation exchange the PLC firmware expects, None if unsupported."""
+        if self._server_session_version is None:
+            return None
+        version_string = extract_session_version_string(self._server_session_version)
+        if version_string is None:
+            logger.warning("ServerSessionVersion carries no device string, cannot pick a legitimation mode")
+            return None
+        logger.debug(f"PLC device string: {version_string}")
+        return decide_legitimation_mode(version_string)
+
+    def _plan_legitimation(self, password: str) -> Optional[tuple[LegitimationType, int]]:
+        """Check that ``authenticate()`` can and must legitimate; return the mode and the level before.
+
+        Returns ``None`` when there is nothing to do: the PLC already grants
+        full access, or no password was given.
+
+        Raises:
+            S7ConnectionError: TLS is not active, the PLC reports no protection
+                level, or its firmware does not support legitimation.
+        """
+        if not self._tls_active:
+            raise S7ConnectionError("Legitimation requires TLS. Connect with use_tls=True.")
+
+        level_before = self._protection_level
+        if level_before is None:
+            raise S7ConnectionError("PLC does not report a protection level, so legitimation cannot be verified")
+
+        if level_before <= AccessLevel.FULL_ACCESS:
+            logger.info("PLC already grants full access, legitimation is not required")
+            return None
+        if not password:
+            logger.warning(f"PLC restricts access (level {level_before}) but no password was provided")
+            return None
+
+        # Auto-detect legacy vs new from the firmware version
+        mode = self._decide_legitimation_mode()
+        if mode is None:
+            raise S7ConnectionError("PLC firmware version does not support legitimation")
+        logger.info(f"Using {mode.name.lower()} legitimation")
+        return mode, level_before
+
+    def _legitimation_challenge_payload(self) -> bytes:
+        """The GetVarSubStreamed of address ServerSessionRequest (303) that reads the challenge."""
+        return _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+
+    def _legitimation_reply(self, mode: LegitimationType, challenge: bytes, password: str, username: str) -> bytes:
+        """The answer to ``challenge`` in ``mode``: the SHA-1 XOR response, or the AES-256-CBC one.
+
+        Raises:
+            S7ConnectionError: A legacy challenge is not 20 bytes, or the new
+                exchange lacks the TLS OMS exporter secret.
+        """
+        logger.info(f"Received legitimation challenge ({len(challenge)} bytes)")
+        if mode is LegitimationType.LEGACY:
+            # A legacy challenge is XORed with a SHA-1 password hash, so it is that long.
+            if len(challenge) != 20:
+                raise S7ConnectionError(f"Unexpected legacy challenge length: {len(challenge)}")
+            return build_legacy_response(password, challenge)
+        if self._oms_secret is None:
+            raise S7ConnectionError(
+                "New legitimation requires the TLS OMS exporter secret, which could not be derived from this TLS session."
+            )
+        return build_new_response(password, challenge, self._oms_secret, username)
+
+    def _legacy_legitimation_payload(self, response: bytes) -> bytes:
+        """The SetVariable of address ServerSessionResponse (304) that sends a legacy (SHA-1 XOR) response."""
+        value = bytes([0x10, DataType.USINT])
+        value += encode_uint32_vlq(len(response))
+        value += response
+        return _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
+
+    def _new_legitimation_payload(self, encrypted_response: bytes) -> bytes:
+        """The SetVariable of address Legitimate (1846) that sends a new-style (AES-256-CBC) response."""
+        value = bytes([0x00, DataType.BLOB, 0x00])
+        value += encode_uint32_vlq(len(encrypted_response))
+        value += encrypted_response
+        return _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
+
+    def _legitimation_sent(self, mode: LegitimationType) -> None:
+        """Follow the PLC's key roll after a new-style response was sent."""
+        if mode is LegitimationType.NEW and self._oms_secret is not None:
+            # The PLC rolls the key after every attempt; mirror it so a second
+            # legitimation on the same session encrypts with the same key.
+            self._oms_secret = derive_legitimation_key(self._oms_secret)
+
+    def _protection_level_payload(self) -> bytes:
+        """The GetVarSubStreamed that reads the session's effective protection level."""
+        return _build_get_var_substreamed_payload(self._session_id, Ids.EFFECTIVE_PROTECTION_LEVEL)
+
+    def _check_legitimation_outcome(self, level_before: int) -> None:
+        """Raise unless the protection level read after legitimating dropped below ``level_before``."""
+        if self._protection_level is None:
+            raise S7ConnectionError("Legitimation outcome is unverifiable: the PLC stopped reporting its protection level")
+        if self._protection_level >= level_before:
+            raise S7ConnectionError(
+                f"Legitimation failed, protection level unchanged at {self._protection_level}: the password was refused"
+            )
+        logger.info(f"PLC legitimation completed, protection level {level_before} -> {self._protection_level}")
+
+    # --- Legitimation after the V1 SessionKey handshake ---
+    #
+    # Matches the HarpoS7 PoC legitimation sequence:
+    # 1. GET_VAR_SUBSTREAMED: read the 20-byte challenge from address 303
+    # 2. Solve the challenge cryptographically (real-PLC or PlcSim scheme)
+    # 3. SET_VAR_SUBSTREAMED: write the solved blob to address 1846
+    # Both requests carry the next sequence number in their payload, so the
+    # clients build them while holding the request lock.
+
+    def _post_auth_challenge_request(self) -> tuple[bytes, int]:
+        """The payload and IntegrityId tail of the GetVarSubStreamed that reads the challenge (address 303)."""
+        payload = _build_v1_get_var_substreamed_payload(
+            self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
+        )
+        return payload, _v1_integrity_tail(self._v1_session_key_family)
+
+    def _solve_post_auth_challenge(self, challenge_reply: bytes, password: str) -> bytes:
+        """Solve the challenge in ``challenge_reply`` with the key family's scheme; return the blob to send.
+
+        Raises:
+            S7ConnectionError: The reply carries no 20-byte challenge, or there is no session key.
+        """
+        # Never substitute the earlier CreateObject challenge when this read
+        # fails: it belongs to a different authentication exchange.
+        challenge = _parse_get_var_substreamed_response(challenge_reply)
+        if len(challenge) != 20:
+            raise S7ConnectionError("Post-auth legitimation failed: expected a 20-byte challenge")
+
+        from .v1_session_key.legitimation import solve_legitimate_challenge
+
+        session_key = self._session_key
+        if session_key is None:
+            raise S7ConnectionError("Post-auth legitimation failed: no session key")
+        blob = solve_legitimate_challenge(
+            challenge, self._v1_session_key_public_key, self._v1_session_key_family, session_key, password
+        )
+        logger.info(f"Legitimation blob generated ({len(blob)} bytes)")
+        return blob
+
+    def _post_auth_blob_request(self, blob: bytes) -> tuple[bytes, int]:
+        """The payload and IntegrityId tail of the SetVarSubStreamed that writes ``blob`` (address 1846)."""
+        payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob, self._v1_session_key_family)
+        return payload, _v1_legitimation_integrity_tail(self._v1_session_key_family)
+
+    def _skip_integrity_ids_after_legitimation(self) -> None:
+        """Skip one IntegrityId on both counters after the S7-1200 legitimation.
+
+        An S7-1215C on FW V4.2 resets the connection when the first data
+        request after legitimation carries the next id of either counter, and
+        accepts it one id later. The handshake itself must start at id 0: the
+        same PLC rejects a session activation sent with id 1. S7-1500 FW 2.6
+        does not need the skip.
+        """
+        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.S7_1200:
+            self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
+            self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF

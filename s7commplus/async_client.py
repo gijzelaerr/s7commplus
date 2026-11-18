@@ -100,8 +100,6 @@ from .connection import (
     _build_get_var_substreamed_payload,
     _build_session_activate_payload,
     _build_set_variable_payload,
-    _build_v1_get_var_substreamed_payload,
-    _build_v1_legitimation_payload,
     _check_set_variable_response,
     _check_system_event,
     _check_timeout,
@@ -121,8 +119,6 @@ from .connection import (
     _sends_session_activation,
     _tls_key_log,
     _write_delete_qualifier_version,
-    _v1_integrity_tail,
-    _v1_legitimation_integrity_tail,
     _response_continues,
     _verify_pinned_certificate,
     _verify_v3_hmac,
@@ -149,17 +145,11 @@ from .alarm import (
     parse_alarm_notification,
 )
 from .legitimation import (
-    build_legacy_response,
-    build_new_response,
-    decide_legitimation_mode,
-    derive_legitimation_key,
     extract_session_oms_version,
-    extract_session_version_string,
     oms_session_version_name,
 )
 from .protocol import (
     S7COMMPLUS_LOCAL_TSAP,
-    AccessLevel,
     DataType,
     FunctionCode,
     Ids,
@@ -171,7 +161,6 @@ from .protocol import (
 )
 from .transport import _configure_tcp_socket
 from .v1_session_key.keys import KeyFamily
-from .vlq import encode_uint32_vlq
 
 logger = logging.getLogger(__name__)
 
@@ -817,73 +806,24 @@ class S7CommPlusAsyncClient(SessionCore):
             S7ConnectionError: If TLS is not active, the firmware does not
                 support legitimation, or the password was refused.
         """
-        from .error import S7ConnectionError
-
         if not self._connected:
             raise S7NotConnectedError("Not connected")
-
-        if not self._tls_active:
-            raise S7ConnectionError("Legitimation requires TLS. Connect with use_tls=True.")
-
-        level_before = self._protection_level
-        if level_before is None:
-            raise S7ConnectionError("PLC does not report a protection level, so legitimation cannot be verified")
-
-        if level_before <= AccessLevel.FULL_ACCESS:
-            logger.info("PLC already grants full access, legitimation is not required")
+        plan = self._plan_legitimation(password)
+        if plan is None:
             return
-        if not password:
-            logger.warning(f"PLC restricts access (level {level_before}) but no password was provided")
-            return
-
-        # Step 1: Auto-detect legacy vs new from the firmware version
-        mode = self._decide_legitimation_mode()
-        if mode is None:
-            raise S7ConnectionError("PLC firmware version does not support legitimation")
-        logger.info(f"Using {mode.name.lower()} legitimation")
-
-        # Step 2: Get challenge from PLC via GetVarSubStreamed
-        challenge = await self._get_legitimation_challenge()
-        logger.info(f"Received legitimation challenge ({len(challenge)} bytes)")
-
+        mode, level_before = plan
+        reply = self._legitimation_reply(mode, await self._get_legitimation_challenge(), password, username)
         if mode is LegitimationType.LEGACY:
-            # A legacy challenge is XORed with a SHA-1 password hash, so it is that long.
-            if len(challenge) != 20:
-                raise S7ConnectionError(f"Unexpected legacy challenge length: {len(challenge)}")
-            await self._send_legitimation_legacy(build_legacy_response(password, challenge))
+            await self._send_legitimation_legacy(reply)
         else:
-            if self._oms_secret is None:
-                raise S7ConnectionError(
-                    "New legitimation requires the TLS OMS exporter secret, which could not be derived from this TLS session."
-                )
-            await self._send_legitimation_new(build_new_response(password, challenge, self._oms_secret, username))
-            # The PLC rolls the key after every attempt; mirror it so a second
-            # legitimation on the same session encrypts with the same key.
-            self._oms_secret = derive_legitimation_key(self._oms_secret)
-
-        # Step 3: Renew protection level, which is what verifies the outcome
+            await self._send_legitimation_new(reply)
+        self._legitimation_sent(mode)
+        # Renewing the protection level is what verifies the outcome.
         self._protection_level = await self._get_effective_protection_level()
-        if self._protection_level is None:
-            raise S7ConnectionError("Legitimation outcome is unverifiable: the PLC stopped reporting its protection level")
-        if self._protection_level >= level_before:
-            raise S7ConnectionError(
-                f"Legitimation failed, protection level unchanged at {self._protection_level}: the password was refused"
-            )
-        logger.info(f"PLC legitimation completed, protection level {level_before} -> {self._protection_level}")
+        self._check_legitimation_outcome(level_before)
         if self._connect_params is not None:
             self._connect_params["password"] = password
             self._connect_params["username"] = username
-
-    def _decide_legitimation_mode(self) -> Optional[LegitimationType]:
-        """Return the legitimation exchange the PLC firmware expects, None if unsupported."""
-        if self._server_session_version is None:
-            return None
-        version_string = extract_session_version_string(self._server_session_version)
-        if version_string is None:
-            logger.warning("ServerSessionVersion carries no device string, cannot pick a legitimation mode")
-            return None
-        logger.debug(f"PLC device string: {version_string}")
-        return decide_legitimation_mode(version_string)
 
     async def _activate_tls(
         self,
@@ -977,46 +917,31 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _get_effective_protection_level(self) -> Optional[int]:
         """Read the session's effective protection level (see `AccessLevel`), None if request failed."""
-        from .error import S7ConnectionError
-
-        payload = _build_get_var_substreamed_payload(self._session_id, Ids.EFFECTIVE_PROTECTION_LEVEL)
         try:
-            resp = await self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=4)
-            level = _parse_protection_level_response(resp)
+            reply = await self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, self._protection_level_payload(), integrity_tail=4)
+            return _parse_protection_level_response(reply)
         except S7ConnectionError as exc:
             logger.warning(f"PLC did not report a protection level: {exc}")
             return None
-        return level
 
     async def _get_legitimation_challenge(self) -> bytes:
         """Request legitimation challenge from PLC."""
-        from .protocol import LegitimationId
-
-        payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
-        resp_payload = await self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=4)
-        return _parse_get_var_substreamed_response(resp_payload)
+        reply = await self._send_request(
+            FunctionCode.GET_VAR_SUBSTREAMED, self._legitimation_challenge_payload(), integrity_tail=4
+        )
+        return _parse_get_var_substreamed_response(reply)
 
     async def _send_legitimation_new(self, encrypted_response: bytes) -> None:
         """Send new-style legitimation response (AES-256-CBC encrypted)."""
-        from .protocol import LegitimationId
-
-        value = bytes([0x00, DataType.BLOB, 0x00])
-        value += encode_uint32_vlq(len(encrypted_response))
-        value += encrypted_response
-        payload = _build_set_variable_payload(self._session_id, LegitimationId.LEGITIMATE, value)
-        resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload, self._last_response_function)
+        reply = await self._send_request(
+            FunctionCode.SET_VARIABLE, self._new_legitimation_payload(encrypted_response), integrity_tail=4
+        )
+        _check_set_variable_response(reply, self._last_response_function)
 
     async def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR)."""
-        from .protocol import LegitimationId
-
-        value = bytes([0x10, DataType.USINT])
-        value += encode_uint32_vlq(len(response))
-        value += response
-        payload = _build_set_variable_payload(self._session_id, LegitimationId.SERVER_SESSION_RESPONSE, value)
-        resp_payload = await self._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
-        _check_set_variable_response(resp_payload, self._last_response_function)
+        reply = await self._send_request(FunctionCode.SET_VARIABLE, self._legacy_legitimation_payload(response), integrity_tail=4)
+        _check_set_variable_response(reply, self._last_response_function)
 
     @property
     def connection_generation(self) -> int:
@@ -2672,19 +2597,6 @@ class S7CommPlusAsyncClient(SessionCore):
             )
         return self._apply_session_setup_reply(pending, auth_result, reply)
 
-    def _skip_integrity_ids_after_legitimation(self) -> None:
-        """Skip one IntegrityId on both counters after the S7-1200 legitimation.
-
-        An S7-1215C on FW V4.2 resets the connection when the first data
-        request after legitimation carries the next id of either counter, and
-        accepts it one id later. The handshake itself must start at id 0: the
-        same PLC rejects a session activation sent with id 1. S7-1500 FW 2.6
-        does not need the skip.
-        """
-        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.S7_1200:
-            self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
-            self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
-
     async def _session_activate(self) -> None:
         """Activate the V3 session after the SecurityKey handshake (SET_VARIABLE addr 323 = USINT(5))."""
         async with self._lock:
@@ -2698,36 +2610,13 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _post_auth_legitimation(self, password: str = "") -> None:
         """Solve the V1 legitimation challenge after the SessionKey handshake (see the sync connection)."""
+        async with self._lock:  # the payload carries the next sequence number
+            payload, tail = self._post_auth_challenge_request()
+            challenge_reply = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=tail)
+        blob = self._solve_post_auth_challenge(challenge_reply, password)
         async with self._lock:
-            payload = _build_v1_get_var_substreamed_payload(
-                self._v1_session_key_family, self._session_id, LegitimationId.SERVER_SESSION_REQUEST, self._sequence_number
-            )
-            challenge_resp = await self._send_request_locked(
-                FunctionCode.GET_VAR_SUBSTREAMED, payload, integrity_tail=_v1_integrity_tail(self._v1_session_key_family)
-            )
-
-        # Never substitute the earlier CreateObject challenge when this read
-        # fails: it belongs to a different authentication exchange.
-        challenge = _parse_get_var_substreamed_response(challenge_resp)
-        if len(challenge) != 20:
-            raise S7ConnectionError("Post-auth legitimation failed: expected a 20-byte challenge")
-
-        from .v1_session_key.legitimation import solve_legitimate_challenge
-
-        session_key = self._session_key
-        if session_key is None:
-            raise S7ConnectionError("Post-auth legitimation failed: no session key")
-        blob = solve_legitimate_challenge(
-            challenge, self._v1_session_key_public_key, self._v1_session_key_family, session_key, password
-        )
-
-        async with self._lock:
-            payload = _build_v1_legitimation_payload(self._session_id, self._sequence_number, blob, self._v1_session_key_family)
-            response = await self._send_request_locked(
-                FunctionCode.SET_VAR_SUBSTREAMED,
-                payload,
-                integrity_tail=_v1_legitimation_integrity_tail(self._v1_session_key_family),
-            )
+            payload, tail = self._post_auth_blob_request(blob)
+            response = await self._send_request_locked(FunctionCode.SET_VAR_SUBSTREAMED, payload, integrity_tail=tail)
         _check_v1_legitimation_response(response, self._last_raw_response_payload)
         logger.info("Post-auth legitimation completed")
 

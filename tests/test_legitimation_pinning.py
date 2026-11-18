@@ -231,3 +231,15 @@ def test_sync_post_auth_legitimation_matches_the_recording(case: str) -> None:
 @pytest.mark.parametrize("case", list(POST_AUTH_CASES))
 def test_async_post_auth_legitimation_matches_the_recording(case: str) -> None:
     assert _async_post_auth(case) == _GOLDEN[f"post_auth-{case}"]["async"]
+
+
+@pytest.mark.parametrize("case", [case for case in AUTH_CASES if case != "not_connected"])
+def test_sync_and_async_authenticate_agree(case: str) -> None:
+    # Only "not connected" differs: the async client raises S7NotConnectedError,
+    # a subclass of the sync connection's S7ConnectionError.
+    assert _sync_auth(case) == _async_auth(case)
+
+
+@pytest.mark.parametrize("case", list(POST_AUTH_CASES))
+def test_sync_and_async_post_auth_legitimation_agree(case: str) -> None:
+    assert _sync_post_auth(case) == _async_post_auth(case)
