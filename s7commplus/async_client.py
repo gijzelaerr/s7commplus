@@ -4,6 +4,7 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 """
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import hmac
@@ -1652,10 +1653,13 @@ class S7CommPlusAsyncClient:
                 if not self._connected or self._blocked_by_rebuild():
                     raise S7NotConnectedError("Not connected")
                 if self._notification_frames:
-                    frame = self._notification_frames.popleft()
+                    frame: Optional[bytes] = self._notification_frames.popleft()
                 else:
                     frame = await self._recv_notification_frame(deadline, wait)
-                await self._verified_incoming_data(frame)
+                if frame is not None:
+                    await self._verified_incoming_data(frame)
+            if frame is None:
+                continue  # the lock was free for other requests; wait on
             frame_subscription_id = notification_subscription_id(frame)
             if frame_subscription_id in self._alarm_subscription_ids:
                 self._alarm_notification_frames.append(frame)
@@ -1819,6 +1823,7 @@ class S7CommPlusAsyncClient:
         wait = self._notification_wait(timeout)
         deadline = time.monotonic() + wait
         while True:
+            frame: Optional[bytes]
             if self._alarm_notification_frames:
                 frame = self._alarm_notification_frames.popleft()
             else:
@@ -1829,7 +1834,10 @@ class S7CommPlusAsyncClient:
                         frame = self._notification_frames.popleft()
                     else:
                         frame = await self._recv_notification_frame(deadline, wait)
-                    await self._verified_incoming_data(frame)
+                    if frame is not None:
+                        await self._verified_incoming_data(frame)
+                if frame is None:
+                    continue  # the lock was free for other requests; wait on
             frame_subscription_id = notification_subscription_id(frame)
             if self._subscriptions.contains(frame_subscription_id):
                 notification = parse_subscription_notification(frame)
@@ -1847,17 +1855,43 @@ class S7CommPlusAsyncClient:
             return self._notification_timeout
         return self._request_timeout
 
-    async def _recv_notification_frame(self, deadline: float, wait: float) -> bytes:
+    # Longest a notification wait holds the request lock while no frame is arriving.
+    _NOTIFICATION_LOCK_SLICE = 0.05
+
+    async def _recv_notification_frame(self, deadline: float, wait: float) -> Optional[bytes]:
         """Receive one unsolicited frame by ``deadline`` (``time.monotonic()``), else raise S7TimeoutError.
 
-        A wait that runs out before any byte of the frame was read keeps the
-        session; one cut off part-way closes it.
+        Called with the request lock held. It waits at most
+        :attr:`_NOTIFICATION_LOCK_SLICE` for a frame to start and returns
+        ``None`` if none did, so that the caller can release the lock for other
+        requests and call again. A frame that has started is read to its end
+        by ``deadline``. A wait that runs out before any byte of the frame was
+        read keeps the session; one cut off part-way closes it.
         """
         message = f"No notification from the PLC within {wait}s"
         left = deadline - time.monotonic()
         if left <= 0:
             raise S7TimeoutError(message)
-        return await self._receive_bounded(self._recv_cotp_dt(), left, message, idle_ok=True)
+        receive = asyncio.ensure_future(self._recv_cotp_dt())
+        try:
+            done, _ = await asyncio.wait({receive}, timeout=min(left, self._NOTIFICATION_LOCK_SLICE))
+        except asyncio.CancelledError:
+            receive.cancel()
+            # Let the read finish cancelling before the lock is released.
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait({receive})
+            if self._rx_partial:
+                self._connection_lost("a read was cancelled part-way through a frame")
+            raise
+        if done:
+            return receive.result()
+        if not self._rx_partial:
+            # Nothing of a frame was read, so cancelling loses nothing.
+            receive.cancel()
+            await asyncio.wait({receive})
+            return None if receive.cancelled() else receive.result()
+        left = deadline - time.monotonic()
+        return await self._receive_bounded(receive, max(left, 0.0), message, idle_ok=True)
 
     async def read_alarms(self, language_ids: Optional[list[LanguageId | int]] = None) -> list[Alarm]:
         """Return a snapshot of the PLC's active alarms without consuming notifications.

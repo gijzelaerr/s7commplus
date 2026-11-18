@@ -752,6 +752,55 @@ async def test_async_read_cancelled_before_a_frame_keeps_the_session(emulator: i
         await client.disconnect()
 
 
+# --- A request made while a notification wait is running ----------------------------------------
+
+
+def test_sync_request_during_a_notification_wait_gets_its_own_reply(emulator: int) -> None:
+    # Regression: the wait read the socket outside the request lock, so it took the
+    # reply of a request from another thread (such as the SessionKey renewal timer)
+    # and that request ran out of time.
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, request_timeout=2.0)
+    waited: list[BaseException] = []
+
+    def wait() -> None:
+        try:
+            client.receive_subscription_notification(timeout=1.0)
+        except BaseException as exc:
+            waited.append(exc)
+
+    waiter = threading.Thread(target=wait)
+    try:
+        waiter.start()
+        time.sleep(0.2)
+        assert client.db_read(1, 0, 2) == b"\x00\x00"
+        waiter.join(5)
+        assert len(waited) == 1 and isinstance(waited[0], S7TimeoutError), waited
+        assert client.connected
+        assert client.db_read(1, 0, 2) == b"\x00\x00"
+    finally:
+        waiter.join(5)
+        client.disconnect()
+
+
+async def test_async_request_during_a_notification_wait_does_not_wait_for_it(emulator: int) -> None:
+    # Regression: the wait held the request lock for its whole timeout, so every
+    # other request waited until a notification came or the wait ran out.
+    client = S7CommPlusAsyncClient()
+    await client.connect("127.0.0.1", port=emulator, request_timeout=5.0)
+    try:
+        waiter = asyncio.ensure_future(client.receive_subscription_notification(timeout=2.0))
+        await asyncio.sleep(0.2)
+        start = time.monotonic()
+        assert await client.db_read(1, 0, 2) == b"\x00\x00"
+        assert time.monotonic() - start < 1.0
+        with pytest.raises(S7TimeoutError):
+            await waiter
+        assert client.connected
+    finally:
+        await client.disconnect()
+
+
 # --- Notification timeout: per call, else notification_timeout, else the request timeout --------
 
 SUBSCRIPTION_A = 0x70400025
@@ -818,12 +867,17 @@ def test_connection_notification_wait_falls_back_to_the_request_timeout() -> Non
     conn._connected = True
     receive = MagicMock(return_value=_data_notification(SUBSCRIPTION_A))
     conn._recv_s7_data = receive  # type: ignore[method-assign]
+    conn._incoming_frame_ready = MagicMock(return_value=True)  # type: ignore[method-assign]
     conn._request_timeout = 4.0
     conn.receive_notification()
     conn._notification_timeout = 9.0
     conn.receive_notification()
     conn.receive_notification(timeout=1.5)
-    assert [call.args[0] for call in receive.call_args_list] == [4.0, 9.0, 1.5]
+    assert [call.args[0] for call in receive.call_args_list] == [
+        pytest.approx(4.0, abs=0.5),
+        pytest.approx(9.0, abs=0.5),
+        pytest.approx(1.5, abs=0.5),
+    ]
     assert all(call.kwargs == {"idle_ok": True} for call in receive.call_args_list)
 
 
@@ -953,4 +1007,25 @@ async def test_async_notification_wait_bounds_the_whole_call(receiver: str) -> N
         else:
             await asyncio.wait_for(client.receive_alarm_notification(timeout=0.3), timeout=5)
     assert time.monotonic() - start < 3
+    assert client.connected
+
+
+async def test_async_frame_that_starts_in_one_lock_slice_is_read_to_its_end() -> None:
+    # The wait gives the lock back between slices only while no frame has started;
+    # a frame that started arriving in one slice is read past it, not cut off.
+    client = S7CommPlusAsyncClient()
+    client._connected = True
+    _register(client._subscriptions, SUBSCRIPTION_A)
+    slice_seconds = client._NOTIFICATION_LOCK_SLICE
+
+    async def slow_frame() -> bytes:
+        await asyncio.sleep(slice_seconds / 5)
+        client._rx_partial = True  # the TPKT header is in
+        await asyncio.sleep(slice_seconds * 3)
+        client._rx_partial = False
+        return _data_notification(SUBSCRIPTION_A)
+
+    client._recv_cotp_dt = slow_frame  # type: ignore[method-assign]
+    notification = await asyncio.wait_for(client.receive_subscription_notification(SUBSCRIPTION_A, timeout=2.0), timeout=5)
+    assert notification.subscription_id == SUBSCRIPTION_A
     assert client.connected

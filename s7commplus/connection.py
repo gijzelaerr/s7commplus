@@ -2296,9 +2296,10 @@ class S7CommPlusConnection:
         """Receive one unsolicited S7CommPlus notification frame.
 
         Notifications observed while waiting for a request response are queued,
-        so callers do not lose updates when protocol traffic interleaves. This
-        method must not run concurrently with :meth:`send_request` because both
-        consume the same connection stream.
+        so callers do not lose updates when protocol traffic interleaves. The
+        wait for the next frame runs outside the request lock, so other
+        threads, the SessionKey renewal timer among them, can send requests
+        meanwhile; the frame itself is read under the lock.
 
         Args:
             timeout: Seconds to wait for the frame, or ``None`` for the
@@ -2311,16 +2312,35 @@ class S7CommPlusConnection:
                 closes it.
         """
         _check_timeout("timeout", timeout)
-        if not self._connected:
-            raise S7ConnectionError("Not connected")
-        if self._notification_frames:
-            frame = self._notification_frames.popleft()
-        else:
-            frame = self._recv_s7_data(self._notification_wait(timeout), idle_ok=True)
-        data = self._verified_incoming_data(frame)
-        if not data or data[0] != Opcode.NOTIFICATION:
-            raise S7ConnectionError("Expected an S7CommPlus notification")
-        return frame
+        deadline = time.monotonic() + self._notification_wait(timeout)
+        while True:
+            with self._request_lock:
+                if not self._connected:
+                    raise S7ConnectionError("Not connected")
+                left = deadline - time.monotonic()
+                if self._notification_frames:
+                    frame: Optional[bytes] = self._notification_frames.popleft()
+                elif left > 0 and self._incoming_frame_ready():
+                    frame = self._recv_s7_data(left, idle_ok=True)
+                else:
+                    frame = None
+                if frame is not None:
+                    data = self._verified_incoming_data(frame)
+                    if not data or data[0] != Opcode.NOTIFICATION:
+                        raise S7ConnectionError("Expected an S7CommPlus notification")
+                    return frame
+            if left <= 0:
+                # Nothing of a next frame was read, so the session stays usable.
+                raise S7TimeoutError("Receive timeout")
+            # Wait without the lock; a request that takes the lock meanwhile
+            # reads its own reply and queues any notification it meets.
+            self._iso_conn.data_available(left)
+
+    def _incoming_frame_ready(self) -> bool:
+        """Whether the next frame can be read now: decrypted TLS data is buffered or the socket is readable."""
+        if self._tls_active and self._ssl_object is not None and self._ssl_object.pending():
+            return True
+        return self._iso_conn.data_available(0.0)
 
     # Sanity caps for fragment reassembly — generous vs. any real PLC EXPLORE response,
     # but bounded so a malformed/adversarial stream can't drive unbounded allocation.
