@@ -33,7 +33,6 @@ s7commplus = "s7commplus.cli:main"
 [project.optional-dependencies]
 test = ["pytest<9.3", "pytest-asyncio", "pytest-bdd>=9.0.1,<10", "pytest-cov", "hypothesis", "mypy", "ruff"]
 docs = ["sphinx>=7.2", "furo>=2024.8.6"]
-analysis = ["z3-solver>=4.13,<6"]
 
 [project.urls]
 Homepage = "https://github.com/gijzelaerr/s7commplus"
@@ -66,8 +65,6 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
     "conformance: protocol conformance tests",
-    "slow: re-derives a recovered SessionKey proof via Z3; skipped by default, pass --slow to run",
-    "analysis: studies retired HarpoS7 code in old/; skipped by default, pass --analysis to run (CI does)",
     "e2e: end-to-end tests requiring a real PLC connection",
     "real_plc: versioned real-PLC acceptance scenario",
     "smoke: read-only real-PLC acceptance scenario",

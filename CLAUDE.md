@@ -62,9 +62,15 @@ tested against an isolated, non-safety-critical controller.
   `fingerprint.py`'s constants are recovered by `tools/recover_fingerprint.py`
 - `old/`: retired, repository-only reference code (the transpiled HarpoS7
   monoliths, their vendored tables in `old/family0/_generated/data/`, and the
-  Transform7/12/13 ports) that tests and `tools/` compare the runtime against;
+  Transform7/12/13 ports) that the runtime tests compare the runtime against;
   not packaged. Proof reports pin many of these files' SHA-256, so do not edit
   them
+- `tools/`: the reference models and recovery tools those runtime tests import,
+  the artifact verifier pre-commit runs, `run_real_plc_acceptance.py` and
+  `check_devices_table.py`. The rest of the SessionKey research (the other
+  recovery, proof and model tools, the `*_ANALYSIS.md` write-ups and the
+  former `analysis` and `slow` tests) lives in the separate
+  s7commplus-research repository, a copy of this one at commit `7b5d3e4`
 - `s7commplus/zlib_dicts/`: preset dictionaries used to decompress PLC metadata
 - `tests/`: unit, protocol conformance, emulator, TLS, authentication, and
   opt-in real-PLC tests
@@ -73,8 +79,8 @@ Package data matters: `py.typed`, the V1 SessionKey documents
 (`ARCHITECTURE.md`, `MAINTAINER_GUIDE.md`, `MODEL_BENCHMARKS.md`),
 `LICENSE-HarpoS7`, the zlib dictionary `.xml` files and their
 `zlib_dicts/NOTICE-S7CommPlusDriver` are included through
-`pyproject.toml`. The artifact manifest and the analyses of retired HarpoS7
-code live in `old/family0/` and are not distributed. The runtime currently ships no `.bin` tables;
+`pyproject.toml`. The artifact manifest of retired HarpoS7 code lives in
+`old/family0/` and is not distributed. The runtime currently ships no `.bin` tables;
 the `v1_session_key/**/*.bin` glob stays so that any manifested table added later
 is distributed. Do not move, rename, or omit package data from distributions
 accidentally.
@@ -195,31 +201,12 @@ pytest --e2e --plc-ip 192.168.1.10 --plc-port 102 \
   --plc-rack 0 --plc-slot 1 --plc-db-read 1 --plc-db-write 2
 ```
 
-Tests that re-derive a recovered SessionKey proof (Z3 SAT/UNSAT replay, or
-exhaustive per-branch/per-byte verification over hundreds of generated-source
-cases) are marked `slow` and skipped by default; a plain `pytest` run
-completes in a few minutes instead of roughly half an hour. Pass `--slow` to
-run them:
-
-```bash
-pytest --slow
-```
-
-Run with `--slow` when changing anything under `tools/prove_*.py`,
-`tools/recover_*.py`, the retired `old/family0/` modules, or any
-checked-in proof/model JSON — the fast default only checks that code exists
-and imports, not that its proofs still hold.
-
-Tests whose subject is the retired HarpoS7 code in `old/` (monolith models,
-Transform7/12 analyses, scalar research, bit traces) are marked `analysis`
-and are also skipped by default, which keeps a plain `pytest` run to about a
-minute. The runtime's own tests, including its comparisons against `old/`
-references, always run. CI passes `--analysis`; do the same when touching
-`old/`, `tools/` or the analysis tests:
-
-```bash
-pytest --analysis
-```
+The runtime's own tests, including its comparisons against the `old/`
+references, run in a plain `pytest`. The tests that re-derived recovered
+SessionKey proofs (`--slow`) and studied the retired HarpoS7 code
+(`--analysis`) moved to the s7commplus-research repository with the tools
+they check; run them there when changing a file under `old/` or `tools/` that
+it also has.
 
 The write DB supplied to E2E tests must be disposable and safe to modify. Never
 run E2E tests against an unknown, production, or safety-related PLC. Do not turn

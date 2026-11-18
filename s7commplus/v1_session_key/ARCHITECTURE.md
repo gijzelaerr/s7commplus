@@ -4,6 +4,12 @@ Python port of [bonk-dev/HarpoS7](https://github.com/bonk-dev/HarpoS7) (MIT),
 which is a clean-room re-implementation of the proprietary authentication in
 Siemens' `OMSp_core_managed.dll`.
 
+> **Research files moved.** Most of the recovery, proof and model tools under
+> `tools/`, the `old/family0/*_ANALYSIS.md` write-ups and the `analysis`/`slow`
+> tests this document mentions now live in the separate
+> s7commplus-research repository, a copy of this repository at commit `7b5d3e4`.
+> A path below that is missing from this checkout is there, unchanged.
+
 ## When is this needed?
 
 V1-initial S7-1200 PLCs (FW < V4.5, no TLS) require a **SessionKey handshake**
@@ -325,7 +331,7 @@ for byte-exact vectors.
 
 For Monolith11, a separate exhaustive bitwise analysis recovered a compact,
 exact two-kernel form for all five output words. See
-[`old/family0/MONOLITH11_ANALYSIS.md`](../../old/family0/MONOLITH11_ANALYSIS.md) for the formula, proof
+`old/family0/MONOLITH11_ANALYSIS.md` for the formula, proof
 boundary, and reproduction commands. Its compact form is
 `old/family0/monolith11_compact.py`; the runtime no longer needs either,
 because it passes decoded integers between transforms.
@@ -334,7 +340,7 @@ For Monolith5, fixed shifts make the bitwise-only method inapplicable. A
 symbolic ROBDD/ANF recovery yields an exact, compact model with 32 nine-input
 lane functions and a two-stream combination formula. Every lane function
 further separates into three identical choose/majority span gates and one
-symmetric combine. See [`old/family0/MONOLITH5_ANALYSIS.md`](../../old/family0/MONOLITH5_ANALYSIS.md) for
+symmetric combine. See `old/family0/MONOLITH5_ANALYSIS.md` for
 the formula, proof boundary, and reproduction command. This is also migrated:
 `tools/compile_monolith5.py` unrolls the interpreted formula into the flat,
 mechanically generated `old/family0/monolith5_compact.py`. Both are
@@ -342,13 +348,13 @@ retired together with the rest of the Transform7 chain (see below).
 
 The same per-bit symbolic approach also recovers an exact decision model for
 all 1,152 Monolith7 output bits, alongside smaller readable models for words
-3–5 and 15–17. See [`old/family0/MONOLITH7_ANALYSIS.md`](../../old/family0/MONOLITH7_ANALYSIS.md) for coverage,
+3–5 and 15–17. See `old/family0/MONOLITH7_ANALYSIS.md` for coverage,
 shared conditional-selection/majority cores, size tradeoffs, and verification.
 
 Transform12's dispatched opcode tape can be decompiled into versioned packed
 arithmetic equations and sliced across block boundaries. The 89 stages of its
 second phase have identical branch alternatives and form a fixed two-input
-arithmetic program. See [`old/family0/TRANSFORM12_ANALYSIS.md`](../../old/family0/TRANSFORM12_ANALYSIS.md)
+arithmetic program. See `old/family0/TRANSFORM12_ANALYSIS.md`
 for exact coverage and the distinction between tape equivalence and arithmetic
 or curve interpretation.
 

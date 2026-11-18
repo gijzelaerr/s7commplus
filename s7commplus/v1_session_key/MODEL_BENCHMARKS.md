@@ -5,6 +5,13 @@ implementations with their recovered analysis models. It checks the upstream
 known-answer fixture and deterministic random inputs before timing each model.
 An incorrect model stops the benchmark.
 
+> **Research files moved.** Most of the recovery, proof and model tools under
+> `tools/`, the `old/family0/*_ANALYSIS.md` write-ups and the `analysis`/`slow`
+> tests this document mentions now live in the separate
+> s7commplus-research repository, a copy of this repository at commit `7b5d3e4`.
+> A path below that is missing from this checkout is there, unchanged.
+
+
 Run from the checkout with the same Python interpreter used by the application:
 
 ```sh
