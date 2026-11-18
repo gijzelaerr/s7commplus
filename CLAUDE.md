@@ -54,7 +54,8 @@ tested against an isolated, non-safety-critical controller.
 
 Package data matters: `py.typed`, the V1 SessionKey documents
 (`ARCHITECTURE.md`, `MAINTAINER_GUIDE.md`, `MODEL_BENCHMARKS.md`),
-`LICENSE-HarpoS7`, and zlib dictionary `.xml` files are included through
+`LICENSE-HarpoS7`, the zlib dictionary `.xml` files and their
+`zlib_dicts/NOTICE-S7CommPlusDriver` are included through
 `pyproject.toml`. The artifact manifest and the analyses of retired HarpoS7
 code live in `old/family0/` and are not distributed. The runtime currently ships no `.bin` tables;
 the `v1_session_key/**/*.bin` glob stays so that any manifested table added later
