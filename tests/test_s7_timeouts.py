@@ -1029,3 +1029,29 @@ async def test_async_frame_that_starts_in_one_lock_slice_is_read_to_its_end() ->
     notification = await asyncio.wait_for(client.receive_subscription_notification(SUBSCRIPTION_A, timeout=2.0), timeout=5)
     assert notification.subscription_id == SUBSCRIPTION_A
     assert client.connected
+
+
+def test_connection_notification_wait_on_a_closed_transport_fails_at_once() -> None:
+    # The wait polls the socket outside the lock; a transport that is already
+    # closed must still fail with a connection error, not spin until the deadline.
+    conn = S7CommPlusConnection("127.0.0.1")
+    conn._connected = True
+    start = time.monotonic()
+    with pytest.raises(S7ConnectionError):
+        conn.receive_notification(timeout=2.0)
+    assert time.monotonic() - start < 1.0
+
+
+def test_sync_disconnect_during_a_notification_wait_ends_it(emulator: int) -> None:
+    client = S7CommPlusClient()
+    client.connect("127.0.0.1", port=emulator, request_timeout=2.0)
+    disconnect = threading.Timer(0.3, client.disconnect)
+    disconnect.start()
+    try:
+        start = time.monotonic()
+        with pytest.raises(S7ConnectionError):
+            client.receive_subscription_notification(timeout=3.0)
+        assert time.monotonic() - start < 2.0
+    finally:
+        disconnect.join(5)
+        client.disconnect()

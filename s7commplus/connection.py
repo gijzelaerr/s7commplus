@@ -2333,11 +2333,20 @@ class S7CommPlusConnection:
                 # Nothing of a next frame was read, so the session stays usable.
                 raise S7TimeoutError("Receive timeout")
             # Wait without the lock; a request that takes the lock meanwhile
-            # reads its own reply and queues any notification it meets.
-            self._iso_conn.data_available(left)
+            # reads its own reply and queues any notification it meets. A
+            # socket closed by another thread meanwhile is caught on the next
+            # pass, under the lock.
+            with contextlib.suppress(OSError, ValueError):
+                self._iso_conn.data_available(left)
 
     def _incoming_frame_ready(self) -> bool:
-        """Whether the next frame can be read now: decrypted TLS data is buffered or the socket is readable."""
+        """Whether the next frame can be read now: decrypted TLS data is buffered or the socket is readable.
+
+        A transport that is no longer connected counts as ready, so that the
+        read raises its connection error at once instead of the wait running out.
+        """
+        if not self._iso_conn.connected:
+            return True
         if self._tls_active and self._ssl_object is not None and self._ssl_object.pending():
             return True
         return self._iso_conn.data_available(0.0)
