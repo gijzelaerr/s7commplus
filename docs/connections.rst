@@ -51,7 +51,12 @@ and renewal logic, and accept the same ``connect()`` options: ``password``,
 ``allow_legacy_key_fallback``, ``legacy_session_key_refresh_interval`` and
 ``legacy_s7_1500`` (an override; the profile is automatic). Both paths were
 validated on real controllers (S7-1200 sync and async, S7-1500 sync) and on
-S7-PLCSIM Advanced (sync and async). Password legitimation over a TLS session is
+S7-PLCSIM Advanced (sync and async). The async validations below used the
+CreateObject and SessionSetup frames the async client sent before
+`#200 <https://github.com/gijzelaerr/s7commplus/pull/200>`_; since
+then it sends the frames of the sync client, which are validated on the same
+PLCs, but ``AsyncClient`` has not yet been retested on hardware with them.
+Password legitimation over a TLS session is
 also available through ``authenticate``, and happens during ``connect`` when a
 ``password`` is given.
 

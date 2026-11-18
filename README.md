@@ -4,7 +4,11 @@ Pure-Python S7CommPlus communication for Siemens S7-1200 and S7-1500 PLCs.
 It supports S7CommPlus V1, V2 (TLS), and V3; synchronous and asyncio clients;
 and a server emulator for testing. Both clients support legacy V1 SessionKey
 authentication, validated on a real S7-1200 (sync and async clients), an
-S7-1500 (sync client), and S7-PLCSIM Advanced (sync and async clients).
+S7-1500 (sync client), and S7-PLCSIM Advanced (sync and async clients). The
+async runs used the connect frames the async client sent before
+[#200](https://github.com/gijzelaerr/s7commplus/pull/200); it now
+sends the sync client's CreateObject and SessionSetup frames, which have not yet
+been retested with `AsyncClient` on hardware.
 
 ## Installation
 
