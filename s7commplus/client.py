@@ -564,7 +564,65 @@ def _encode_values(plans: Sequence[_ValuePlan], values: Mapping[str, Any]) -> di
     return encoded
 
 
-class S7CommPlusClient:
+class _ClientMethods:
+    """Methods the sync and async clients share word for word, with no I/O.
+
+    Both client classes inherit them; ``tests/test_client_parity.py`` keeps
+    the methods that differ only by ``await`` from drifting apart.
+    """
+
+    _symbol_catalog: Optional[SymbolCatalog]
+    _block_layout_signature: Optional[Any]
+    _type_info_times: dict[Any, Any]
+    _generation: int
+    _subscriptions: SubscriptionRegistry
+    _auto_reconnect: bool
+    max_items_per_request: int
+    max_request_bytes: int
+
+    def _frame_overhead(self) -> int:
+        raise NotImplementedError
+
+    def _forget_tag_catalog(self) -> None:
+        """Drop the cached catalog together with the layout it was built from."""
+        self._symbol_catalog = None
+        self._block_layout_signature = None
+        self._type_info_times = {}
+
+    def _plan_requests(self, items: Sequence[_T], build_payload: Callable[[list[_T]], bytes]) -> list[tuple[list[_T], bytes]]:
+        """Split a batch into the requests it needs, in order, with their payloads."""
+        return _request_chunks(items, self.max_items_per_request, self.max_request_bytes, self._frame_overhead(), build_payload)
+
+    @property
+    def auto_reconnect(self) -> bool:
+        """Whether a read that finds the connection dropped reconnects and runs once more.
+
+        Set by ``connect(auto_reconnect=...)``; a change made later outlasts
+        reconnects. Writes are never retried. Neither is a read that timed out:
+        ``S7TimeoutError`` is not an ``S7ConnectionError``. When the timeout
+        ended the session, the next call finds it dropped and reconnects.
+        """
+        return self._auto_reconnect
+
+    @auto_reconnect.setter
+    def auto_reconnect(self, enabled: bool) -> None:
+        self._auto_reconnect = enabled
+
+    @property
+    def connection_generation(self) -> int:
+        """Count of reconnects the client has performed; a change means the session was rebuilt."""
+        return self._generation
+
+    def forget_lost_subscriptions(self) -> None:
+        """Stop remembering the subscriptions lost with the previous session."""
+        self._subscriptions.forget_pending_restore()
+
+    def invalidate_tag_catalog(self) -> None:
+        """Discard cached browse metadata after a PLC layout change."""
+        self._forget_tag_catalog()
+
+
+class S7CommPlusClient(_ClientMethods):
     """S7CommPlus client for S7-1200/1500 PLCs.
 
     Use ``from s7commplus import Client`` to instantiate.
@@ -637,10 +695,6 @@ class S7CommPlusClient:
         assert self._connection is not None
         return _request_frame_overhead(self._connection._with_integrity_id, self._connection._session_key is not None)
 
-    def _plan_requests(self, items: Sequence[_T], build_payload: Callable[[list[_T]], bytes]) -> list[tuple[list[_T], bytes]]:
-        """Split a batch into the requests it needs, in order, with their payloads."""
-        return _request_chunks(items, self.max_items_per_request, self.max_request_bytes, self._frame_overhead(), build_payload)
-
     @property
     def protocol_version(self) -> int:
         """Protocol version negotiated with the PLC."""
@@ -710,26 +764,6 @@ class S7CommPlusClient:
         if self._connection is None:
             return None
         return self._connection.session_oms_version
-
-    @property
-    def connection_generation(self) -> int:
-        """Count of reconnects the client has performed; a change means the session was rebuilt."""
-        return self._generation
-
-    @property
-    def auto_reconnect(self) -> bool:
-        """Whether a read that finds the connection dropped reconnects and runs once more.
-
-        Set by ``connect(auto_reconnect=...)``; a change made later outlasts
-        reconnects. Writes are never retried. Neither is a read that timed out:
-        ``S7TimeoutError`` is not an ``S7ConnectionError``. When the timeout
-        ended the session, the next call finds it dropped and reconnects.
-        """
-        return self._auto_reconnect
-
-    @auto_reconnect.setter
-    def auto_reconnect(self, enabled: bool) -> None:
-        self._auto_reconnect = enabled
 
     def connect(
         self,
@@ -1479,16 +1513,6 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
 
-    def invalidate_tag_catalog(self) -> None:
-        """Discard cached browse metadata after a PLC layout change."""
-        self._forget_tag_catalog()
-
-    def _forget_tag_catalog(self) -> None:
-        """Drop the cached catalog together with the layout it was built from."""
-        self._symbol_catalog = None
-        self._block_layout_signature = None
-        self._type_info_times = {}
-
     def resolve_tag(self, name: str) -> SymbolicTag:
         """Resolve a browsed tag name to its typed symbolic descriptor."""
         catalog = self._symbol_catalog or self.refresh_tag_catalog()
@@ -2159,10 +2183,6 @@ class S7CommPlusClient:
             self._subscriptions.mark_restored(spec.subscription_id)
             restored[spec.subscription_id] = new_id
         return SubscriptionRestoreResult(restored, failed)
-
-    def forget_lost_subscriptions(self) -> None:
-        """Stop remembering the subscriptions lost with the previous session."""
-        self._subscriptions.forget_pending_restore()
 
     def receive_subscription_notification(
         self, subscription_id: int | None = None, timeout: Optional[float] = None

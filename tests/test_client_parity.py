@@ -5,7 +5,9 @@ other, or listed below with the reason it differs. A listed gap that was closed
 fails them too, so the lists cannot go stale.
 """
 
+import ast
 import inspect
+import textwrap
 from typing import Any
 
 import pytest
@@ -74,3 +76,77 @@ def test_shared_method_has_the_same_parameters(name: str) -> None:
 def test_listed_parameter_differences_still_differ() -> None:
     for name in PARAMETER_KINDS_DIFFER:
         assert list(_parameters(Client, name).items()) != list(_parameters(AsyncClient, name).items())
+
+
+# --- Methods that differ only by ``await`` ---------------------------------------------
+#
+# These bodies are the same in both clients apart from ``await``/``async``; they cannot be
+# shared, because each calls its own client's I/O. Comparing
+# them as syntax trees, with docstrings and awaits removed, keeps a change to one from
+# silently missing the other. A method that has to differ comes off this list, with the
+# reason in its docstring.
+SAME_BUT_AWAIT = [
+    "_auto_refresh_check",
+    "_open_connection_with_key_fallback",
+    "_plan_values",
+    "_probe_family_keys",
+    "_read_resolved_tags",
+    "_read_typeinfo_rid",
+    "_reconnect",
+    "_recover_dropped_connection",
+    "_resolve_tags",
+    "browse",
+    "db_write",
+    "download_block",
+    "explore_xml",
+    "read_tag",
+    "read_tags",
+    "read_value",
+    "read_values",
+    "reconnect",
+    "refresh_tag_catalog",
+    "resolve_tag",
+    "resubscribe",
+    "set_plc_operating_state",
+    "upload_block",
+    "write_multi",
+    "write_tag",
+    "write_value",
+    "write_values",
+]
+
+
+class _WithoutAwait(ast.NodeTransformer):
+    """Turn an async function into the sync one it mirrors, without its docstring."""
+
+    def visit_Await(self, node: ast.Await) -> ast.AST:
+        return self.visit(node.value)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
+        self.generic_visit(node)
+        return ast.copy_location(ast.With(items=node.items, body=node.body), node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
+        self.generic_visit(node)
+        return ast.copy_location(ast.For(target=node.target, iter=node.iter, body=node.body, orelse=node.orelse), node)
+
+
+def _body_without_await(cls: type, name: str) -> str:
+    source = textwrap.dedent(inspect.getsource(inspect.unwrap(getattr(cls, name))))
+    function = ast.parse(source).body[0]
+    assert isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+    body = function.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    module = ast.Module(body=[_WithoutAwait().visit(statement) for statement in body], type_ignores=[])
+    return ast.unparse(ast.fix_missing_locations(module))
+
+
+@pytest.mark.parametrize("name", SAME_BUT_AWAIT)
+def test_method_differs_from_its_twin_only_by_await(name: str) -> None:
+    assert _body_without_await(Client, name) == _body_without_await(AsyncClient, name)

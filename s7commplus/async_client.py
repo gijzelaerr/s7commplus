@@ -31,6 +31,7 @@ from ._session_core import SessionCore
 from ._session_core import _Incoming, _ReplyWait
 from .blob_decompressor import find_and_decompress
 from .client import (
+    _ClientMethods,
     _AUTO_REFRESH_MIN_INTERVAL,
     _block_signature,
     _type_info_times,
@@ -67,7 +68,6 @@ from .client import (
     _db_read_values,
     _interrupt_tag_writes,
     _record_tag_writes,
-    _request_chunks,
     _write_interrupted,
     _write_item_errors,
     _write_refused,
@@ -209,7 +209,7 @@ def _retry_on_dropped_connection(
     return wrapper
 
 
-class S7CommPlusAsyncClient(SessionCore):
+class S7CommPlusAsyncClient(SessionCore, _ClientMethods):
     """Async S7CommPlus client for S7-1200/1500 PLCs.
 
     Use ``from s7commplus import AsyncClient`` to instantiate.
@@ -427,10 +427,6 @@ class S7CommPlusAsyncClient(SessionCore):
     def _frame_overhead(self) -> int:
         """Bytes this session's request frames add to a payload."""
         return _request_frame_overhead(self._with_integrity_id, self._session_key is not None)
-
-    def _plan_requests(self, items: Sequence[_T], build_payload: Callable[[list[_T]], bytes]) -> list[tuple[list[_T], bytes]]:
-        """Split a batch into the requests it needs, in order, with their payloads."""
-        return _request_chunks(items, self.max_items_per_request, self.max_request_bytes, self._frame_overhead(), build_payload)
 
     async def connect(
         self,
@@ -884,26 +880,6 @@ class S7CommPlusAsyncClient(SessionCore):
         """Send legacy legitimation response (SHA-1 XOR)."""
         reply = await self._send_request(FunctionCode.SET_VARIABLE, self._legacy_legitimation_payload(response), integrity_tail=4)
         _check_set_variable_response(reply, self._last_response_function)
-
-    @property
-    def connection_generation(self) -> int:
-        """Count of reconnects the client has performed; a change means the session was rebuilt."""
-        return self._generation
-
-    @property
-    def auto_reconnect(self) -> bool:
-        """Whether a read that finds the connection dropped reconnects and runs once more.
-
-        Set by ``connect(auto_reconnect=...)``; a change made later outlasts
-        reconnects. Writes are never retried. Neither is a read that timed out:
-        ``S7TimeoutError`` is not an ``S7ConnectionError``. When the timeout
-        ended the session, the next call finds it dropped and reconnects.
-        """
-        return self._auto_reconnect
-
-    @auto_reconnect.setter
-    def auto_reconnect(self, enabled: bool) -> None:
-        self._auto_reconnect = enabled
 
     async def reconnect(self) -> None:
         """Re-establish the connection with the parameters from the last connect().
@@ -1546,10 +1522,6 @@ class S7CommPlusAsyncClient(SessionCore):
             restored[spec.subscription_id] = new_id
         return SubscriptionRestoreResult(restored, failed)
 
-    def forget_lost_subscriptions(self) -> None:
-        """Stop remembering the subscriptions lost with the previous session."""
-        self._subscriptions.forget_pending_restore()
-
     async def delete_subscription(self, subscription_id: int) -> None:
         """Delete the session's data change subscriptions.
 
@@ -1837,16 +1809,6 @@ class S7CommPlusAsyncClient(SessionCore):
         payload = _build_explore_request(ti_rid, [Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME])
         response = await self._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
-
-    def invalidate_tag_catalog(self) -> None:
-        """Discard cached browse metadata after a PLC layout change."""
-        self._forget_tag_catalog()
-
-    def _forget_tag_catalog(self) -> None:
-        """Drop the cached catalog together with the layout it was built from."""
-        self._symbol_catalog = None
-        self._block_layout_signature = None
-        self._type_info_times = {}
 
     async def resolve_tag(self, name: str) -> SymbolicTag:
         """Resolve a browsed tag name to its typed symbolic descriptor."""
