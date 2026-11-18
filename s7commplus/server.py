@@ -1204,47 +1204,6 @@ class S7CommPlusServer:
 
         return bytes(response)
 
-    def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
-        """Handle a single SetVariable write.
-
-        The only attribute this emulator honours is the CPUexecUnit's
-        ``OperatingStateREQ`` (0x877): a ``STOP``/``RUN`` request flips the
-        reported :attr:`cpu_state`, which a following ``get_cpu_state`` reflects.
-        This mirrors only the request/response shape produced by
-        ``_build_set_operating_state_payload``; it is not a verified model of a
-        real PLC's behaviour (see issue #8). Any other address is accepted with a
-        success ReturnValue without changing state.
-        """
-        del session_id
-        return_value = 0
-        try:
-            offset = 4  # InObjectId (fixed-width UInt32)
-            _, consumed = decode_uint32_vlq(request_data, offset)  # AddressCount
-            offset += consumed
-            address, consumed = decode_uint32_vlq(request_data, offset)
-            offset += consumed
-            if address == Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ:
-                # PValue: flags byte, datatype byte, then the VLQ-encoded value.
-                state_value, _ = decode_uint32_vlq(request_data, offset + 2)
-                new_state = {
-                    int(OperatingStateRequest.STOP): CPUState.STOP,
-                    int(OperatingStateRequest.RUN): CPUState.RUN,
-                    int(OperatingStateRequest.RUN_REDUNDANT): CPUState.RUN,
-                }.get(state_value)
-                if new_state is not None:
-                    with self._lock:
-                        self._cpu_state = new_state
-                    logger.debug("SetVariable: OperatingStateREQ=%d -> cpu_state=%s", state_value, new_state.name)
-        except (IndexError, ValueError):
-            return_value = _ITEM_ERROR
-
-        response = bytearray()
-        response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
-        response += encode_uint64_vlq(return_value)
-        if self._protocol_version < ProtocolVersion.V2:
-            response += encode_uint32_vlq(0)  # Legacy V1 IntegrityId
-        return bytes(response)
-
     def _handle_set_multi_variables(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
         """Handle SetMultiVariables -- write variables or accept session setup.
 
@@ -1512,24 +1471,55 @@ class S7CommPlusServer:
         return bytes(response)
 
     def _handle_set_variable(self, seq_num: int, session_id: int, request_data: bytes) -> bytes:
-        """Handle SetVariable: accept the session activation and legitimation writes.
+        """Handle SetVariable: session activation, legitimation and operating-state writes.
 
         A SessionKey renewal is accepted only for the next key in
         ``renewal_session_keys``: the emulator cannot derive the new key from the
         blob, so accepting any other would break the next signed request.
+
+        A write of the CPUexecUnit's ``OperatingStateREQ`` (0x877) flips the
+        reported :attr:`cpu_state`; see :meth:`_apply_operating_state_request`.
         """
         try:
             _count, consumed = decode_uint32_vlq(request_data, 4)
-            address, _ = decode_uint32_vlq(request_data, 4 + consumed)
+            address, address_length = decode_uint32_vlq(request_data, 4 + consumed)
         except ValueError:
             return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
         if address == LegitimationId.SESSION_SETUP_LEGITIMATION and not self._accept_session_key_renewal(request_data):
+            return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
+        if address == Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ and not self._apply_operating_state_request(
+            request_data, 4 + consumed + address_length
+        ):
             return self._build_error_response(seq_num, session_id, FunctionCode.SET_VARIABLE)
         response = bytearray()
         response += self._build_response_header(FunctionCode.SET_VARIABLE, seq_num)
         response += encode_uint32_vlq(0)  # Return code: success
         response += struct.pack(">I", 0)
         return bytes(response)
+
+    def _apply_operating_state_request(self, request_data: bytes, offset: int) -> bool:
+        """Apply a ``STOP``/``RUN`` OperatingStateREQ write to :attr:`cpu_state`; False if it is malformed.
+
+        This mirrors only the request/response shape produced by
+        ``_build_set_operating_state_payload``; it is not a verified model of a
+        real PLC's behaviour (see issue #8). Other values are accepted without
+        changing state.
+        """
+        try:
+            # PValue: flags byte, datatype byte, then the VLQ-encoded value.
+            state_value, _ = decode_uint32_vlq(request_data, offset + 2)
+        except (IndexError, ValueError):
+            return False
+        new_state = {
+            int(OperatingStateRequest.STOP): CPUState.STOP,
+            int(OperatingStateRequest.RUN): CPUState.RUN,
+            int(OperatingStateRequest.RUN_REDUNDANT): CPUState.RUN,
+        }.get(state_value)
+        if new_state is not None:
+            with self._lock:
+                self._cpu_state = new_state
+            logger.debug("SetVariable: OperatingStateREQ=%d -> cpu_state=%s", state_value, new_state.name)
+        return True
 
     def _accept_session_key_renewal(self, request_data: bytes) -> bool:
         """Accept a renewal whose SecurityKey names the next configured key."""

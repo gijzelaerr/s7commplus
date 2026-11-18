@@ -1849,10 +1849,10 @@ class S7CommPlusClient:
             An :class:`OperatingStateChange` with the sent and received bytes.
 
         Raises:
-            RuntimeError: If the client is not connected.
+            S7NotConnectedError: If the client is not connected (also a ``RuntimeError``).
         """
         if self._connection is None:
-            raise RuntimeError("Not connected")
+            raise S7NotConnectedError("Not connected")
         payload = _build_set_operating_state_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, int(state))
         response = self._connection.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
         return_value, _ = decode_uint64_vlq(response, 0)
