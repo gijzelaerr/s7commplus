@@ -1,9 +1,11 @@
 """Pin how both clients start TLS: the InitSSL exchange and the TLS context they build.
 
 The TLS handshake itself is random on the wire, so it is covered end to end by
-the emulator tests in ``test_s7_tls.py``. These cases record what is
+the emulator tests in ``test_s7_tls.py``. These cases cover what is
 deterministic: the InitSSL request each client sends and what it makes of the
-reply, and the settings of the context it hands to the handshake. The golden
+reply, and the settings of the context it hands to the handshake. Those
+settings depend on the Python and OpenSSL build (options, cipher names), so
+they are compared between the two clients rather than recorded. The golden
 file was first recorded from the two separate implementations, which agreed
 on everything but an InitSSL reply with nine bytes of data: the sync connection
 counted the frame trailer as data and accepted it. Both now refuse it, and the
@@ -128,7 +130,6 @@ def _async_context() -> dict[str, Any]:
 
 def _record() -> dict[str, Any]:
     golden: dict[str, Any] = {f"init_ssl-{n}": {"sync": _sync_init_ssl(n), "async": _async_init_ssl(n)} for n in INIT_SSL_REPLIES}
-    golden["context"] = {"sync": _sync_context(), "async": _async_context()}
     return golden
 
 
@@ -146,14 +147,6 @@ def test_sync_init_ssl_matches_the_recording(name: str) -> None:
 @pytest.mark.parametrize("name", list(INIT_SSL_REPLIES))
 def test_async_init_ssl_matches_the_recording(name: str) -> None:
     assert _async_init_ssl(name) == _GOLDEN[f"init_ssl-{name}"]["async"]
-
-
-def test_sync_tls_context_matches_the_recording() -> None:
-    assert _sync_context() == _GOLDEN["context"]["sync"]
-
-
-def test_async_tls_context_matches_the_recording() -> None:
-    assert _async_context() == _GOLDEN["context"]["async"]
 
 
 @pytest.mark.parametrize("name", list(INIT_SSL_REPLIES))
