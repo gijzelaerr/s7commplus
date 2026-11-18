@@ -1,0 +1,2882 @@
+{
+ "04bb-tail5-v1-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004bb000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004bb000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004bb000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004bb000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004bb000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001531000004bb000000297000012334aa07bbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004bb000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001531000004bb000000297000012334aa07bbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v1-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004bb000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004bb000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004bb000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004bb000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001531000004bb000000297000012334aa07bbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001531000004bb000000297000012334aa07bbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001531000004bb000000297000012334aa07bbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001531000004bb000000297000012334aa07bbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v2-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001531000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001531000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001531000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001531000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205905561bf21b27f1389ecd6c1336579e0b8ae63f927f662473cd915c1c43154431000004bb000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04bb-tail5-v3-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620735dbb49539d30cd503c32fd0075316be2a1e07c75f1e8fdf66f07d5cb30902131000004bb000000297000012334aa07bbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004f2000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004f2000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004f2000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004f2000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004f2000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001631000004f2000000297000012334aabbcc822cddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001431000004f2000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7201001631000004f2000000297000012334aabbcc822cddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v1-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004f2000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004f2000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004f2000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001431000004f2000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001631000004f2000000297000012334aabbcc822cddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001631000004f2000000297000012334aabbcc822cddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001631000004f2000000297000012334aabbcc822cddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7202001631000004f2000000297000012334aabbcc822cddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v2-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001431000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001431000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001431000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001431000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001631000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "7203001631000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001631000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203001631000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035209988821f8610d19b34fc186bc2e4ec51469ce69cfa621238e3fea1160497e8a231000004f2000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "04f2-tail3-v3-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003720d4b48ebfd238faaf6b428bb3ef4870448185ad5ec06337c114299ecaf39d445f31000004f2000000297000012334aabbcc822cddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100143100000542000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100143100000542000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100143100000542000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100143100000542000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100143100000542000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100163100000542000000297000012334aabb822cccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100143100000542000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720100163100000542000000297000012334aabb822cccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v1-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200143100000542000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200143100000542000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200143100000542000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200143100000542000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200163100000542000000297000012334aabb822cccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200163100000542000000297000012334aabb822cccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200163100000542000000297000012334aabb822cccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720200163100000542000000297000012334aabb822cccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v2-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "720300143100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "720300143100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720300143100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720300143100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "720300163100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "720300163100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720300163100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720300163100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030035205b905f956b88637065d4a32273ceed3a60782d32c6861eefc195dd0d4526a9453100000542000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "0542-tail4-v3-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    301
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "72030037207a10107eb619d1f4ac12b590f2b022e533e8a7d7c290e329a74e0a3995c565ee3100000542000000297000012334aabb822cccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010014310000054c000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010014310000054c000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010014310000054c000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010014310000054c000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010014310000054c000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010015310000054c000000297000012334aabb07ccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010014310000054c000000297000012334aabbccddeeff72010000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72010015310000054c000000297000012334aabb07ccddeeff72010000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v1-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020014310000054c000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020014310000054c000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020014310000054c000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020014310000054c000000297000012334aabbccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020015310000054c000000297000012334aabb07ccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020015310000054c000000297000012334aabb07ccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020015310000054c000000297000012334aabb07ccddeeff72020000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72020015310000054c000000297000012334aabb07ccddeeff72020000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v2-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key0-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "72030014310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "72030014310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key0-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72030014310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72030014310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key0-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "72030015310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7ConnectionError: V3 response received without a session key",
+   "sent": [
+    "72030015310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key0-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72030015310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "050001020300000000",
+   "sent": [
+    "72030015310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key1-iid0-plain": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key1-iid0-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key1-iid0-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    7,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "720300352003c7bc7b6782da421c6c1725c148ed80e0d5e5d7b3e3850733a4dd7057c10e08310000054c000000297000012334aabbccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key1-iid1-plain": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "0001020300000000",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key1-iid1-v1_frame": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V1; reconnect",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ },
+ "054c-tail4-v3-key1-iid1-v3_tampered": {
+  "async": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  },
+  "sync": {
+   "integrity_ids": [
+    8,
+    300
+   ],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed",
+   "sent": [
+    "7203003620e6a3b7f2cb59e6177f381088c5fd9bc77b1549f70cdcfa06990308fb75c3cc9f310000054c000000297000012334aabb07ccddeeff72030000"
+   ],
+   "sequence_number": 42
+  }
+ }
+}
