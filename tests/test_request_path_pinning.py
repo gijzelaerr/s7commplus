@@ -1,7 +1,10 @@
 """Pin what both clients send and return on the request path, against a recorded golden file.
 
-The golden file was recorded from the separate sync and async implementations
-before they shared their request path. Each case sets up a session's state on
+The golden file was first recorded from the separate sync and async
+implementations, before they shared their request path. The two then agreed on
+every case but the eight that force IntegrityId tracking on for a V1 session
+without a SessionKey, where the sync connection added an IntegrityId; the shared
+path does not, and the file was re-recorded with that one change. Each case sets up a session's state on
 an unconnected client, sends one request with the I/O stubbed out, answers it
 with a canned reply frame, and records the frame sent, the payload returned or
 the exception raised, and the IntegrityId counters afterwards.
@@ -150,7 +153,7 @@ def _record() -> dict[str, Any]:
 
 if os.environ.get("S7_RECORD_REQUEST_PATH") == "1":  # pragma: no cover - maintenance switch
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-    GOLDEN.write_text(json.dumps(_record(), indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    GOLDEN.write_text(json.dumps(_record(), indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 _GOLDEN: dict[str, Any] = json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
 
@@ -163,3 +166,8 @@ def test_sync_request_path_matches_the_recording(case: dict[str, Any]) -> None:
 @pytest.mark.parametrize("case", _cases(), ids=_case_id)
 def test_async_request_path_matches_the_recording(case: dict[str, Any]) -> None:
     assert _run_async(case) == _GOLDEN[_case_id(case)]["async"]
+
+
+@pytest.mark.parametrize("case", _cases(), ids=_case_id)
+def test_sync_and_async_request_paths_agree(case: dict[str, Any]) -> None:
+    assert _run_sync(case) == _run_async(case)

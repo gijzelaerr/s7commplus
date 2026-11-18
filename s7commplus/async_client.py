@@ -29,6 +29,7 @@ from .error import (
 )
 
 from . import typeinfo
+from ._session_core import SessionCore
 from .blob_decompressor import find_and_decompress
 from .client import (
     _AUTO_REFRESH_MIN_INTERVAL,
@@ -112,7 +113,6 @@ from .connection import (
     _derive_oms_secret,
     _encode_security_key_struct,
     _build_subscription_credit_frame,
-    _frame_request,
     _generate_session_key_blob,
     _incoming_frame_opcode,
     _incoming_response_sequence,
@@ -129,16 +129,12 @@ from .connection import (
     _resolve_session_key_fingerprint,
     _session_setup_accepted,
     _set_s7_groups,
-    _integrity_id_follows_body,
     _sends_session_activation,
-    _strip_response_integrity_id,
     _tls_key_log,
-    _v1_session_key_profile,
     _write_delete_qualifier_version,
     _v1_integrity_tail,
     _v1_legitimation_integrity_tail,
     _response_continues,
-    _validate_response_header,
     _verify_pinned_certificate,
     _verify_v3_hmac,
 )
@@ -173,8 +169,6 @@ from .legitimation import (
     oms_session_version_name,
 )
 from .protocol import (
-    FLAGS_34_FUNCTION_CODES,
-    READ_FUNCTION_CODES,
     S7COMMPLUS_LOCAL_TSAP,
     AccessLevel,
     DataType,
@@ -257,7 +251,7 @@ def _retry_on_dropped_connection(
     return wrapper
 
 
-class S7CommPlusAsyncClient:
+class S7CommPlusAsyncClient(SessionCore):
     """Async S7CommPlus client for S7-1200/1500 PLCs.
 
     Use ``from s7commplus import AsyncClient`` to instantiate.
@@ -447,11 +441,6 @@ class S7CommPlusAsyncClient:
         self._session_oms_version = versions
         self._session_oms_version_cache_key = self._server_session_version
         return versions
-
-    @property
-    def legacy_s7_1500(self) -> bool:
-        """Whether the V1 SessionKey profile is active (automatic unless overridden)."""
-        return _v1_session_key_profile(self._legacy_s7_1500, self._session_key, self._protocol_version)
 
     @property
     def object_qualifier_version(self) -> int:
@@ -2440,49 +2429,13 @@ class S7CommPlusAsyncClient:
             # Another task's reconnect owns the stream until its handshake is done.
             raise S7NotConnectedError("Not connected")
 
-        seq_num = self._next_sequence_number()
-
-        request_header = struct.pack(
-            ">BHHHHIB",
-            Opcode.REQUEST,
-            0x0000,
-            function_code,
-            0x0000,
-            seq_num,
-            self._session_id,
-            # Transport flags: 0x34 after SessionKey auth (matches TIA Portal),
-            # and for the function codes the reference sends with 0x34.
-            0x34 if self._session_key is not None or function_code in FLAGS_34_FUNCTION_CODES else 0x36,
-        )
-
-        with_integrity_id = self._with_integrity_id and (
-            self._protocol_version >= ProtocolVersion.V2 or self._session_key is not None
-        )
-        integrity_id_bytes = b""
-        if with_integrity_id:
-            is_read = function_code in READ_FUNCTION_CODES
-            integrity_id = self._integrity_id_read if is_read else self._integrity_id_write
-            integrity_id_bytes = encode_uint32_vlq(integrity_id)
-
-        # The IntegrityId is spliced in just before the payload's trailing fill bytes
-        # (integrity_tail of them), not right after the header.
-        if integrity_id_bytes and len(payload) >= integrity_tail:
-            request = request_header + payload[:-integrity_tail] + integrity_id_bytes + payload[-integrity_tail:]
-        else:
-            request = request_header + integrity_id_bytes + payload
-
-        # After SessionKey auth, all data ops use V3 framing with HMAC
-        await self._send_cotp_dt(_frame_request(request, self._protocol_version, self._session_key))
-
-        if with_integrity_id:
-            if function_code in READ_FUNCTION_CODES:
-                self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
-            else:
-                self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
+        pending = self._encode_request(function_code, payload, integrity_tail)
+        await self._send_cotp_dt(pending.frame)
+        self._request_sent(pending)
 
         reply_timeout = self._reply_timeout(function_code)
         response_data = await self._receive_bounded(
-            self._recv_response_frame(seq_num),
+            self._recv_response_frame(pending.sequence),
             reply_timeout,
             f"No reply from the PLC within {reply_timeout}s",
         )
@@ -2491,39 +2444,12 @@ class S7CommPlusAsyncClient:
         # any response whose first PDU has no trailer is reassembled the same way.
         if reassemble or _response_continues(response_data):
             data = await self._recv_reassembled_payload(response_data, reply_timeout)
-            if len(data) < 10:
-                raise S7ConnectionError("Response too short")
-            self._last_response_function = _validate_response_header(data, function_code, seq_num)
-            return self._response_payload(function_code, bytes(data[10:]))
-
-        version, data_length, consumed = decode_header(response_data)
-        if self._session_key is not None and version != ProtocolVersion.V3:
+            return self._decode_reassembled(pending, data)
+        try:
+            return self._decode_response(pending, response_data)
+        except S7IntegrityError:
             await self._invalidate_integrity_failure()
-            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
-        response = response_data[consumed : consumed + data_length]
-        if version == ProtocolVersion.V3:
-            if self._session_key is None:
-                raise S7ConnectionError("V3 response received without a session key")
-            try:
-                response = _verify_v3_hmac(response, self._session_key)
-            except S7IntegrityError:
-                await self._invalidate_integrity_failure()
-                raise
-
-        self._last_response_function = _validate_response_header(response, function_code, seq_num)
-
-        # RESPONSE header is 10 bytes (opcode+res+func+res+seqnr+transport) — responses
-        # carry no SessionId field (requests do, hence their 14-byte header). For V2+ the
-        # IntegrityId travels at the END of the payload and is ignored by the parsers;
-        # after SessionKey auth it leads the payload and is removed here.
-        return self._response_payload(function_code, response[10:])
-
-    def _response_payload(self, function_code: int, payload: bytes) -> bytes:
-        """Preserve legacy return values where IntegrityId follows the body."""
-        self._last_raw_response_payload = payload
-        if self.legacy_s7_1500 and _integrity_id_follows_body(self._v1_session_key_family, function_code):
-            return payload
-        return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
+            raise
 
     async def _verified_incoming_data(self, frame: bytes) -> bytes:
         """Return application data after authenticating the complete frame."""
@@ -3116,11 +3042,6 @@ class S7CommPlusAsyncClient:
         self._reader = None
         self._writer = None
         writer.close()
-
-    def _next_sequence_number(self) -> int:
-        seq = self._sequence_number
-        self._sequence_number = (self._sequence_number + 1) & 0xFFFF
-        return seq
 
     async def __aenter__(self) -> "S7CommPlusAsyncClient":
         return self

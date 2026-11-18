@@ -54,6 +54,18 @@ from collections.abc import Callable, Iterator, Mapping
 from types import TracebackType
 from typing import Any, Optional, Type
 
+# The framing helpers moved to _session_core; the names stay importable from here.
+from ._session_core import (
+    SessionCore as SessionCore,
+    _HexDump as _HexDump,
+    _frame_request as _frame_request,
+    _integrity_id_follows_body as _integrity_id_follows_body,
+    _response_continues as _response_continues,
+    _strip_response_integrity_id as _strip_response_integrity_id,
+    _v1_session_key_profile as _v1_session_key_profile,
+    _validate_response_header as _validate_response_header,
+    _verify_v3_hmac as _verify_v3_hmac,
+)
 from .transport import ISOTCPConnection
 from .v1_session_key.keys import KeyFamily
 
@@ -85,8 +97,6 @@ from .legitimation import (
     oms_session_version_name,
 )
 from .protocol import (
-    FLAGS_34_FUNCTION_CODES,
-    READ_FUNCTION_CODES,
     S7COMMPLUS_LOCAL_TSAP,
     AccessLevel,
     remote_tsap_for_connection_type,
@@ -104,18 +114,6 @@ from .protocol import (
 from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq, encode_uint64_vlq
 
 logger = logging.getLogger(__name__)
-
-
-class _HexDump:
-    """Formats bytes as spaced hex only when a log record is actually emitted."""
-
-    __slots__ = ("_data",)
-
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def __str__(self) -> str:
-        return self._data.hex(" ")
 
 
 class FamilyOnlyFingerprintError(S7ConnectionError):
@@ -173,47 +171,6 @@ def _is_stale_response_sequence(sequence: int, expected_sequence: int) -> bool:
     """Return whether a 16-bit response sequence precedes the expected one."""
     distance = (expected_sequence - sequence) & 0xFFFF
     return 0 < distance < 0x8000
-
-
-def _response_continues(frame: bytes) -> bool:
-    """Whether a response PDU is not followed by its closing trailer, so more fragments follow.
-
-    A PLC splits a response larger than its frame size (a GetMultiVariables of
-    long strings, an Explore) over several PDUs and sends the ``0x72 <ver> 0x0000``
-    trailer only after the last one. Reading just the first would truncate the
-    result and leave the rest in the stream for the next request. Only the four
-    bytes after the data that equal that trailer mark a complete response; anything
-    else (no bytes, a partial trailer, the next fragment's header) is left to the
-    reassembly path, which validates it.
-    """
-    try:
-        version, data_length, consumed = decode_header(frame)
-    except ValueError:
-        return False
-    end = consumed + data_length
-    return bytes(frame[end : end + 4]) != struct.pack(">BBH", 0x72, version, 0x0000)
-
-
-def _validate_response_header(response: bytes, expected_function: int, expected_sequence: int) -> int:
-    """Validate that application data is the response to one outstanding request; return its function code."""
-    if len(response) < 10:
-        raise S7ConnectionError("Response too short")
-    opcode = response[0]
-    function = struct.unpack_from(">H", response, 3)[0]
-    sequence = struct.unpack_from(">H", response, 7)[0]
-    if opcode not in (Opcode.RESPONSE, Opcode.RESPONSE2):
-        raise S7ProtocolError(f"Unexpected response opcode 0x{opcode:02X}")
-    # A PLC may answer any failed request with the protocol's generic ERROR
-    # function while retaining the request sequence number.
-    if function not in (expected_function, FunctionCode.ERROR):
-        raise S7ProtocolError(
-            f"Response function mismatch: expected function=0x{expected_function:04X}, got function=0x{function:04X}"
-        )
-    if sequence != expected_sequence:
-        raise S7ProtocolError(
-            f"Response sequence mismatch: expected seq={expected_sequence}, got seq={sequence} for function=0x{function:04X}"
-        )
-    return int(function)
 
 
 def _log_create_object_return_value(return_value: int, tls_active: bool) -> None:
@@ -363,27 +320,6 @@ def _set_s7_groups(ctx: ssl.SSLContext) -> None:
         "the default group list, which offers X25519. If a PLC still rejects the "
         "handshake, restrict groups via OPENSSL_CONF (Groups = x25519)."
     )
-
-
-def _verify_v3_hmac(protected: bytes, verifier: bytes | hmac.HMAC) -> bytes:
-    """Verify and remove the V3 HMAC prefix from application data."""
-    if not protected:
-        raise S7IntegrityError("Empty authenticated V3 frame")
-    digest_length = protected[0]
-    if digest_length != hashlib.sha256().digest_size:
-        raise S7IntegrityError(f"Invalid V3 HMAC digest length: {digest_length}")
-    if len(protected) < 1 + digest_length:
-        raise S7IntegrityError("Truncated V3 HMAC digest")
-    received_digest = protected[1 : 1 + digest_length]
-    application_data = protected[1 + digest_length :]
-    if isinstance(verifier, bytes):
-        expected_digest = hmac.new(verifier[:24], application_data, hashlib.sha256).digest()
-    else:
-        verifier.update(application_data)
-        expected_digest = verifier.digest()
-    if not hmac.compare_digest(received_digest, expected_digest):
-        raise S7IntegrityError("S7CommPlus response integrity check failed")
-    return bytes(application_data)
 
 
 def _build_get_var_substreamed_payload(
@@ -1055,21 +991,6 @@ def _check_v1_legitimation_response(payload: bytes, raw_payload: Optional[bytes]
         logger.debug("Legitimation response accepted (return_value=%d)", signed)
 
 
-def _frame_request(request: bytes, protocol_version: int, session_key: Optional[bytes]) -> bytes:
-    """Wrap a request in its S7CommPlus frame.
-
-    After SessionKey authentication every request uses V3 framing, with the
-    HMAC-SHA256 of the request under the session key prepended.
-    """
-    if session_key is not None:
-        digest = hmac.new(session_key[:24], request, hashlib.sha256).digest()
-        frame_data = bytes([0x20]) + digest + request
-        frame = encode_header(ProtocolVersion.V3, len(frame_data)) + frame_data
-        return frame + struct.pack(">BBH", 0x72, ProtocolVersion.V3, 0x0000)
-    frame = encode_header(protocol_version, len(request)) + request
-    return frame + struct.pack(">BBH", 0x72, protocol_version, 0x0000)
-
-
 def _build_subscription_credit_frame(
     subscription_id: int,
     credit_limit: int,
@@ -1153,18 +1074,6 @@ def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -
     return 4 + 14 + (5 if with_integrity_id else 0) + (1 + 32 if session_key_active else 0) + 4
 
 
-def _v1_session_key_profile(override: Optional[bool], session_key: Optional[bytes], protocol_version: int) -> bool:
-    """Whether the non-TLS V1 SessionKey request profile applies.
-
-    Both PLCs validated on hardware (S7-1500 FW 2.6, S7-1200 FW V4.2) need it,
-    so it is the default for every V1 SessionKey session; ``override=False``
-    selects the classic layout instead. V2/V3 sessions never use it.
-    """
-    if session_key is None or protocol_version != ProtocolVersion.V1:
-        return False
-    return override is not False
-
-
 def _sends_session_activation(family: Optional[KeyFamily]) -> bool:
     """Whether a V1 SessionKey session is activated with the address-323 SetVariable.
 
@@ -1174,41 +1083,6 @@ def _sends_session_activation(family: Optional[KeyFamily]) -> bool:
     sessions keep the activation: whether they need it is not verified.
     """
     return family not in (KeyFamily.PLCSIM, KeyFamily.S7_1200)
-
-
-def _integrity_id_follows_body(family: Optional[KeyFamily], function_code: int) -> bool:
-    """Whether a V1 SessionKey response carries its IntegrityId after the body, not before it.
-
-    PLCSIM Advanced does so for the set-side operations (SET/CREATE/DELETE_OBJECT).
-    A CPU 1215C FW V4.2 starts its CreateObject response with the return value
-    as well, and a CPU 1214C FW V4.2 its SetMultiVariables response (#136); other
-    responses keep the existing handling, which is all that has been exercised
-    on these CPUs.
-    """
-    if family == KeyFamily.PLCSIM:
-        return True
-    return family == KeyFamily.S7_1200 and function_code in (FunctionCode.CREATE_OBJECT, FunctionCode.SET_MULTI_VARIABLES)
-
-
-def _strip_response_integrity_id(function_code: int, payload: bytes, session_key_active: bool, legacy_s7_1500: bool) -> bytes:
-    """Remove the IntegrityId that leads SessionKey response payloads.
-
-    The legacy S7-1500 profile keeps GET_MULTI_VARIABLES and EXPLORE payloads
-    whole, because there the IntegrityId follows the body. A leading value too
-    large for an IntegrityId is the return value of a PLC that sends it first,
-    as a rejected S7-1215C legitimation does, so that payload stays whole too.
-    """
-    if legacy_s7_1500 and function_code in (FunctionCode.GET_MULTI_VARIABLES, FunctionCode.EXPLORE):
-        return payload
-    if session_key_active and len(payload) > 1:
-        try:
-            resp_iid, consumed = decode_uint32_vlq(payload, 0)
-        except ValueError:
-            logger.debug("  Response starts with a value that is not an IntegrityId; keeping it whole")
-            return payload
-        logger.debug("  Response IntegrityId: %d (%d bytes)", resp_iid, consumed)
-        return payload[consumed:]
-    return payload
 
 
 def _parse_certificate_fingerprint(fingerprint: str) -> bytes:
@@ -1312,7 +1186,7 @@ def _verify_pinned_certificate(ssl_object: ssl.SSLObject, expected: Optional[byt
     return observed
 
 
-class S7CommPlusConnection:
+class S7CommPlusConnection(SessionCore):
     """S7CommPlus connection with multi-version support.
 
     Wraps an ISOTCPConnection and adds:
@@ -1483,11 +1357,6 @@ class S7CommPlusConnection:
     def session_setup_ok(self) -> bool:
         """Whether the session setup (ServerSessionVersion echo) succeeded."""
         return self._session_setup_ok
-
-    @property
-    def legacy_s7_1500(self) -> bool:
-        """Whether the V1 SessionKey profile is active (automatic unless overridden)."""
-        return _v1_session_key_profile(self._legacy_s7_1500, self._session_key, self._protocol_version)
 
     @property
     def object_qualifier_version(self) -> int:
@@ -2101,127 +1970,23 @@ class S7CommPlusConnection:
         if not (self._connected or self._session_ready):
             raise S7ConnectionError("Not connected")
 
-        seq_num = self._next_sequence_number()
-
-        # Build request header (14 bytes)
-        request_header = struct.pack(
-            ">BHHHHIB",
-            Opcode.REQUEST,
-            0x0000,  # Reserved
-            function_code,
-            0x0000,  # Reserved
-            seq_num,
-            self._session_id,
-            # Transport flags: 0x34 after SessionKey auth (matches TIA Portal),
-            # and for the function codes the reference sends with 0x34.
-            0x34 if self._session_key is not None or function_code in FLAGS_34_FUNCTION_CODES else 0x36,
-        )
-
-        integrity_id_bytes = b""
-        if self._with_integrity_id:
-            is_read = function_code in READ_FUNCTION_CODES
-            if is_read:
-                integrity_id = self._integrity_id_read
-            else:
-                integrity_id = self._integrity_id_write
-            integrity_id_bytes = encode_uint32_vlq(integrity_id)
-            logger.debug(f"  IntegrityId: {'read' if is_read else 'write'}={integrity_id}")
-
-        # The IntegrityId is spliced in just before the payload's trailing fill bytes
-        # (integrity_tail of them), not right after the header.
-        if integrity_id_bytes and len(payload) >= integrity_tail:
-            request = request_header + payload[:-integrity_tail] + integrity_id_bytes + payload[-integrity_tail:]
-        else:
-            request = request_header + integrity_id_bytes + payload
-
-        logger.debug(f"=== SEND REQUEST === function_code=0x{function_code:04X} seq={seq_num} session=0x{self._session_id:08X}")
-        logger.debug("  Request header (14 bytes): %s", _HexDump(request_header))
-        if integrity_id_bytes:
-            logger.debug("  IntegrityId (%d bytes): %s", len(integrity_id_bytes), _HexDump(integrity_id_bytes))
-        logger.debug("  Request payload (%d bytes): %s", len(payload), _HexDump(payload))
-
-        # After SessionKey auth, all data ops use V3 framing with HMAC
-        frame = _frame_request(request, self._protocol_version, self._session_key)
-
-        logger.debug("  Full frame (%d bytes): %s", len(frame), _HexDump(frame))
-        self._send_s7_data(frame)
-
-        if self._with_integrity_id:
-            if function_code in READ_FUNCTION_CODES:
-                self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
-            else:
-                self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
+        pending = self._encode_request(function_code, payload, integrity_tail)
+        self._send_s7_data(pending.frame)
+        self._request_sent(pending)
 
         reply_timeout = self._reply_timeout(function_code)
-        response_frame = self._recv_response_frame(seq_num, reply_timeout)
+        response_frame = self._recv_response_frame(pending.sequence, reply_timeout)
 
         # Large responses (e.g. Explore) are split across several S7CommPlus PDUs;
         # any response whose first PDU has no trailer is reassembled the same way.
         if reassemble or _response_continues(response_frame):
             data = self._recv_reassembled_payload(response_frame, reply_timeout)
-            if len(data) < 10:
-                raise S7ConnectionError("Response too short")
-            self._last_response_function = _validate_response_header(data, function_code, seq_num)
-            logger.debug(f"  Reassembled response ({len(data)} bytes), payload {len(data) - 10} bytes")
-            return self._response_payload(function_code, bytes(data[10:]))
-
-        logger.debug("=== RECV RESPONSE === raw frame (%d bytes): %s", len(response_frame), _HexDump(response_frame))
-
-        # Parse frame header, use data_length to exclude trailer
-        version, data_length, consumed = decode_header(response_frame)
-        logger.debug(f"  Frame header: version=V{version}, data_length={data_length}, header_size={consumed}")
-
-        if self._session_key is not None and version != ProtocolVersion.V3:
+            return self._decode_reassembled(pending, data)
+        try:
+            return self._decode_response(pending, response_frame)
+        except S7IntegrityError:
             self._invalidate_integrity_failure()
-            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
-
-        response = response_frame[consumed : consumed + data_length]
-
-        # V3 responses have a hash-length byte + HMAC prefix before the payload.
-        if version == ProtocolVersion.V3:
-            if self._session_key is None:
-                raise S7ConnectionError("V3 response received without a session key")
-            try:
-                response = _verify_v3_hmac(response, self._session_key)
-            except S7IntegrityError:
-                self._invalidate_integrity_failure()
-                raise
-            logger.debug("  V3 HMAC verified")
-
-        logger.debug("  Response data (%d bytes): %s", len(response), _HexDump(response))
-
-        self._last_response_function = _validate_response_header(response, function_code, seq_num)
-
-        # Parse the 10-byte response header for debug (responses carry no SessionId)
-        resp_opcode = response[0]
-        resp_func = struct.unpack_from(">H", response, 3)[0]
-        resp_seq = struct.unpack_from(">H", response, 7)[0]
-        resp_transport = response[9]
-        logger.debug(
-            f"  Response header: opcode=0x{resp_opcode:02X} function=0x{resp_func:04X} "
-            f"seq={resp_seq} transport=0x{resp_transport:02X}"
-        )
-        # RESPONSE header is 10 bytes (opcode+res+func+res+seqnr+transport) — responses have
-        # NO SessionId field (requests do, making their header 14 bytes).
-        resp_offset = 10
-
-        resp_payload = self._response_payload(function_code, response[resp_offset:])
-
-        logger.debug("  Response payload (%d bytes): %s", len(resp_payload), _HexDump(resp_payload))
-
-        # Check for trailer bytes after data_length
-        trailer = response_frame[consumed + data_length :]
-        if trailer:
-            logger.debug("  Trailer (%d bytes): %s", len(trailer), _HexDump(trailer))
-
-        return resp_payload
-
-    def _response_payload(self, function_code: int, payload: bytes) -> bytes:
-        """Preserve legacy return values where IntegrityId follows the body."""
-        self._last_raw_response_payload = payload
-        if self.legacy_s7_1500 and _integrity_id_follows_body(self._v1_session_key_family, function_code):
-            return payload
-        return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
+            raise
 
     def _verified_incoming_data(self, frame: bytes) -> bytes:
         """Return application data after authenticating the complete frame."""
@@ -2863,12 +2628,6 @@ class S7CommPlusConnection:
             self._recv_s7_data()
         except Exception:
             pass
-
-    def _next_sequence_number(self) -> int:
-        """Get next sequence number and increment."""
-        seq = self._sequence_number
-        self._sequence_number = (self._sequence_number + 1) & 0xFFFF
-        return seq
 
     def _send_s7_data(self, data: bytes) -> None:
         """Send an S7CommPlus frame, routing through TLS when active."""
