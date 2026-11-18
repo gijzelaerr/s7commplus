@@ -940,35 +940,7 @@ class S7CommPlusConnection(SessionCore):
             except Exception:
                 pass
 
-        self._connected = False
-        self._session_ready = False
-        self._session_setup_ok = False
-        self._tls_active = False
-        self._ssl_object = None
-        self._incoming_bio = None
-        self._outgoing_bio = None
-        self._oms_secret = None
-        self._session_id = 0
-        self._subscription_container_id = 0
-        self._sequence_number = 0
-        self._protocol_version = 0
-        self._server_session_version = None
-        self._session_oms_version = None
-        self._session_oms_version_cache_key = None
-        self._public_key_checksum = None
-        self._public_key_fingerprint = None
-        self._server_session_role = None
-        self._server_session_roles = None
-        self._session_challenge = None
-        self._session_key = None
-        self._v1_session_key_public_key = b""
-        self._v1_session_key_family = KeyFamily.S7_1500
-        self._with_integrity_id = False
-        self._integrity_id_read = 0
-        self._integrity_id_write = 0
-        self._protection_level = None
-        self._notification_frames.clear()
-        self._notification_frame_overflows = 0
+        self._clear_session_state()
         self._iso_conn.disconnect()
 
     def _invalidate_integrity_failure(self) -> None:

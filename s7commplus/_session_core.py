@@ -389,6 +389,10 @@ class SessionCore:
     _oms_secret: Optional[bytes]
     _session_key_refresh_interval: Optional[float]
     _connected: bool
+    _session_ready: bool
+    _session_setup_ok: bool
+    _session_oms_version: Optional[tuple[int, Optional[int]]]
+    _session_oms_version_cache_key: Optional[bytes]
     _incoming_bio: Optional[ssl.MemoryBIO]
     _outgoing_bio: Optional[ssl.MemoryBIO]
     _ssl_object: Optional[ssl.SSLObject]
@@ -1367,3 +1371,42 @@ class SessionCore:
         request += struct.pack(">I", 0)
         frame = encode_header(self._protocol_version, len(request)) + request
         return frame + struct.pack(">BBH", 0x72, self._protocol_version, 0x0000)
+
+    # --- Ending a session ---
+
+    def _clear_session_state(self) -> None:
+        """Forget everything the last session negotiated, as a fresh client starts.
+
+        Both clients call this when a session ends; each then clears what only
+        it keeps (its transport, its reconnect state).
+        """
+        self._connected = False
+        self._session_ready = False
+        self._session_setup_ok = False
+        self._tls_active = False
+        self._ssl_object = None
+        self._incoming_bio = None
+        self._outgoing_bio = None
+        self._oms_secret = None
+        self._peer_certificate_fingerprint = None
+        self._session_id = 0
+        self._subscription_container_id = 0
+        self._sequence_number = 0
+        self._protocol_version = 0
+        self._server_session_version = None
+        self._session_oms_version = None
+        self._session_oms_version_cache_key = None
+        self._public_key_checksum = None
+        self._public_key_fingerprint = None
+        self._server_session_role = None
+        self._server_session_roles = None
+        self._session_challenge = None
+        self._session_key = None
+        self._v1_session_key_public_key = b""
+        self._v1_session_key_family = KeyFamily.S7_1500
+        self._with_integrity_id = False
+        self._integrity_id_read = 0
+        self._integrity_id_write = 0
+        self._protection_level = None
+        self._notification_frames.clear()
+        self._notification_frame_overflows = 0
