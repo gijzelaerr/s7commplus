@@ -25,6 +25,9 @@ from typing import Generator, NamedTuple, Optional
 
 from ._tls import _S7_CIPHERS, _derive_oms_secret, _set_s7_groups, _verify_pinned_certificate
 from ._handshake import (
+    _build_session_activate_payload,
+    _check_set_variable_response,
+    _renews_session_key,
     _build_get_var_substreamed_payload,
     _build_set_variable_payload,
     _build_v1_get_var_substreamed_payload,
@@ -384,6 +387,8 @@ class SessionCore:
     _notification_frame_overflows: int
     _protection_level: Optional[int]
     _oms_secret: Optional[bytes]
+    _session_key_refresh_interval: Optional[float]
+    _connected: bool
     _incoming_bio: Optional[ssl.MemoryBIO]
     _outgoing_bio: Optional[ssl.MemoryBIO]
     _ssl_object: Optional[ssl.SSLObject]
@@ -1276,3 +1281,89 @@ class SessionCore:
         # from the handshake's key log (see _tls_key_log).
         self._oms_secret = _derive_oms_secret(self._ssl_object, keylog_path)
         logger.info("TLS activated (tunneled inside COTP frames)")
+
+    # --- SessionKey renewal, session activation and closing ---
+    #
+    # The clients schedule renewals their own way (a timer thread, an asyncio
+    # task) and run the exchange under their request lock; these decide and
+    # build its steps.
+
+    def _renewal_interval(self) -> Optional[float]:
+        """Seconds until the next SessionKey renewal, or None when none is to be sent."""
+        interval = self._session_key_refresh_interval
+        if interval is None or self._session_key is None or not self._connected:
+            return None
+        if not _renews_session_key(self._v1_session_key_family):
+            logger.info(
+                "Automatic SessionKey renewal is not sent for key family %02x, which refuses it; "
+                "the PLC ends the session when the key expires, so reconnect before then",
+                int(self._v1_session_key_family),
+            )
+            return None
+        return interval
+
+    def _renewal_challenge_payload(self) -> bytes:
+        """The GetVarSubStreamed that reads a renewal challenge while the old key is active.
+
+        Not the family-specific layout of the post-auth legitimation: a CPU 1214C
+        FW V4.2 (key family 01) rejects that one mid-session and accepts this
+        one, after which the renewal completes (#169).
+
+        Raises:
+            S7ConnectionError: There is no session key or public key to renew from.
+        """
+        if self._session_key is None or not self._v1_session_key_public_key:
+            raise S7ConnectionError("Legacy SessionKey renewal prerequisites are unavailable")
+        return _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+
+    def _renewal_request(self, challenge_reply: bytes) -> tuple[bytes, bytes]:
+        """Answer the renewal challenge: the SetVariable payload carrying the SecurityKey, and the new key.
+
+        Raises:
+            S7ConnectionError: The reply carries no 20-byte challenge.
+        """
+        from .v1_session_key.handshake import authenticate_session_key
+
+        challenge = _parse_get_var_substreamed_response(challenge_reply)
+        if len(challenge) != 20:
+            raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
+        blob, new_session_key = authenticate_session_key(challenge, self._v1_session_key_public_key, self._v1_session_key_family)
+        security_key = self._encode_security_key_struct(blob, new_session_key)
+        payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
+        return payload, new_session_key
+
+    def _renewed(self, reply: bytes, new_session_key: bytes) -> None:
+        """Switch to ``new_session_key`` once the PLC accepted the SecurityKey in ``reply``."""
+        _check_set_variable_response(reply, self._last_response_function)
+        self._session_key = new_session_key
+        logger.info("Legacy SessionKey renewed successfully")
+
+    def _session_activate_payload(self) -> bytes:
+        """The SetVariable that activates the V3 session after the SecurityKey handshake (address 323 = USINT(5))."""
+        logger.debug("Session activation: SET_VARIABLE addr 323 = USINT(5)")
+        return _build_session_activate_payload(self._session_id, self._sequence_number)
+
+    def _session_activated(self) -> None:
+        """Log how the PLC answered the session activation."""
+        if self._last_response_function == FunctionCode.ERROR:
+            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
+            logger.warning("Session activation answered with the generic error function")
+            return
+        logger.info("Session activation completed")
+
+    def _encode_delete_session(self) -> bytes:
+        """Frame the DeleteObject that closes the session."""
+        seq_num = self._next_sequence_number()
+        request = struct.pack(
+            ">BHHHHIB",
+            Opcode.REQUEST,
+            0x0000,
+            FunctionCode.DELETE_OBJECT,
+            0x0000,
+            seq_num,
+            self._session_id,
+            0x34,
+        )
+        request += struct.pack(">I", 0)
+        frame = encode_header(self._protocol_version, len(request)) + request
+        return frame + struct.pack(">BBH", 0x72, self._protocol_version, 0x0000)

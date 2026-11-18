@@ -561,3 +561,41 @@ def _check_v1_legitimation_response(payload: bytes, raw_payload: Optional[bytes]
         raise S7AuthenticationError(f"Post-auth legitimation rejected by PLC (wrong password): return_value=0x{return_value:X}")
     if signed in _LEGITIMATION_ACCEPTED:
         logger.debug("Legitimation response accepted (return_value=%d)", signed)
+
+
+def _build_session_activate_payload(session_id: int, sequence_number: int) -> bytes:
+    """SET_VARIABLE writing USINT(5) to address 323, which activates a V1 SessionKey session.
+
+    TIA Portal sends this immediately after the SetupSession key exchange
+    succeeds, before any data reads or legitimation. The payload matches frame
+    17 of TIAPortalWatchDB7.pcapng from GH-710: the ObjectQualifier's
+    KEY_QUALIFIER carries the request's sequence number as a 4-byte uint32, and
+    the trailing section is 3 zero bytes (the IntegrityId is spliced before
+    them).
+    """
+    oq = encode_object_qualifier(key_qualifier=sequence_number, protocol_version=ProtocolVersion.V1)
+
+    payload = struct.pack(">I", session_id)
+    payload += encode_uint32_vlq(1)  # AddressCount
+    payload += encode_uint32_vlq(323)  # address
+    payload += bytes([0x00, DataType.USINT])
+    payload += encode_uint32_vlq(5)
+    payload += oq
+    payload += bytes(3)  # trailing zeros (IntegrityId spliced before these)
+    return payload
+
+
+def _renews_session_key(family: Optional[KeyFamily]) -> bool:
+    """Whether a legacy session of this key family renews its SessionKey on a timer.
+
+    Only a CPU 1214C FW V4.2 (key family 01) is known to accept the SecurityKey
+    write to address 1830 on an established session (#169). S7-1500 CPUs (key
+    family 00: 1512C-1 PN FW V2.5, 1517-3 PN/DP FW V2.9 and V3.0) refuse it with
+    a fatal SystemEvent, request parsing error, and the connection is lost; a
+    1517-3 FW V3.0 did so for six request layouts (#184). PLCSIM Advanced FW V2.8 (key family 03) resets
+    the connection, with the SET_VARIABLE layout and with the session-setup
+    SET_MULTI_VARIABLES one (#83). On those two a renewal would end the session
+    it is meant to extend, so none is sent; the CPU ends the session when the
+    key expires, after one hour on the 1517-3.
+    """
+    return family == KeyFamily.S7_1200

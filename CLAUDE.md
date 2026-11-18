@@ -29,12 +29,13 @@ tested against an isolated, non-safety-critical controller.
   `async_client.py` inherit: session state and the I/O-free steps they share
   (request encoding and reply checks, sorting the frames that arrive before
   a reply, reassembling a split reply, InitSSL and the TLS session setup,
-  CreateObject, SessionSetup, password legitimation). Put protocol logic both
-  clients need here, not in one client; the clients keep only their I/O.
+  CreateObject, SessionSetup, password legitimation, SessionKey renewal,
+  session activation and DeleteObject). Put protocol logic both clients need
+  here, not in one client; the clients keep only their I/O and scheduling.
   `tests/test_request_path_pinning.py`, `tests/test_handshake_pinning.py`,
   `tests/test_dispatcher_pinning.py`, `tests/test_reassembly_pinning.py`,
-  `tests/test_legitimation_pinning.py` and `tests/test_tls_setup_pinning.py`
-  record what both send and keep
+  `tests/test_legitimation_pinning.py`, `tests/test_tls_setup_pinning.py` and
+  `tests/test_renewal_pinning.py` record what both send and keep
 - `s7commplus/_handshake.py`: CreateObject, SessionSetup and legitimation
   request builders and reply checks, and the V1 SessionKey blob helpers,
   without I/O; `connection.py` re-exports them

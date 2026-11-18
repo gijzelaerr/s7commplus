@@ -64,6 +64,8 @@ from ._tls import (
     _verify_pinned_certificate as _verify_pinned_certificate,
 )
 from ._handshake import (
+    _build_session_activate_payload as _build_session_activate_payload,
+    _renews_session_key as _renews_session_key,
     _LEGITIMATION_ACCEPTED as _LEGITIMATION_ACCEPTED,
     _LEGITIMATION_REJECTED as _LEGITIMATION_REJECTED,
     _build_get_var_substreamed_payload as _build_get_var_substreamed_payload,
@@ -113,8 +115,6 @@ from .v1_session_key.keys import KeyFamily
 
 from .codec import (
     SERVER_SESSION_ROLE_SECURED_BIT,
-    encode_header,
-    encode_object_qualifier,
 )
 from .error import (
     S7CertificateError,
@@ -135,7 +135,6 @@ from .protocol import (
     DataType,
     FunctionCode,
     Ids,
-    LegitimationId,
     LegitimationType,
     Opcode,
     ProtocolVersion,
@@ -209,28 +208,6 @@ def _resolve_session_key_fingerprint(public_key_fingerprint: Optional[str], over
     return override
 
 
-def _build_session_activate_payload(session_id: int, sequence_number: int) -> bytes:
-    """SET_VARIABLE writing USINT(5) to address 323, which activates a V1 SessionKey session.
-
-    TIA Portal sends this immediately after the SetupSession key exchange
-    succeeds, before any data reads or legitimation. The payload matches frame
-    17 of TIAPortalWatchDB7.pcapng from GH-710: the ObjectQualifier's
-    KEY_QUALIFIER carries the request's sequence number as a 4-byte uint32, and
-    the trailing section is 3 zero bytes (the IntegrityId is spliced before
-    them).
-    """
-    oq = encode_object_qualifier(key_qualifier=sequence_number, protocol_version=ProtocolVersion.V1)
-
-    payload = struct.pack(">I", session_id)
-    payload += encode_uint32_vlq(1)  # AddressCount
-    payload += encode_uint32_vlq(323)  # address
-    payload += bytes([0x00, DataType.USINT])
-    payload += encode_uint32_vlq(5)
-    payload += oq
-    payload += bytes(3)  # trailing zeros (IntegrityId spliced before these)
-    return payload
-
-
 def _build_subscription_credit_frame(
     subscription_id: int,
     credit_limit: int,
@@ -284,22 +261,6 @@ def _alarm_texts_and_domain_filter(family: Optional[KeyFamily]) -> bool:
     other PLC keeps the S7-1500 reference layout.
     """
     return family != KeyFamily.S7_1200
-
-
-def _renews_session_key(family: Optional[KeyFamily]) -> bool:
-    """Whether a legacy session of this key family renews its SessionKey on a timer.
-
-    Only a CPU 1214C FW V4.2 (key family 01) is known to accept the SecurityKey
-    write to address 1830 on an established session (#169). S7-1500 CPUs (key
-    family 00: 1512C-1 PN FW V2.5, 1517-3 PN/DP FW V2.9 and V3.0) refuse it with
-    a fatal SystemEvent, request parsing error, and the connection is lost; a
-    1517-3 FW V3.0 did so for six request layouts (#184). PLCSIM Advanced FW V2.8 (key family 03) resets
-    the connection, with the SET_VARIABLE layout and with the session-setup
-    SET_MULTI_VARIABLES one (#83). On those two a renewal would end the session
-    it is meant to extend, so none is sent; the CPU ends the session when the
-    key expires, after one hour on the 1517-3.
-    """
-    return family == KeyFamily.S7_1200
 
 
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
@@ -1025,15 +986,8 @@ class S7CommPlusConnection(SessionCore):
 
     def _schedule_session_key_refresh(self) -> None:
         """Schedule one renewal for an authenticated legacy session."""
-        interval = self._session_key_refresh_interval
-        if interval is None or self._session_key is None or not self._connected:
-            return
-        if not _renews_session_key(self._v1_session_key_family):
-            logger.info(
-                "Automatic SessionKey renewal is not sent for key family %02x, which refuses it; "
-                "the PLC ends the session when the key expires, so reconnect before then",
-                int(self._v1_session_key_family),
-            )
+        interval = self._renewal_interval()
+        if interval is None:
             return
         generation = self._session_key_refresh_generation
         timer = threading.Timer(interval, self._session_key_refresh_callback, args=(generation,))
@@ -1062,26 +1016,9 @@ class S7CommPlusConnection(SessionCore):
 
     def _renew_session_key_locked(self) -> None:
         """Perform the challenge/SecurityKey exchange while the old key is active."""
-        if self._session_key is None or not self._v1_session_key_public_key:
-            raise S7ConnectionError("Legacy SessionKey renewal prerequisites are unavailable")
-
-        from .v1_session_key.handshake import authenticate_session_key
-
-        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
-        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
-        # one, after which the renewal completes (#169).
-        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
-        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4, False)
-        challenge = _parse_get_var_substreamed_response(challenge_response)
-        if len(challenge) != 20:
-            raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
-        blob, new_session_key = authenticate_session_key(challenge, self._v1_session_key_public_key, self._v1_session_key_family)
-        security_key = self._encode_security_key_struct(blob, new_session_key)
-        renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
-        renewal_response = self._send_request(FunctionCode.SET_VARIABLE, renewal_payload, 4, False)
-        _check_set_variable_response(renewal_response, self._last_response_function)
-        self._session_key = new_session_key
-        logger.info("Legacy SessionKey renewed successfully")
+        challenge_reply = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, self._renewal_challenge_payload(), 4, False)
+        payload, new_session_key = self._renewal_request(challenge_reply)
+        self._renewed(self._send_request(FunctionCode.SET_VARIABLE, payload, 4, False), new_session_key)
 
     def send_request(self, function_code: int, payload: bytes = b"", integrity_tail: int = 4, reassemble: bool = False) -> bytes:
         """Serialize one request/response exchange on the connection."""
@@ -1320,14 +1257,9 @@ class S7CommPlusConnection(SessionCore):
 
     def _session_activate(self) -> None:
         """Activate the V3 session after the SecurityKey handshake (see ``_build_session_activate_payload``)."""
-        logger.debug("Session activation: SET_VARIABLE addr 323 = USINT(5)")
-        payload = _build_session_activate_payload(self._session_id, self._sequence_number)
-        self.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
-        if self._last_response_function == FunctionCode.ERROR:
-            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
-            logger.warning("Session activation answered with the generic error function")
-            return
-        logger.info("Session activation completed")
+        with self._request_lock:  # the payload carries the next sequence number
+            self.send_request(FunctionCode.SET_VARIABLE, self._session_activate_payload(), integrity_tail=3)
+        self._session_activated()
 
     def _post_auth_legitimation(self, password: str = "") -> None:
         """Perform the post-SessionKey legitimation handshake.
@@ -1355,24 +1287,7 @@ class S7CommPlusConnection(SessionCore):
 
     def _delete_session(self) -> None:
         """Send DeleteObject to close the session."""
-        seq_num = self._next_sequence_number()
-
-        request = struct.pack(
-            ">BHHHHIB",
-            Opcode.REQUEST,
-            0x0000,
-            FunctionCode.DELETE_OBJECT,
-            0x0000,
-            seq_num,
-            self._session_id,
-            0x34,
-        )
-        request += struct.pack(">I", 0)
-
-        frame = encode_header(self._protocol_version, len(request)) + request
-        frame += struct.pack(">BBH", 0x72, self._protocol_version, 0x0000)
-        self._send_s7_data(frame)
-
+        self._send_s7_data(self._encode_delete_session())
         # Best-effort receive
         try:
             self._recv_s7_data()

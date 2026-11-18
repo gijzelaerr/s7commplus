@@ -80,7 +80,6 @@ from .client import (
 from .catalog import SymbolCatalog, SymbolicTag, TagResult
 from .codec import (
     SERVER_SESSION_ROLE_SECURED_BIT,
-    encode_header,
     parse_create_object_session_id,
     parse_or_raise_for_return_value,
 )
@@ -92,20 +91,15 @@ from .connection import (
     SessionKeyAuthenticationDependencyError,
     SessionKeyCandidateRejectedError,
     _alarm_texts_and_domain_filter,
-    _build_get_var_substreamed_payload,
-    _build_session_activate_payload,
-    _build_set_variable_payload,
     _check_set_variable_response,
     _check_timeout,
     _check_v1_legitimation_response,
-    _encode_security_key_struct,
     _build_subscription_credit_frame,
     _check_certificate_pin,
     _check_plaintext_fallback,
     _parse_get_var_substreamed_response,
     _resolve_use_tls,
     _parse_protection_level_response,
-    _renews_session_key,
     _request_frame_overhead,
     _resolve_session_key_fingerprint,
     _sends_session_activation,
@@ -143,9 +137,7 @@ from .protocol import (
     DataType,
     FunctionCode,
     Ids,
-    LegitimationId,
     LegitimationType,
-    Opcode,
     remote_tsap_for_connection_type,
     ProtocolVersion,
 )
@@ -1034,15 +1026,8 @@ class S7CommPlusAsyncClient(SessionCore):
 
     def _schedule_session_key_refresh(self) -> None:
         """Start renewing an authenticated legacy session's key periodically."""
-        interval = self._session_key_refresh_interval
-        if interval is None or self._session_key is None or not self._connected:
-            return
-        if not _renews_session_key(self._v1_session_key_family):
-            logger.info(
-                "Automatic SessionKey renewal is not sent for key family %02x, which refuses it; "
-                "the PLC ends the session when the key expires, so reconnect before then",
-                int(self._v1_session_key_family),
-            )
+        interval = self._renewal_interval()
+        if interval is None:
             return
         self._session_key_refresh_task = asyncio.get_running_loop().create_task(self._session_key_refresh_loop(interval))
 
@@ -1067,28 +1052,9 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _renew_session_key_locked(self) -> None:
         """Perform the challenge/SecurityKey exchange while the old key is active."""
-        if self._session_key is None or not self._v1_session_key_public_key:
-            raise S7ConnectionError("Legacy SessionKey renewal prerequisites are unavailable")
-
-        from .v1_session_key.handshake import authenticate_session_key
-
-        # Not the family-specific layout of the post-auth legitimation: a CPU 1214C
-        # FW V4.2 (key family 01) rejects that one mid-session and accepts this
-        # one, after which the renewal completes (#169).
-        challenge_payload = _build_get_var_substreamed_payload(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
-        challenge_response = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, 4)
-        challenge = _parse_get_var_substreamed_response(challenge_response)
-        if len(challenge) != 20:
-            raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
-        blob, new_session_key = authenticate_session_key(challenge, self._v1_session_key_public_key, self._v1_session_key_family)
-        security_key = _encode_security_key_struct(
-            self._v1_session_key_public_key, self._v1_session_key_family, blob, new_session_key
-        )
-        renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
-        renewal_response = await self._send_request_locked(FunctionCode.SET_VARIABLE, renewal_payload, 4)
-        _check_set_variable_response(renewal_response, self._last_response_function)
-        self._session_key = new_session_key
-        logger.info("Legacy SessionKey renewed successfully")
+        challenge_reply = await self._send_request_locked(FunctionCode.GET_VAR_SUBSTREAMED, self._renewal_challenge_payload(), 4)
+        payload, new_session_key = self._renewal_request(challenge_reply)
+        self._renewed(await self._send_request_locked(FunctionCode.SET_VARIABLE, payload, 4), new_session_key)
 
     async def _reconnect(self) -> None:
         """Tear down and re-establish the connection with the same parameters."""
@@ -2446,14 +2412,9 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _session_activate(self) -> None:
         """Activate the V3 session after the SecurityKey handshake (SET_VARIABLE addr 323 = USINT(5))."""
-        async with self._lock:
-            payload = _build_session_activate_payload(self._session_id, self._sequence_number)
-            await self._send_request_locked(FunctionCode.SET_VARIABLE, payload, integrity_tail=3)
-        if self._last_response_function == FunctionCode.ERROR:
-            # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
-            logger.warning("Session activation answered with the generic error function")
-            return
-        logger.info("Session activation completed")
+        async with self._lock:  # the payload carries the next sequence number
+            await self._send_request_locked(FunctionCode.SET_VARIABLE, self._session_activate_payload(), integrity_tail=3)
+        self._session_activated()
 
     async def _post_auth_legitimation(self, password: str = "") -> None:
         """Solve the V1 legitimation challenge after the SessionKey handshake (see the sync connection)."""
@@ -2469,24 +2430,7 @@ class S7CommPlusAsyncClient(SessionCore):
 
     async def _delete_session(self) -> None:
         """Send DeleteObject to close the session."""
-        seq_num = self._next_sequence_number()
-
-        request = struct.pack(
-            ">BHHHHIB",
-            Opcode.REQUEST,
-            0x0000,
-            FunctionCode.DELETE_OBJECT,
-            0x0000,
-            seq_num,
-            self._session_id,
-            0x34,
-        )
-        request += struct.pack(">I", 0)
-
-        frame = encode_header(self._protocol_version, len(request)) + request
-        frame += struct.pack(">BBH", 0x72, self._protocol_version, 0x0000)
-        await self._send_cotp_dt(frame)
-
+        await self._send_cotp_dt(self._encode_delete_session())
         try:
             await asyncio.wait_for(self._recv_cotp_dt(), timeout=1.0)
         except Exception:

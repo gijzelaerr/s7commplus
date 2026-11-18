@@ -254,3 +254,8 @@ def test_session_activation_matches_the_recording(case: str) -> None:
 def test_delete_session_matches_the_recording(case: str) -> None:
     assert _sync_delete(DELETE_CASES[case]) == _GOLDEN[f"delete-{case}"]["sync"]
     assert _async_delete(DELETE_CASES[case]) == _GOLDEN[f"delete-{case}"]["async"]
+
+
+def test_sync_and_async_agree_on_every_recorded_case() -> None:
+    for name, sides in _record().items():
+        assert sides["sync"] == sides["async"], name
