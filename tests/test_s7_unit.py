@@ -557,15 +557,38 @@ class TestParseWriteResponse:
         _record_tag_writes(results, 0, 1, self.PARTIAL_ERROR_REPLY)
         assert str(results[0].error) == f"Symbolic write failed for 'DB.m0': PLC error {self.ITEM_ERROR}"
 
-    # Not captured: the PLC's ReturnValue and item error from above, in a reply to a
-    # three-item request that names only item 2.
+    # SetMultiVariables replies of the same PLC to mixed batches, each followed by its
+    # IntegrityId echo and trailer. A bad item sent UINT to a WORD or USINT to a BYTE member;
+    # a good one wrote its member's own type. Reading the members back showed that the PLC
+    # wrote every good item and none of the bad ones.
+    CAPTURED_BATCHES = {
+        "good, bad": ("908b90808083ca801302c082b19080c5edfffe00814200000000", 2, {2}),
+        "bad, good": ("908b90808083ca801301c082b19080c5edfffe00814a00000000", 2, {1}),
+        "good, bad, good": ("908b90808083ca801302c082b19080c5edfffe00815200000000", 3, {2}),
+        "bad, bad": (
+            "908b90808083ca801301c082b19080c5edfffe02c082b19080c5edfffe00815e00000000",
+            2,
+            {1, 2},
+        ),
+        "good, good": ("0000816400000000", 2, set()),
+    }
+
+    @pytest.mark.parametrize("name", list(CAPTURED_BATCHES))
+    def test_captured_batch_fails_only_the_refused_items(self, name: str) -> None:
+        hex_reply, count, refused = self.CAPTURED_BATCHES[name]
+        response = bytes.fromhex(hex_reply)
+        expected = dict.fromkeys(sorted(refused), self.ITEM_ERROR)
+        assert _parse_write_response_errors(response, expected_count=count) == expected
+        assert _write_item_errors(response, count) == expected
+        results = self._tag_results(count)
+        _record_tag_writes(results, 0, count, response)
+        assert [result.success for result in results] == [number not in refused for number in range(1, count + 1)]
+
     def test_partial_error_leaves_the_other_items_written(self) -> None:
-        response = self._build_response(self.PARTIAL_ERROR, [(2, self.ITEM_ERROR)])
-        assert _parse_write_response_errors(response, expected_count=3) == {2: self.ITEM_ERROR}
-        assert _write_item_errors(response, 3) == {2: self.ITEM_ERROR}
-        results = self._tag_results(4)
+        response = bytes.fromhex(self.CAPTURED_BATCHES["good, bad, good"][0])
+        results = self._tag_results(5)
         _record_tag_writes(results, 1, 3, response)  # the request carried tags 1, 2 and 3
-        assert [result.success for result in results] == [True, True, False, True]
+        assert [result.success for result in results] == [True, True, False, True, True]
 
     @pytest.mark.parametrize(
         "response",
