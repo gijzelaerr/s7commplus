@@ -22,6 +22,7 @@ from .error import (
     S7Error,
     S7IntegrityError,
     S7ProtocolError,
+    S7RequestError,
     S7TimeoutError,
     S7TlsHandshakeError,
 )
@@ -1317,9 +1318,9 @@ class S7CommPlusAsyncClient:
 
         results = _parse_read_response(response)
         if not results:
-            raise RuntimeError("Read returned no data")
+            raise S7RequestError("Read returned no data")
         if results[0] is None:
-            raise RuntimeError("Read failed: PLC returned error for item")
+            raise S7RequestError("Read failed: PLC returned error for item")
         return results[0]
 
     async def db_write(self, db_number: int, start: int, data: bytes, datatype: DataType = DataType.BLOB) -> None:
@@ -1394,7 +1395,7 @@ class S7CommPlusAsyncClient:
         response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
-            raise RuntimeError("Area read failed")
+            raise S7RequestError("Area read failed")
         return results[0]
 
     async def write_area(self, area_rid: int, start: int, data: bytes, *, datatype: DataType = DataType.BLOB) -> None:
@@ -1553,7 +1554,7 @@ class S7CommPlusAsyncClient:
                 :meth:`create_subscriptions` for that many items.
         """
         if self._subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
         if not 0 <= credit_step <= 255:
             raise ValueError("credit_step must be between 0 and 255")
         normalized = _normalize_subscription_items(items)
@@ -1570,7 +1571,7 @@ class S7CommPlusAsyncClient:
         response = await self._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=integrity_tail)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
-            raise RuntimeError(f"Subscription creation failed: PLC returned 0x{return_value:X}")
+            raise S7RequestError(f"Subscription creation failed: PLC returned 0x{return_value:X}")
         subscription_id = object_ids[0]
         self._subscriptions.register(
             subscription_id,
@@ -1748,7 +1749,7 @@ class S7CommPlusAsyncClient:
                 for logging.
         """
         if self._subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_delete_subscription_request(self._subscription_container_id, self.write_delete_qualifier_version)
         await self._send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
@@ -1771,7 +1772,7 @@ class S7CommPlusAsyncClient:
         ``None`` (#173).
         """
         if self._subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_alarm_subscription_request(
             self._subscription_container_id,
             language_ids,
@@ -1782,7 +1783,7 @@ class S7CommPlusAsyncClient:
         response = await self._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=len(payload) - 11)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
-            raise RuntimeError(f"Alarm subscription failed: PLC returned {return_value:#x}")
+            raise S7RequestError(f"Alarm subscription failed: PLC returned {return_value:#x}")
         subscription_id = object_ids[0]
         self._alarm_subscription_ids.add(subscription_id)
         return subscription_id
@@ -1794,7 +1795,7 @@ class S7CommPlusAsyncClient:
         subscription container, data subscriptions included.
         """
         if self._subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(self._subscription_container_id, self.write_delete_qualifier_version)
         await self._send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
@@ -1880,7 +1881,7 @@ class S7CommPlusAsyncClient:
         response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
-            raise RuntimeError("Symbolic read failed")
+            raise S7RequestError("Symbolic read failed")
         return results[0]
 
     @_retry_on_dropped_connection
@@ -1901,7 +1902,7 @@ class S7CommPlusAsyncClient:
             One entry per requested item, in request order.
 
         Raises:
-            RuntimeError: If the PLC does not answer every requested item.
+            S7RequestError: If the PLC does not answer every requested item.
         """
         if not items:
             return []
@@ -1914,7 +1915,7 @@ class S7CommPlusAsyncClient:
             response = await self._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
             parsed = _parse_read_response(response, expected_count=len(chunk))
             if len(parsed) != len(chunk):
-                raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
+                raise S7RequestError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
             results.extend(parsed)
         return results
 
@@ -2072,7 +2073,7 @@ class S7CommPlusAsyncClient:
         return [
             TagResult(tag=tag, value=value)
             if value is not None
-            else TagResult(tag=tag, error=RuntimeError(f"Symbolic read failed for {tag.name!r}"))
+            else TagResult(tag=tag, error=S7RequestError(f"Symbolic read failed for {tag.name!r}"))
             for tag, value in zip(tags, values)
         ]
 
@@ -2159,7 +2160,7 @@ class S7CommPlusAsyncClient:
 
         Raises:
             KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
-            RuntimeError: The PLC reported an error for one of the items.
+            S7RequestError: The PLC reported an error for one of the items.
         """
         return (await self.read_values([name]))[0]
 
@@ -2186,7 +2187,7 @@ class S7CommPlusAsyncClient:
             KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
             TypeError, ValueError: ``value`` does not fit the PLC type, or a
                 leaf is too large for one request; nothing is sent.
-            RuntimeError: The PLC rejected one of the items, or a failure
+            S7RequestError: The PLC rejected one of the items, or a failure
                 interrupted a split batch; it is raised from the first failed
                 item's error, and the other items may have been written.
         """

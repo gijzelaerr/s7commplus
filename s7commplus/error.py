@@ -141,6 +141,17 @@ class S7WriteError(S7Error, RuntimeError):
         self.not_sent: range = not_sent if not_sent is not None else range(0)
 
 
+class S7RequestError(S7Error, RuntimeError):
+    """The PLC refused a request, or its reply did not answer every item asked for.
+
+    Raised by the clients for a failed read, symbolic read, subscription or
+    alarm subscription, and for a reply that names an unexpected item or
+    answers fewer items than were sent. It is also a ``RuntimeError``, which
+    these calls raised before, so existing ``except RuntimeError`` handlers
+    keep working.
+    """
+
+
 class S7SubscriptionError(S7Error, RuntimeError):
     """``create_subscriptions`` stopped after creating some of its subscriptions.
 

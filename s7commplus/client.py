@@ -19,6 +19,7 @@ from .error import (
     S7ConnectionError,
     S7NotConnectedError,
     S7ProtocolError,
+    S7RequestError,
     S7SubscriptionError,
     S7TimeoutError,
     S7TlsHandshakeError,
@@ -251,7 +252,7 @@ def _db_read_values(response: bytes, count: int) -> list[bytes]:
     if not parsed:  # refused as a whole; the parser logged the return value
         parsed = [None] * count
     if len(parsed) != count:
-        raise RuntimeError(f"Multi-read failed: PLC returned {len(parsed)} of {count} items")
+        raise S7RequestError(f"Multi-read failed: PLC returned {len(parsed)} of {count} items")
     return [value if value is not None else b"" for value in parsed]
 
 
@@ -260,7 +261,7 @@ def _write_item_errors(response: bytes, count: int) -> dict[int, int]:
 
     A request refused as a whole (see `_write_errors_or_refusal`) refuses each
     of its ``count`` items with the request's return value. An answer naming an
-    item outside ``1..count``, or one item twice, raises ``RuntimeError``.
+    item outside ``1..count``, or one item twice, raises ``S7RequestError``.
     """
     errors = _write_errors_or_refusal(response, expected_count=count)
     if errors is None:
@@ -306,7 +307,7 @@ def _record_tag_writes(results: list[TagResult], start: int, count: int, respons
     for number, code in errors.items():
         tag = results[start + number - 1].tag
         results[start + number - 1] = TagResult(
-            tag=tag, error=RuntimeError(f"Symbolic write failed for {tag.name!r}: PLC error {code}")
+            tag=tag, error=S7RequestError(f"Symbolic write failed for {tag.name!r}: PLC error {code}")
         )
 
 
@@ -525,11 +526,11 @@ def _value_plans(catalog: SymbolCatalog, names: Iterable[str]) -> list[_ValuePla
 
 
 def _raise_failures(results: Sequence[TagResult], action: str) -> None:
-    """Raise ``RuntimeError`` naming the failed items of ``results``, from the first one's error."""
+    """Raise ``S7RequestError`` naming the failed items of ``results``, from the first one's error."""
     failed = [result for result in results if result.error is not None]
     if failed:
         names = ", ".join(repr(result.tag.name) for result in failed[:5]) + (", ..." if len(failed) > 5 else "")
-        raise RuntimeError(f"{len(failed)} of {len(results)} {action} failed: {names}") from failed[0].error
+        raise S7RequestError(f"{len(failed)} of {len(results)} {action} failed: {names}") from failed[0].error
 
 
 def _assemble_values(plans: Sequence[_ValuePlan], results: Sequence[TagResult]) -> list[Any]:
@@ -1102,9 +1103,9 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results:
-            raise RuntimeError("Read returned no data")
+            raise S7RequestError("Read returned no data")
         if results[0] is None:
-            raise RuntimeError("Read failed: PLC returned error for item")
+            raise S7RequestError("Read failed: PLC returned error for item")
         return results[0]
 
     def _db_read_substreamed(self, db_number: int, start: int, size: int) -> bytes:
@@ -1217,7 +1218,7 @@ class S7CommPlusClient:
             including every item of a request it refused as a whole, is ``b""``.
 
         Raises:
-            RuntimeError: If an answer does not account for each of its items
+            S7RequestError: If an answer does not account for each of its items
                 exactly once.
         """
         if self._connection is None:
@@ -1266,7 +1267,7 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
-            raise RuntimeError("Area read failed")
+            raise S7RequestError("Area read failed")
         return results[0]
 
     def write_area(self, area_rid: int, start: int, data: bytes, *, datatype: DataType = DataType.BLOB) -> None:
@@ -1313,7 +1314,7 @@ class S7CommPlusClient:
 
            - **Physical PAQ LIDs return error when value is 0x00.**
              Reading a physical Q-byte LID (e.g. QB0) when all outputs are
-             OFF raises ``RuntimeError`` instead of returning ``b"\\x00"``.
+             OFF raises ``S7RequestError`` instead of returning ``b"\\x00"``.
              Callers should catch the exception and treat it as zero.
            - **TCP RST after first I/Q/M read.** The PLC sends a TCP RST
              after the first successful I/Q/M ``GetMultiVariables`` per
@@ -1340,7 +1341,7 @@ class S7CommPlusClient:
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
-            raise RuntimeError("Symbolic read failed")
+            raise S7RequestError("Symbolic read failed")
         return results[0]
 
     @_retry_on_dropped_connection
@@ -1361,7 +1362,7 @@ class S7CommPlusClient:
             One entry per requested item, in request order.
 
         Raises:
-            RuntimeError: If the PLC does not answer every requested item.
+            S7RequestError: If the PLC does not answer every requested item.
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
@@ -1377,7 +1378,7 @@ class S7CommPlusClient:
             response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
             parsed = _parse_read_response(response, expected_count=len(chunk))
             if len(parsed) != len(chunk):
-                raise RuntimeError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
+                raise S7RequestError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
             results.extend(parsed)
         return results
 
@@ -1563,7 +1564,7 @@ class S7CommPlusClient:
         return [
             TagResult(tag=tag, value=value)
             if value is not None
-            else TagResult(tag=tag, error=RuntimeError(f"Symbolic read failed for {tag.name!r}"))
+            else TagResult(tag=tag, error=S7RequestError(f"Symbolic read failed for {tag.name!r}"))
             for tag, value in zip(tags, values)
         ]
 
@@ -1651,7 +1652,7 @@ class S7CommPlusClient:
 
         Raises:
             KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
-            RuntimeError: The PLC reported an error for one of the items.
+            S7RequestError: The PLC reported an error for one of the items.
         """
         return self.read_values([name])[0]
 
@@ -1678,7 +1679,7 @@ class S7CommPlusClient:
             KeyError: ``name`` is neither a tag nor a struct or array in the catalog.
             TypeError, ValueError: ``value`` does not fit the PLC type, or a
                 leaf is too large for one request; nothing is sent.
-            RuntimeError: The PLC rejected one of the items, or a failure
+            S7RequestError: The PLC rejected one of the items, or a failure
                 interrupted a split batch; it is raised from the first failed
                 item's error, and the other items may have been written.
         """
@@ -2028,7 +2029,7 @@ class S7CommPlusClient:
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
 
         if not 0 <= credit_step <= 255:
             raise ValueError("credit_step must be between 0 and 255")
@@ -2050,7 +2051,7 @@ class S7CommPlusClient:
         )
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
-            raise RuntimeError(f"Subscription creation failed: PLC returned 0x{return_value:X}")
+            raise S7RequestError(f"Subscription creation failed: PLC returned 0x{return_value:X}")
 
         self._subscription_change_counter = self._subscription_change_counter % 0xFF + 1
         self._subscription_relation_id = (self._subscription_relation_id + 1) & 0xFFFFFFFF
@@ -2242,7 +2243,7 @@ class S7CommPlusClient:
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
 
         # Subscription children are owned by the session's second CreateObject
         # result. The reference driver deletes that container, not the child ID.
@@ -2287,7 +2288,7 @@ class S7CommPlusClient:
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_alarm_subscription_request(
             self._connection.subscription_container_id,
             language_ids,
@@ -2302,7 +2303,7 @@ class S7CommPlusClient:
         )
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
-            raise RuntimeError(f"Alarm subscription failed: PLC returned {return_value:#x}")
+            raise S7RequestError(f"Alarm subscription failed: PLC returned {return_value:#x}")
         subscription_id = object_ids[0]
         self._alarm_subscription_ids.add(subscription_id)
         return subscription_id
@@ -2316,7 +2317,7 @@ class S7CommPlusClient:
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
         if self._connection.subscription_container_id == 0:
-            raise RuntimeError("PLC did not provide a subscription container object")
+            raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(
             self._connection.subscription_container_id, self._connection.write_delete_qualifier_version
         )
@@ -2499,7 +2500,7 @@ def _parse_read_items(response: bytes, offset: int, expected_count: Optional[int
         raw_bytes, consumed = decode_pvalue_to_bytes(response, offset)
         offset += consumed
         if expected_count is not None and (item_nr > expected_count or item_nr in values):
-            raise RuntimeError(f"Symbolic multi-read failed: unexpected or duplicate item {item_nr}")
+            raise S7RequestError(f"Symbolic multi-read failed: unexpected or duplicate item {item_nr}")
         values[item_nr] = raw_bytes
 
     errors: dict[int, int] = {}
@@ -2514,12 +2515,12 @@ def _parse_read_items(response: bytes, offset: int, expected_count: Optional[int
         # other item that already has a value or an error is a duplicate.
         duplicate = err_item_nr in errors or bool(values.get(err_item_nr))
         if expected_count is not None and (err_item_nr > expected_count or duplicate):
-            raise RuntimeError(f"Symbolic multi-read failed: unexpected or duplicate item {err_item_nr}")
+            raise S7RequestError(f"Symbolic multi-read failed: unexpected or duplicate item {err_item_nr}")
         errors[err_item_nr] = err_value
 
     answered = len(values.keys() | errors.keys())
     if expected_count is not None and answered != expected_count:
-        raise RuntimeError(f"Symbolic multi-read failed: PLC answered {answered} of {expected_count} items")
+        raise S7RequestError(f"Symbolic multi-read failed: PLC answered {answered} of {expected_count} items")
 
     max_item = max(max(values.keys(), default=0), max(errors.keys(), default=0))
     # Every requested item is answered once, with a value or an error, so item
@@ -2576,26 +2577,26 @@ def _parse_write_response(response: bytes) -> None:
     """Parse a SetMultiVariables response payload.
 
     Raises:
-        RuntimeError: If the write failed
+        S7RequestError: If the write failed
     """
     errors = _parse_write_response_errors(response)
     if errors:
         err_str = ", ".join(f"item {nr}: error {val}" for nr, val in errors.items())
-        raise RuntimeError(f"Write failed: {err_str}")
+        raise S7RequestError(f"Write failed: {err_str}")
 
 
 def _parse_write_response_errors(response: bytes, expected_count: Optional[int] = None) -> dict[int, int]:
     """Return the per-item PLC errors in a SetMultiVariables response.
 
     Raises:
-        RuntimeError: If the PLC refused the request as a whole (see
+        S7RequestError: If the PLC refused the request as a whole (see
             `_write_errors_or_refusal`), or the answer names an item outside
             ``1..expected_count`` or one item twice.
     """
     errors = _write_errors_or_refusal(response, expected_count)
     if errors is None:
         return_value, _ = decode_uint64_vlq(response, 0)
-        raise RuntimeError(f"Write failed with return value {return_value}")
+        raise S7RequestError(f"Write failed with return value {return_value}")
     return errors
 
 
@@ -2636,7 +2637,7 @@ def _parse_write_error_list(response: bytes, offset: int, expected_count: Option
         err_value, consumed = decode_uint64_vlq(response, offset)
         offset += consumed
         if expected_count is not None and (err_item_nr > expected_count or err_item_nr in errors):
-            raise RuntimeError(f"Symbolic multi-write failed: unexpected or duplicate item {err_item_nr}")
+            raise S7RequestError(f"Symbolic multi-write failed: unexpected or duplicate item {err_item_nr}")
         errors[err_item_nr] = err_value
     return errors
 
@@ -2700,13 +2701,13 @@ def _parse_substreamed_read_response(response: bytes) -> bytes:
     return_value, consumed = decode_uint64_vlq(response, offset)
     offset += consumed
     if return_value != 0:
-        raise RuntimeError(
+        raise S7RequestError(
             f"Substreamed read failed: PLC returned error 0x{return_value:X}. "
             f"This may indicate the addressed object does not exist or the PLC "
             f"does not support GET_VAR_SUBSTREAMED for data reads."
         )
     if offset >= len(response):
-        raise RuntimeError("Substreamed read response empty")
+        raise S7RequestError("Substreamed read response empty")
     raw_bytes, consumed = decode_pvalue_to_bytes(response, offset)
     return raw_bytes
 

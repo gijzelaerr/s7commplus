@@ -70,6 +70,21 @@ s7commplus read --host 192.168.1.10 DB1.Motor.Speed
 
 See the command-line interface guide in the documentation.
 
+Errors derive from `S7Error`, importable from the package root together
+with its subclasses. A request the PLC refuses, or a reply that does not
+answer every item, raises `S7RequestError`, which is also a `RuntimeError`:
+
+```python
+from s7commplus import Client, S7RequestError
+
+with Client() as client:
+    client.connect("192.168.1.10", port=102)
+    try:
+        data = client.db_read(1, 0, 4)
+    except S7RequestError as exc:
+        print(f"The PLC refused the read: {exc}")
+```
+
 ## Development
 
 Cloning the repository is only necessary for developing or testing

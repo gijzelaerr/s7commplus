@@ -30,6 +30,21 @@ from .client import DBWriteItem, ProgramObject, SymbolicReadItem
 from .client import S7CommPlusClient as Client
 from .connection import S7CommPlusConnection
 from .devices import DEVICE_NAMES, device_family, device_name
+from .error import (
+    S7AuthenticationError,
+    S7CertificateError,
+    S7ConnectionError,
+    S7Error,
+    S7IntegrityError,
+    S7NotConnectedError,
+    S7ProtocolError,
+    S7RequestError,
+    S7ReturnValueError,
+    S7SubscriptionError,
+    S7TimeoutError,
+    S7TlsHandshakeError,
+    S7WriteError,
+)
 from .object_model import attribute_name, describe_attribute
 from .server import CPUState, DataBlock
 from .server import S7CommPlusServer as Server
@@ -65,6 +80,19 @@ __all__ = [
     "PresetStream",
     "ProgramObject",
     "S7CommPlusConnection",
+    "S7AuthenticationError",
+    "S7CertificateError",
+    "S7ConnectionError",
+    "S7Error",
+    "S7IntegrityError",
+    "S7NotConnectedError",
+    "S7ProtocolError",
+    "S7RequestError",
+    "S7ReturnValueError",
+    "S7SubscriptionError",
+    "S7TimeoutError",
+    "S7TlsHandshakeError",
+    "S7WriteError",
     "Server",
     "SubscriptionItem",
     "SubscriptionNotification",
