@@ -25,6 +25,14 @@ tested against an isolated, non-safety-critical controller.
   synchronous client when changing shared operations
 - `s7commplus/connection.py`: synchronous session lifecycle, TLS-in-COTP,
   authentication, request sequencing, and V3 integrity protection
+- `s7commplus/_session_core.py`: `SessionCore`, which both `connection.py` and
+  `async_client.py` inherit: session state and the I/O-free steps they share
+  (request encoding and reply checks, CreateObject, SessionSetup). Put
+  protocol logic both clients need here, not in one client; the clients keep
+  only their I/O. `tests/test_request_path_pinning.py` and
+  `tests/test_handshake_pinning.py` record what both send and keep
+- `s7commplus/_handshake.py`: CreateObject and SessionSetup builders and the
+  V1 SessionKey blob helpers, without I/O; `connection.py` re-exports them
 - `s7commplus/transport.py`: TCP, TPKT, and COTP transport
 - `s7commplus/protocol.py`: protocol constants and enums; excluded from
   pre-commit because its formatting is intentionally preserved
@@ -117,7 +125,9 @@ TLS connections use the `use_tls`, `tls_cert`, `tls_key`, and `tls_ca`
 arguments to `connect()`. Both clients also accept `password` there, which V1
 SessionKey sessions use for their post-handshake legitimation and TLS sessions
 pass to `authenticate()`; that method can also be called after connecting.
-V1 SessionKey support in the async client is emulator-tested only. Never weaken
+V1 SessionKey support in the async client was validated on a real S7-1215C and on
+S7-PLCSIM Advanced (see `docs/connections.rst`), with the frames it sent before
+it shared the handshake with the sync connection. Never weaken
 certificate verification or authentication defaults merely to make an
 integration test pass.
 

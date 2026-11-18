@@ -2,9 +2,14 @@
 
 Each case runs one handshake step on an unconnected client with its I/O
 stubbed out, and records the frame it sent and the state or exception it was
-left with. The golden file was recorded from the two separate implementations
-before they shared these steps; see the module that shares them for what
-changed. Set ``S7_RECORD_HANDSHAKE=1`` to rewrite the golden file.
+left with. The golden file was first recorded from the two separate
+implementations, before they shared these steps. The sync results are
+unchanged since; the async client now does what the sync connection did: it
+sends the full CreateObject client identification, frames a SessionSetup
+without a SessionKey as V2 with the order-number string blanked, keeps the
+public-key checksum, and refuses a CreateObject reply without an ObjectId
+with ``S7ConnectionError``. Set ``S7_RECORD_HANDSHAKE=1`` to rewrite the
+golden file.
 
 The replies come from a real S7-1215C FW V4.2 (#44) where possible.
 """
@@ -31,11 +36,14 @@ GOLDEN = Path(__file__).parent / "fixtures" / "handshake_golden.json"
 
 # The 1215C's reply with its ObjectIds cut: ReturnValue 0, no ObjectId.
 NO_OBJECT_ID_RESPONSE = bytes.fromhex("7201000c32000004ca0000000136000072010000")
+# The same, followed by an empty object: long enough to read a "session id" at bytes 9-12.
+NO_OBJECT_ID_LONG_RESPONSE = bytes.fromhex("7201001032000004ca00000001360000a1a2a2a272010000")
 SHORT_RESPONSE = bytes.fromhex("720100043200000472010000")
 
 CREATE_REPLIES = {
     "s7_1215c": CREATE_OBJECT_RESPONSE,
     "no_object_id": NO_OBJECT_ID_RESPONSE,
+    "no_object_id_long": NO_OBJECT_ID_LONG_RESPONSE,
     "short": SHORT_RESPONSE,
 }
 
@@ -209,3 +217,43 @@ def test_sync_session_setup_matches_the_recording(case: str) -> None:
 @pytest.mark.parametrize("case", list(SETUP_CASES))
 def test_async_session_setup_matches_the_recording(case: str) -> None:
     assert _async_setup(case) == _GOLDEN[f"session_setup-{case}"]["async"]
+
+
+@pytest.mark.parametrize("name", list(CREATE_REPLIES))
+def test_sync_and_async_create_object_agree(name: str) -> None:
+    assert _sync_create(CREATE_REPLIES[name]) == _async_create(CREATE_REPLIES[name])
+
+
+@pytest.mark.parametrize("case", list(SETUP_CASES))
+def test_sync_and_async_session_setup_agree(case: str) -> None:
+    assert _sync_setup(case) == _async_setup(case)
+
+
+# The cases above stub out the reply dispatcher. These feed the 1215C's
+# SessionSetup reply to the raw receive instead, so the real dispatcher of each
+# client, which routes SystemEvents and stale replies, must accept it.
+
+
+@pytest.mark.parametrize("keyed", [False, True], ids=["no_key", "key"])
+def test_sync_session_setup_accepts_the_real_reply_through_the_dispatcher(keyed: bool) -> None:
+    conn = S7CommPlusConnection("127.0.0.1")
+    _prepare(conn)
+    _created(conn, ProtocolVersion.V1, keyed)
+    sent: list[bytes] = []
+    conn._send_s7_data = sent.append  # type: ignore[method-assign]
+    conn._recv_s7_data = lambda timeout=None, idle_ok=False: _setup_reply(conn._sequence_number - 1)  # type: ignore[method-assign]
+    assert conn._setup_session() is True
+    assert (conn._session_key is not None) == keyed
+
+
+@pytest.mark.parametrize("keyed", [False, True], ids=["no_key", "key"])
+def test_async_session_setup_accepts_the_real_reply_through_the_dispatcher(keyed: bool) -> None:
+    client, sent = _async_client()
+    _created(client, ProtocolVersion.V1, keyed)
+
+    async def recv() -> bytes:
+        return _setup_reply((client._sequence_number - 1) & 0xFFFF)
+
+    client._recv_cotp_dt = recv  # type: ignore[method-assign]
+    assert asyncio.run(client._setup_session()) is True
+    assert (client._session_key is not None) == keyed

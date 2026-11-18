@@ -20,11 +20,28 @@ import logging
 import struct
 from typing import NamedTuple, Optional
 
-from .codec import decode_header, encode_header
+from ._handshake import (
+    _build_session_setup_frame,
+    _encode_security_key_struct,
+    _generate_session_key_blob,
+    _log_create_object_return_value,
+    _patch_plcsim_server_session_version,
+    _session_setup_accepted,
+)
+from .codec import SERVER_SESSION_ROLE_SECURED_BIT, decode_header, encode_header, parse_create_object_attributes
 from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
-from .protocol import FLAGS_34_FUNCTION_CODES, READ_FUNCTION_CODES, FunctionCode, Opcode, ProtocolVersion
+from .protocol import (
+    FLAGS_34_FUNCTION_CODES,
+    READ_FUNCTION_CODES,
+    DataType,
+    ElementID,
+    FunctionCode,
+    ObjectId,
+    Opcode,
+    ProtocolVersion,
+)
 from .v1_session_key.keys import KeyFamily
-from .vlq import decode_uint32_vlq, encode_uint32_vlq
+from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
 
 # The request path logged under the connection module's name before it moved
 # here; logging configuration and tests select it by that name.
@@ -196,6 +213,16 @@ class SessionCore:
     _v1_session_key_family: KeyFamily
     _last_raw_response_payload: Optional[bytes]
     _last_response_function: Optional[int]
+    _tls_active: bool
+    _subscription_container_id: int
+    _server_session_version: Optional[bytes]
+    _public_key_fingerprint: Optional[str]
+    _public_key_checksum: Optional[bytes]
+    _session_challenge: Optional[bytes]
+    _server_session_role: Optional[int]
+    _server_session_roles: Optional[int]
+    _session_key_fingerprint_override: Optional[str]
+    _v1_session_key_public_key: bytes
 
     @property
     def legacy_s7_1500(self) -> bool:
@@ -343,3 +370,270 @@ class SessionCore:
         if self.legacy_s7_1500 and _integrity_id_follows_body(self._v1_session_key_family, function_code):
             return payload
         return _strip_response_integrity_id(function_code, payload, self._session_key is not None, self.legacy_s7_1500)
+
+    # --- Connecting: CreateObject and SessionSetup ---
+
+    def _encode_create_object(self) -> _PendingRequest:
+        """Frame the CreateObject request that opens an S7CommPlus session.
+
+        Builds a NullServerSession CreateObject request matching the
+        structure expected by S7-1200/1500 PLCs:
+
+        Reference: thomas-v2/S7CommPlusDriver CreateObjectRequest.SetNullServerSessionData()
+        """
+        seq_num = self._next_sequence_number()
+
+        # Build CreateObject request header
+        request = struct.pack(
+            ">BHHHHIB",
+            Opcode.REQUEST,
+            0x0000,
+            FunctionCode.CREATE_OBJECT,
+            0x0000,
+            seq_num,
+            ObjectId.OBJECT_NULL_SERVER_SESSION,  # SessionId = 288 for initial setup
+            0x36,  # Transport flags
+        )
+
+        # RequestId: ObjectServerSessionContainer (285)
+        request += struct.pack(">I", ObjectId.OBJECT_SERVER_SESSION_CONTAINER)
+
+        # RequestValue: ValueUDInt(0) = DatatypeFlags(0x00) + Datatype.UDInt(0x04) + VLQ(0)
+        request += bytes([0x00, DataType.UDINT]) + encode_uint32_vlq(0)
+
+        # u32 zero between RequestValue and the request object. Confirmed
+        # against a golden TIA session CreateObject frame from independent
+        # capture analysis: RequestId 285, ValueUDInt(0), then this u32
+        # padding, all constant 0.
+        request += struct.pack(">I", 0)
+
+        # RequestObject: PObject for NullServerSession
+        # StartOfObject
+        request += bytes([ElementID.START_OF_OBJECT])
+        # RelationId: GetNewRIDOnServer (211)
+        request += struct.pack(">I", ObjectId.GET_NEW_RID_ON_SERVER)
+        # ClassId: ClassServerSession (287), VLQ encoded
+        request += encode_uint32_vlq(ObjectId.CLASS_SERVER_SESSION)
+        # ClassFlags: 0
+        request += encode_uint32_vlq(0)
+        # AttributeId: None (0)
+        request += encode_uint32_vlq(0)
+
+        # ServerSession attributes: full TIA-Portal-style identification.
+        # V1-initial S7-1200 firmware (e.g. FW v4.2.x) only returns
+        # ServerSessionVersion in its CreateObject response when the client
+        # introduces itself with this fuller attribute set; minimal requests
+        # (ClientRID only) get an incomplete session. See GH-712.
+        def _wstring_attr(attr_id: int, s: str) -> bytes:
+            data = s.encode("utf-8")
+            return (
+                bytes([ElementID.ATTRIBUTE])
+                + encode_uint32_vlq(attr_id)
+                + bytes([0x00, DataType.WSTRING])
+                + encode_uint32_vlq(len(data))
+                + data
+            )
+
+        client_id = "s7commplus"
+        request += _wstring_attr(233, client_id)  # ObjectVariableTypeName / class name
+        request += _wstring_attr(289, f"1:::6.0::{client_id}")  # network interface info
+        request += _wstring_attr(296, client_id)  # project name
+        request += _wstring_attr(297, "")
+        request += _wstring_attr(298, client_id)  # hostname
+        # 299: UDInt(1)
+        request += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(299)
+        request += bytes([0x00, DataType.UDINT]) + encode_uint32_vlq(1)
+        # 300: ServerSessionClientRID
+        request += bytes([ElementID.ATTRIBUTE])
+        request += encode_uint32_vlq(ObjectId.SERVER_SESSION_CLIENT_RID)
+        request += bytes([0x00, DataType.RID]) + struct.pack(">I", 0x80C3C901)
+        request += _wstring_attr(301, "")
+
+        # Nested object: ClassSubscriptions, with required class-name attribute
+        request += bytes([ElementID.START_OF_OBJECT])
+        request += struct.pack(">I", ObjectId.GET_NEW_RID_ON_SERVER)
+        request += encode_uint32_vlq(ObjectId.CLASS_SUBSCRIPTIONS)
+        request += encode_uint32_vlq(0)  # ClassFlags
+        request += encode_uint32_vlq(0)  # AttributeId
+        request += _wstring_attr(233, "SubscriptionContainer")
+        request += bytes([ElementID.TERMINATING_OBJECT])
+
+        # End outer object
+        request += bytes([ElementID.TERMINATING_OBJECT])
+
+        # Trailing padding
+        request += struct.pack(">I", 0)
+
+        # Wrap in S7CommPlus frame header + trailer
+        frame = encode_header(ProtocolVersion.V1, len(request)) + request
+        # S7CommPlus trailer (end-of-frame marker)
+        frame += struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
+        logger.debug("=== CreateObject === sending (%d bytes): %s", len(frame), _HexDump(frame))
+        return _PendingRequest(FunctionCode.CREATE_OBJECT, seq_num, frame, None)
+
+    def _apply_create_object_reply(self, response_frame: bytes) -> None:
+        """Take the session id, protocol version and session attributes from the CreateObject reply."""
+        logger.debug("=== CreateObject === received (%d bytes): %s", len(response_frame), _HexDump(response_frame))
+
+        # Parse S7CommPlus frame header
+        version, data_length, consumed = decode_header(response_frame)
+        response = response_frame[consumed:]
+
+        logger.debug(f"CreateObject response: version=V{version}, data_length={data_length}")
+        logger.debug("CreateObject response body (%d bytes): %s", len(response), _HexDump(response))
+
+        if len(response) < 10:
+            raise S7ConnectionError("CreateObject response too short")
+
+        # Response header is 10 bytes: opcode(1)+reserved(2)+func(2)+reserved(2)+seq(2)+transport(1).
+        # Responses do NOT carry a SessionId field (unlike requests which are 14 bytes).
+        resp_opcode = response[0]
+        resp_func = struct.unpack_from(">H", response, 3)[0]
+        resp_seq = struct.unpack_from(">H", response, 7)[0]
+        resp_transport = response[9]
+
+        offset = 10
+        return_value, consumed = decode_uint64_vlq(response, offset)
+        offset += consumed
+        if offset >= len(response):
+            raise S7ConnectionError("CreateObject response truncated before ObjectIdCount")
+        object_id_count = response[offset]
+        offset += 1
+        object_ids: list[int] = []
+        for _ in range(object_id_count):
+            obj_id, consumed = decode_uint32_vlq(response, offset)
+            offset += consumed
+            object_ids.append(obj_id)
+
+        if not object_ids:
+            raise S7ConnectionError("CreateObject response has no session ObjectId")
+
+        # First ObjectId is the session; the second is its subscription container.
+        self._session_id = object_ids[0]
+        self._subscription_container_id = object_ids[1] if len(object_ids) > 1 else 0
+        self._protocol_version = version
+
+        logger.debug(
+            f"CreateObject response header: opcode=0x{resp_opcode:02X} function=0x{resp_func:04X} "
+            f"seq={resp_seq} transport=0x{resp_transport:02X}"
+        )
+        logger.debug(f"CreateObject response: return_value={return_value} object_ids={[hex(i) for i in object_ids]}")
+        logger.debug(f"Session created: id=0x{self._session_id:08X} ({self._session_id}), version=V{version}")
+
+        _log_create_object_return_value(return_value, self._tls_active)
+
+        # Parse remaining payload (the ResponseObject tree) for session attributes
+        attrs = parse_create_object_attributes(response[offset:])
+        self._server_session_version = attrs.server_session_version
+        if self._server_session_version is not None:
+            logger.info(f"ServerSessionVersion captured ({len(self._server_session_version)} bytes)")
+        else:
+            logger.debug("ServerSessionVersion not found in CreateObject response")
+        if attrs.public_key_fingerprint is not None:
+            self._public_key_fingerprint = attrs.public_key_fingerprint
+            self._public_key_checksum = bytes.fromhex(attrs.public_key_fingerprint[3:])
+            logger.info(f"Public key fingerprint captured: {attrs.public_key_fingerprint}")
+        if attrs.session_challenge is not None:
+            self._session_challenge = attrs.session_challenge
+            logger.info(f"Session challenge captured ({len(attrs.session_challenge)} bytes)")
+        if attrs.server_session_role is not None:
+            self._server_session_role = attrs.server_session_role
+            self._server_session_roles = attrs.server_session_roles
+            if attrs.server_session_role & SERVER_SESSION_ROLE_SECURED_BIT:
+                logger.info(
+                    "ServerSession.Role bit 0x20000000 is set; observed on secured "
+                    "(SessionKey-protected) PLCs in TIA Portal captures, so SessionKey "
+                    "authentication is likely required"
+                )
+
+    def _try_session_key_auth(self) -> Optional[tuple[bytes, bytes]]:
+        """Attempt to generate the SecurityKey authentication blob.
+
+        Returns (blob, session_key) if we have the challenge and a matching
+        public key, or None if any prerequisite is missing.
+        """
+        if self._tls_active or self._protocol_version != ProtocolVersion.V1:
+            logger.debug("SessionKey auth: skipped for TLS/non-V1 session")
+            return None
+
+        if self._session_challenge is None:
+            logger.debug("SessionKey auth: no challenge captured from CreateObject")
+            return None
+
+        if self._public_key_fingerprint is None:
+            logger.debug("SessionKey auth: no public key fingerprint captured")
+            return None
+
+        fingerprint = self._session_key_fingerprint_override or self._public_key_fingerprint
+        result = _generate_session_key_blob(self._session_challenge, fingerprint)
+        if result is None:
+            return None
+        blob, session_key, self._v1_session_key_public_key, self._v1_session_key_family = result
+        return blob, session_key
+
+    def _encode_security_key_struct(self, blob: bytes, session_key: bytes) -> bytes:
+        """Encode the SecurityKey struct for this connection's public key and family."""
+        return _encode_security_key_struct(self._v1_session_key_public_key, self._v1_session_key_family, blob, session_key)
+
+    def _encode_session_setup(self) -> Optional[tuple[_PendingRequest, Optional[tuple[bytes, bytes]]]]:
+        """Frame the SetMultiVariables that echoes ServerSessionVersion back to the PLC.
+
+        Always uses V2 framing, transport flags 0x34, and no IntegrityId.
+
+        On V1-initial PLCs (FW < 4.5), this also includes the SecurityKey
+        blob at address 1830, carrying a seed encrypted with an ECDH against
+        the PLC's public key and the challenge encrypted under keys derived
+        from that seed (see ``v1_session_key.real_plc.authenticator``).
+
+        Returns:
+            The request and the ``(blob, session_key)`` it carries, if any;
+            ``None`` when the PLC sent no ServerSessionVersion to echo.
+        """
+        if self._server_session_version is None:
+            return None
+
+        auth_result = self._try_session_key_auth()
+        security_key = None if auth_result is None else self._encode_security_key_struct(*auth_result)
+
+        server_session_version = self._server_session_version
+        if self._v1_session_key_family == KeyFamily.PLCSIM:
+            # PLCSIM needs the real-PLC 315-318 values for the post-auth
+            # legitimation to be accepted (see the helper).
+            server_session_version = _patch_plcsim_server_session_version(server_session_version)
+
+        seq_num = self._next_sequence_number()
+        frame = _build_session_setup_frame(
+            self._session_id,
+            seq_num,
+            server_session_version,
+            self._protocol_version,
+            security_key,
+        )
+        logger.debug("=== SetupSession === sending (%d bytes): %s", len(frame), _HexDump(frame))
+        return _PendingRequest(FunctionCode.SET_MULTI_VARIABLES, seq_num, frame, None), auth_result
+
+    def _apply_session_setup_reply(
+        self, pending: _PendingRequest, auth_result: Optional[tuple[bytes, bytes]], response_frame: bytes
+    ) -> bool:
+        """Check the SessionSetup reply; on success, switch to the SessionKey in ``auth_result``, if any.
+
+        Returns:
+            True if session setup succeeded (return_value == 0).
+        """
+        logger.debug("=== SetupSession === received (%d bytes): %s", len(response_frame), _HexDump(response_frame))
+        version, data_length, consumed = decode_header(response_frame)
+        response = response_frame[consumed : consumed + data_length]
+        if len(response) < 10:
+            raise S7ConnectionError("SetupSession response too short")
+        _validate_response_header(response, FunctionCode.SET_MULTI_VARIABLES, pending.sequence)
+        if not _session_setup_accepted(response_frame):
+            return False
+
+        if auth_result is not None:
+            self._session_key = auth_result[1]
+            self._with_integrity_id = True
+            self._integrity_id_read = 0
+            self._integrity_id_write = 0
+            logger.info("SecurityKey accepted by PLC, IntegrityId tracking enabled")
+        logger.info("Session setup completed successfully")
+        return True
