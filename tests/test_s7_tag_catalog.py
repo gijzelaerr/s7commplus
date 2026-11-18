@@ -169,14 +169,14 @@ async def test_async_read_tag_sends_zero_crc_without_retry() -> None:
 @pytest.mark.asyncio
 async def test_async_write_tag_sends_zero_symbol_crc() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._protocol_version = ProtocolVersion.V2
+    client._connection._connected = True
+    client._connection._protocol_version = ProtocolVersion.V2
     client._symbol_catalog = SymbolCatalog.from_browse([_browse_item(crc=0x12345678)])
-    client._send_request = AsyncMock(return_value=encode_uint64_vlq(0) + encode_uint32_vlq(0))  # type: ignore[method-assign]
+    client._connection._send_request = AsyncMock(return_value=encode_uint64_vlq(0) + encode_uint32_vlq(0))  # type: ignore[method-assign]
 
     await client.write_tag("DB1.Motor.Speed", b"\x3f\x80\x00\x00")
 
-    assert client._send_request.await_args.args[1] == _build_multi_symbolic_write_payload(
+    assert client._connection._send_request.await_args.args[1] == _build_multi_symbolic_write_payload(
         [(0x8A0E0001, [0xA, 0x2], b"\x3f\x80\x00\x00", 0, DataType.REAL)], ProtocolVersion.V2
     )
 

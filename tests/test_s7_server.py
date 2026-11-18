@@ -601,7 +601,7 @@ class TestAsyncClientServerIntegration:
     async def test_explore(self, server: S7CommPlusServer, attributes: list[int] | None, expected_hex: str) -> None:
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            with patch.object(client, "_send_request", wraps=client._send_request) as send:
+            with patch.object(client._connection, "_send_request", wraps=client._connection._send_request) as send:
                 response = await client.explore(attributes=attributes)
 
             expected_payload = bytes.fromhex(expected_hex)
@@ -623,7 +623,7 @@ class TestAsyncClientServerIntegration:
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
             # The first 3 bytes of the -12 reply a real S7-1500 sends for a missing object
-            with patch.object(client, "_send_request", return_value=b"\xc0\x88\x95"):
+            with patch.object(client._connection, "_send_request", return_value=b"\xc0\x88\x95"):
                 with pytest.raises(ValueError, match="truncated ReturnValue"):
                     await client.explore(0x12345678)
 
@@ -641,7 +641,7 @@ class TestAsyncClientServerIntegration:
             server.register_program_object(obj.rid, obj.class_id, obj.name or None)
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            with patch.object(client, "_send_request", wraps=client._send_request) as send:
+            with patch.object(client._connection, "_send_request", wraps=client._connection._send_request) as send:
                 objects = await client.program_objects()
                 datablocks = await client.list_datablocks()
             # Both send thePLCProgram with ObjectVariableTypeName (233) and Block.BlockNumber (2521) as VLQ
@@ -675,7 +675,7 @@ class TestAsyncClientServerIntegration:
     ) -> None:
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            with patch.object(client, "_send_request", side_effect=replies):
+            with patch.object(client._connection, "_send_request", side_effect=replies):
                 with pytest.raises(S7ReturnValueError, match=f"^{operation} failed"):
                     await getattr(client, method)()
 
@@ -722,22 +722,22 @@ class TestAsyncClientServerIntegration:
         """The unvalidated state change (issue #8) raises and sends nothing."""
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            sent = client._sequence_number
+            sent = client._connection._sequence_number
             with pytest.raises(NotImplementedError, match="issues/8"):
                 await client.set_plc_operating_state(1)
-            assert client._sequence_number == sent
+            assert client._connection._sequence_number == sent
             assert await client.get_cpu_state() in ("RUN", "STOP", "UNKNOWN")
 
     async def test_block_transfer_refuses_without_sending(self, server: S7CommPlusServer) -> None:
         """The guessed block upload and download requests raise and send nothing."""
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            sent = client._sequence_number
+            sent = client._connection._sequence_number
             with pytest.raises(NotImplementedError, match="Uploading a block"):
                 await client.upload_block(0x08, 1)
             with pytest.raises(NotImplementedError, match="Downloading a block"):
                 await client.download_block(0x08, 1, b"\x00")
-            assert client._sequence_number == sent
+            assert client._connection._sequence_number == sent
 
     async def test_request_operating_state_round_trips_through_the_emulator(self, server: S7CommPlusServer) -> None:
         """Async parity with the sync experimental write (issue #8)."""
@@ -1389,9 +1389,9 @@ class TestAcceptedSessionKeyRenewal:
         await client.connect("127.0.0.1", port=renewal_server.port, legacy_session_key_refresh_interval=None)
         try:
             for key in (self.NEW_KEY, self.NEWER_KEY):
-                async with client._lock:
-                    await client._renew_session_key_locked()
-                assert client._session_key == key
+                async with client._connection._lock:
+                    await client._connection._renew_session_key_locked()
+                assert client._connection._session_key == key
                 await client.db_write(1, 0, b"\x2a")
                 assert await client.db_read(1, 0, 1) == b"\x2a"
                 assert renewal_server._session_key == key
@@ -1408,7 +1408,7 @@ class TestAcceptedSessionKeyRenewal:
                 await asyncio.sleep(0.01)
             assert renewal_server._accepted_session_key_renewals == 2
             assert await client.db_read(1, 0, 1) == b"\x00"
-            assert client._session_key == self.NEWER_KEY
+            assert client._connection._session_key == self.NEWER_KEY
         finally:
             await client.disconnect()
 

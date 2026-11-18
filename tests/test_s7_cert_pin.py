@@ -142,11 +142,11 @@ async def test_async_pin_check_refuses_a_session_closed_during_the_handshake(mon
     from s7commplus import AsyncClient
 
     client = AsyncClient()
-    client._writer = MagicMock()
+    client._connection._writer = MagicMock()
 
     async def closed_during_handshake() -> None:
-        client._ssl_object = None  # what a disconnect() during the handshake leaves
+        client._connection._ssl_object = None  # what a disconnect() during the handshake leaves
 
-    monkeypatch.setattr(client, "_do_tls_handshake", closed_during_handshake)
+    monkeypatch.setattr(client._connection, "_do_tls_handshake", closed_during_handshake)
     with pytest.raises(S7ConnectionError, match="closed during the handshake"):
-        await client._activate_tls()
+        await client._connection._activate_tls()

@@ -287,7 +287,7 @@ async def test_async_connect_tunes_the_socket_like_the_sync_transport(emulator: 
     # Regression: the async client set SO_KEEPALIVE only, so a dead peer went
     # unnoticed for the OS default of about two hours.
     client = S7CommPlusAsyncClient()
-    with patch("s7commplus.async_client._configure_tcp_socket") as configure:
+    with patch("s7commplus.async_connection._configure_tcp_socket") as configure:
         await client.connect("127.0.0.1", port=emulator)
     try:
         configure.assert_called_once()
@@ -435,38 +435,38 @@ async def test_async_reassembly_times_out_when_the_plc_stops_mid_response() -> N
     # Regression: only the first PDU of a response was bounded; a PLC that stopped
     # after it left the await hanging on the next fragment.
     client = S7CommPlusAsyncClient()
-    client._request_timeout = 0.2
-    client._connected = True
+    client._connection._request_timeout = 0.2
+    client._connection._connected = True
 
     async def silent() -> bytes:
         await asyncio.sleep(10)
         return b""
 
-    client._recv_cotp_dt = silent  # type: ignore[method-assign]
+    client._connection._recv_cotp_dt = silent  # type: ignore[method-assign]
     with pytest.raises(S7TimeoutError):
-        await asyncio.wait_for(client._recv_reassembled_payload(b"\x72\x02\x00\x10"), timeout=5)
+        await asyncio.wait_for(client._connection._recv_reassembled_payload(b"\x72\x02\x00\x10"), timeout=5)
     assert not client.connected
 
 
 async def test_async_send_the_plc_does_not_accept_times_out_and_closes_the_session() -> None:
     # Regression: drain() waited forever on a peer that stopped reading.
     client = S7CommPlusAsyncClient()
-    client._request_timeout = 0.2
-    client._connected = True
-    client._transport_connected = True
+    client._connection._request_timeout = 0.2
+    client._connection._connected = True
+    client._connection._transport_connected = True
 
     async def never() -> None:
         await asyncio.sleep(10)
 
     writer = MagicMock()
     writer.drain = never
-    client._writer = writer
-    client._reader = MagicMock()
+    client._connection._writer = writer
+    client._connection._reader = MagicMock()
     with pytest.raises(S7TimeoutError):
-        await asyncio.wait_for(client._send_cotp_raw(b"\x72"), timeout=5)
+        await asyncio.wait_for(client._connection._send_cotp_raw(b"\x72"), timeout=5)
     writer.transport.abort.assert_called_once_with()
     assert not client.connected
-    assert client._writer is None
+    assert client._connection._writer is None
 
 
 # --- EXPLORE timeout: a longer bound for each wait of an EXPLORE reply ---------------------------
@@ -515,8 +515,8 @@ async def test_async_explore_timeout_defaults_to_30_s_and_none_uses_the_request_
     client = S7CommPlusAsyncClient()
     await client.connect("127.0.0.1", port=emulator, **kwargs)  # type: ignore[arg-type]
     try:
-        assert client._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == request_wait
-        assert client._reply_timeout(FunctionCode.EXPLORE) == explore_wait
+        assert client._connection._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == request_wait
+        assert client._connection._reply_timeout(FunctionCode.EXPLORE) == explore_wait
     finally:
         await client.disconnect()
 
@@ -538,8 +538,8 @@ async def test_async_explore_timeout_survives_a_reconnect(emulator: int) -> None
     await client.connect("127.0.0.1", port=emulator, request_timeout=2.5, explore_timeout=45.0)
     try:
         await client._reconnect()
-        assert client._reply_timeout(FunctionCode.EXPLORE) == 45.0
-        assert client._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == 2.5
+        assert client._connection._reply_timeout(FunctionCode.EXPLORE) == 45.0
+        assert client._connection._reply_timeout(FunctionCode.GET_MULTI_VARIABLES) == 2.5
     finally:
         await client.disconnect()
 
@@ -637,25 +637,29 @@ def test_sync_every_part_of_an_explore_reply_gets_the_explore_timeout() -> None:
 
 async def test_async_every_part_of_an_explore_reply_gets_the_explore_timeout() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = client._transport_connected = True
-    client._writer = MagicMock()
-    client._reader = MagicMock()
-    client._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
-    client._request_timeout = 0.2
-    client._explore_timeout = 5.0
+    client._connection._connected = client._connection._transport_connected = True
+    client._connection._writer = MagicMock()
+    client._connection._reader = MagicMock()
+    client._connection._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
+    client._connection._request_timeout = 0.2
+    client._connection._explore_timeout = 5.0
     parts = _two_part_reply(FunctionCode.EXPLORE, 0) + _two_part_reply(FunctionCode.GET_MULTI_VARIABLES, 1)
 
     async def slow_part() -> bytes:
         await asyncio.sleep(0.4)  # longer than the request timeout, well within the EXPLORE timeout
         return parts.pop(0)
 
-    client._recv_cotp_dt = slow_part  # type: ignore[method-assign]
-    await asyncio.wait_for(client._send_request(FunctionCode.EXPLORE, bytes(8), integrity_tail=5, reassemble=True), timeout=5)
+    client._connection._recv_cotp_dt = slow_part  # type: ignore[method-assign]
+    await asyncio.wait_for(
+        client._connection._send_request(FunctionCode.EXPLORE, bytes(8), integrity_tail=5, reassemble=True), timeout=5
+    )
     assert len(parts) == 2
     assert client.connected
 
     with pytest.raises(S7TimeoutError):
-        await asyncio.wait_for(client._send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(8), reassemble=True), timeout=5)
+        await asyncio.wait_for(
+            client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(8), reassemble=True), timeout=5
+        )
     assert not client.connected
 
 
@@ -843,9 +847,9 @@ def test_sync_receivers_reject_a_bad_per_call_timeout(receiver: str, value: floa
 @pytest.mark.parametrize("receiver", RECEIVERS)
 async def test_async_receivers_reject_a_bad_per_call_timeout(receiver: str, value: float) -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
+    client._connection._connected = True
     receive = AsyncMock()
-    client._recv_cotp_dt = receive  # type: ignore[method-assign]
+    client._connection._recv_cotp_dt = receive  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="^timeout must"):
         await getattr(client, receiver)(timeout=value)
     receive.assert_not_awaited()
@@ -989,7 +993,7 @@ def test_sync_notification_wait_bounds_the_whole_call(receiver: str) -> None:
 @pytest.mark.parametrize("receiver", RECEIVERS)
 async def test_async_notification_wait_bounds_the_whole_call(receiver: str) -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
+    client._connection._connected = True
     _register(client._subscriptions, SUBSCRIPTION_A, SUBSCRIPTION_B)
     frames = 0
 
@@ -999,7 +1003,7 @@ async def test_async_notification_wait_bounds_the_whole_call(receiver: str) -> N
         await asyncio.sleep(0.02)
         return _data_notification(SUBSCRIPTION_B, frames)
 
-    client._recv_cotp_dt = other_subscription  # type: ignore[method-assign]
+    client._connection._recv_cotp_dt = other_subscription  # type: ignore[method-assign]
     start = time.monotonic()
     with pytest.raises(S7TimeoutError):
         if receiver == RECEIVERS[0]:
@@ -1014,18 +1018,18 @@ async def test_async_frame_that_starts_in_one_lock_slice_is_read_to_its_end() ->
     # The wait gives the lock back between slices only while no frame has started;
     # a frame that started arriving in one slice is read past it, not cut off.
     client = S7CommPlusAsyncClient()
-    client._connected = True
+    client._connection._connected = True
     _register(client._subscriptions, SUBSCRIPTION_A)
-    slice_seconds = client._NOTIFICATION_LOCK_SLICE
+    slice_seconds = client._connection._NOTIFICATION_LOCK_SLICE
 
     async def slow_frame() -> bytes:
         await asyncio.sleep(slice_seconds / 5)
-        client._rx_partial = True  # the TPKT header is in
+        client._connection._rx_partial = True  # the TPKT header is in
         await asyncio.sleep(slice_seconds * 3)
-        client._rx_partial = False
+        client._connection._rx_partial = False
         return _data_notification(SUBSCRIPTION_A)
 
-    client._recv_cotp_dt = slow_frame  # type: ignore[method-assign]
+    client._connection._recv_cotp_dt = slow_frame  # type: ignore[method-assign]
     notification = await asyncio.wait_for(client.receive_subscription_notification(SUBSCRIPTION_A, timeout=2.0), timeout=5)
     assert notification.subscription_id == SUBSCRIPTION_A
     assert client.connected

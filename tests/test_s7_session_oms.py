@@ -109,7 +109,7 @@ class TestProperties:
     async def test_async_client_property(self) -> None:
         client = S7CommPlusAsyncClient()
         assert client.session_oms_version is None
-        client._server_session_version = _session_version_struct(256, 0)
+        client._connection._server_session_version = _session_version_struct(256, 0)
         assert client.session_oms_version == (256, 0)
 
 

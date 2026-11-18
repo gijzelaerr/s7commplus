@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 import pytest
 
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.codec import encode_header
 from s7commplus.connection import (
     _MAX_STALE_RESPONSES_PER_REQUEST,
@@ -148,7 +148,7 @@ def _run_async(name: str) -> dict[str, Any]:
     frames, keyed, expected = CASES[name]
     frames = list(frames)
     total = len(frames)
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     _prepare(client, keyed)
     client._reader = object()  # type: ignore[assignment]
     client._writer = object()  # type: ignore[assignment]

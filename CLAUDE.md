@@ -21,12 +21,20 @@ tested against an isolated, non-safety-critical controller.
 ## Repository layout
 
 - `s7commplus/client.py`: synchronous high-level client and request builders
-- `s7commplus/async_client.py`: asyncio client; keep behavior aligned with the
-  synchronous client when changing shared operations
+- `s7commplus/async_client.py`: asyncio high-level client; keep behavior
+  aligned with the synchronous client when changing shared operations. Like
+  `S7CommPlusClient`, it holds its connection in `_connection` and keeps
+  reconnects, subscriptions, the tag catalog and the operations
 - `s7commplus/connection.py`: synchronous session lifecycle, TLS-in-COTP,
   authentication, request sequencing, and V3 integrity protection
+- `s7commplus/async_connection.py`: `S7CommPlusAsyncConnection`, the asyncio
+  counterpart of `connection.py` (TPKT/COTP stream, TLS, handshake, SessionKey
+  renewal, request path). Unlike the sync client, the async client keeps one
+  connection for its lifetime and a reconnect resets it, so tasks waiting on
+  its request lock keep the same lock; it calls back into the client through
+  the `on_close`, `on_reset` and `blocked` hooks
 - `s7commplus/_session_core.py`: `SessionCore`, which both `connection.py` and
-  `async_client.py` inherit: session state and the I/O-free steps they share
+  `async_connection.py` inherit: session state and the I/O-free steps they share
   (request encoding and reply checks, sorting the frames that arrive before
   a reply, reassembling a split reply, InitSSL and the TLS session setup,
   CreateObject, SessionSetup, password legitimation, SessionKey renewal,

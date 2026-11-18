@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.error import S7ConnectionError
 from s7commplus.protocol import ProtocolVersion
@@ -151,8 +151,8 @@ def _sync_conn(script: _Script) -> S7CommPlusConnection:
     return conn
 
 
-def _async_client(script: _Script) -> S7CommPlusAsyncClient:
-    client = S7CommPlusAsyncClient()
+def _async_client(script: _Script) -> S7CommPlusAsyncConnection:
+    client = S7CommPlusAsyncConnection()
 
     async def send(fc: int, payload: bytes, integrity_tail: int = 4, reassemble: bool = False) -> bytes:
         return script.answer(fc, payload, integrity_tail)

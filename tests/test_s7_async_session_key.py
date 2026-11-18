@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.client import _LEGACY_KEY_CACHE, ProgramObject, S7CommPlusClient
 from s7commplus.codec import encode_header
 from s7commplus.connection import (
@@ -77,12 +78,12 @@ async def test_async_session_setup_installs_the_session_key(session_key_server: 
     try:
         assert client.connected
         assert client.session_setup_ok
-        assert client._session_key == TEST_SESSION_KEY
-        assert client._v1_session_key_family == KeyFamily.S7_1200
+        assert client._connection._session_key == TEST_SESSION_KEY
+        assert client._connection._v1_session_key_family == KeyFamily.S7_1200
         assert server._accepted_session_key_setups == 1
     finally:
         await client.disconnect()
-    assert client._session_key is None
+    assert client._connection._session_key is None
 
 
 @pytest.mark.asyncio
@@ -93,7 +94,7 @@ async def test_async_connect_without_password_skips_legitimation(
     # reads without one, so no password must mean no legitimation is sent.
     _, port = session_key_server
     client = S7CommPlusAsyncClient()
-    with patch.object(S7CommPlusAsyncClient, "_post_auth_legitimation", new_callable=AsyncMock) as legit:
+    with patch.object(S7CommPlusAsyncConnection, "_post_auth_legitimation", new_callable=AsyncMock) as legit:
         await client.connect("127.0.0.1", port=port)
         try:
             legit.assert_not_awaited()
@@ -106,7 +107,7 @@ async def test_async_connect_without_password_skips_legitimation(
 async def test_async_connect_with_password_sends_legitimation(session_key_server: tuple[S7CommPlusServer, int]) -> None:
     _, port = session_key_server
     client = S7CommPlusAsyncClient()
-    with patch.object(S7CommPlusAsyncClient, "_post_auth_legitimation", new_callable=AsyncMock) as legit:
+    with patch.object(S7CommPlusAsyncConnection, "_post_auth_legitimation", new_callable=AsyncMock) as legit:
         await client.connect("127.0.0.1", port=port, password="secret")
         try:
             legit.assert_awaited_once_with("secret")
@@ -165,7 +166,7 @@ async def test_async_unknown_fingerprint_cannot_bypass_session_key_setup() -> No
     try:
         with pytest.raises(S7ConnectionError, match="session setup was rejected"):
             await client.connect("127.0.0.1", port=port)
-        assert client._session_key is None
+        assert client._connection._session_key is None
         assert not client.session_setup_ok
         assert srv._accepted_session_key_setups == 0
     finally:
@@ -244,33 +245,33 @@ async def test_async_disabled_fallback_fails_without_probing() -> None:
 
 def _authenticated_client() -> S7CommPlusAsyncClient:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._session_ready = True
-    client._transport_connected = True
-    client._reader = MagicMock()
-    client._writer = MagicMock()
-    client._writer.wait_closed = AsyncMock()
-    client._protocol_version = ProtocolVersion.V1
-    client._session_id = 0x70000FDC
-    client._session_key = b"o" * 24
-    client._v1_session_key_public_key = b"p" * 40
-    client._v1_session_key_family = KeyFamily.S7_1500
-    client._delete_session = AsyncMock()  # type: ignore[method-assign]
+    client._connection._connected = True
+    client._connection._session_ready = True
+    client._connection._transport_connected = True
+    client._connection._reader = MagicMock()
+    client._connection._writer = MagicMock()
+    client._connection._writer.wait_closed = AsyncMock()
+    client._connection._protocol_version = ProtocolVersion.V1
+    client._connection._session_id = 0x70000FDC
+    client._connection._session_key = b"o" * 24
+    client._connection._v1_session_key_public_key = b"p" * 40
+    client._connection._v1_session_key_family = KeyFamily.S7_1500
+    client._connection._delete_session = AsyncMock()  # type: ignore[method-assign]
     return client
 
 
 @pytest.mark.asyncio
 async def test_async_session_key_request_frame_matches_the_sync_layout() -> None:
     client = _authenticated_client()
-    client._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
-    client._recv_cotp_dt = AsyncMock(side_effect=OSError("no reply"))  # type: ignore[method-assign]
+    client._connection._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
+    client._connection._recv_cotp_dt = AsyncMock(side_effect=OSError("no reply"))  # type: ignore[method-assign]
 
     with pytest.raises(OSError, match="no reply"):
-        await client._send_request(FunctionCode.GET_VARIABLE, bytes(4))
+        await client._connection._send_request(FunctionCode.GET_VARIABLE, bytes(4))
 
     request = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.GET_VARIABLE, 0, 0, 0x70000FDC, 0x34)
     request += bytes(4)
-    frame = client._send_cotp_dt.call_args[0][0]
+    frame = client._connection._send_cotp_dt.call_args[0][0]
     assert frame == _frame_request(request, ProtocolVersion.V1, b"o" * 24)
     assert frame[:4] == encode_header(ProtocolVersion.V3, len(frame) - 8)
     assert frame[4] == 0x20  # hash-length marker before the 32-byte HMAC digest
@@ -279,37 +280,37 @@ async def test_async_session_key_request_frame_matches_the_sync_layout() -> None
 @pytest.mark.asyncio
 async def test_async_forged_response_invalidates_the_session() -> None:
     client = _authenticated_client()
-    client._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
+    client._connection._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
     response = bytes([Opcode.RESPONSE, 0, 0]) + struct.pack(">HHH", FunctionCode.GET_VARIABLE, 0, 0) + bytes([0x00])
     protected = bytes([0x20]) + bytes(32) + response  # wrong digest
     frame = encode_header(ProtocolVersion.V3, len(protected)) + protected
-    client._recv_cotp_dt = AsyncMock(return_value=frame)  # type: ignore[method-assign]
+    client._connection._recv_cotp_dt = AsyncMock(return_value=frame)  # type: ignore[method-assign]
 
     with pytest.raises(S7IntegrityError):
-        await client._send_request(FunctionCode.GET_VARIABLE, bytes(4))
-    assert not client._session_ready
-    assert client._session_key is None
-    assert client._writer is None
+        await client._connection._send_request(FunctionCode.GET_VARIABLE, bytes(4))
+    assert not client._connection._session_ready
+    assert client._connection._session_key is None
+    assert client._connection._writer is None
 
 
 @pytest.mark.asyncio
 async def test_async_renewal_installs_key_only_after_accepted_old_key_response() -> None:
     client = _authenticated_client()
     challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
-    old_key = client._session_key
+    old_key = client._connection._session_key
     keys_during_exchange: list[bytes | None] = []
 
     async def exchange(*_args: object) -> bytes:
-        keys_during_exchange.append(client._session_key)
+        keys_during_exchange.append(client._connection._session_key)
         return challenge_response if len(keys_during_exchange) == 1 else b"\x00"
 
-    client._send_request_locked = AsyncMock(side_effect=exchange)  # type: ignore[method-assign]
+    client._connection._send_request_locked = AsyncMock(side_effect=exchange)  # type: ignore[method-assign]
     with patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)):
-        await client._renew_session_key_locked()
+        await client._connection._renew_session_key_locked()
 
     assert keys_during_exchange == [old_key, old_key]
-    assert client._session_key == b"n" * 24
-    renewal_call = client._send_request_locked.call_args_list[1]
+    assert client._connection._session_key == b"n" * 24
+    renewal_call = client._connection._send_request_locked.call_args_list[1]
     assert renewal_call.args[0] == FunctionCode.SET_VARIABLE
     assert encode_uint32_vlq(LegitimationId.SESSION_SETUP_LEGITIMATION) in renewal_call.args[1]
 
@@ -318,14 +319,14 @@ async def test_async_renewal_installs_key_only_after_accepted_old_key_response()
 @pytest.mark.parametrize("family", [KeyFamily.S7_1200, KeyFamily.S7_1500])
 async def test_async_renewal_reads_the_challenge_with_the_reference_layout(family: KeyFamily) -> None:
     client = _authenticated_client()
-    client._v1_session_key_family = family
-    client._sequence_number = 7
+    client._connection._v1_session_key_family = family
+    client._connection._sequence_number = 7
     challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
-    client._send_request_locked = AsyncMock(side_effect=[challenge_response, b"\x00"])  # type: ignore[method-assign]
+    client._connection._send_request_locked = AsyncMock(side_effect=[challenge_response, b"\x00"])  # type: ignore[method-assign]
     with patch("s7commplus.v1_session_key.handshake.authenticate_session_key", return_value=(b"b" * 180, b"n" * 24)):
-        await client._renew_session_key_locked()
+        await client._connection._renew_session_key_locked()
 
-    challenge_call = client._send_request_locked.call_args_list[0]
+    challenge_call = client._connection._send_request_locked.call_args_list[0]
     expected = _build_get_var_substreamed_payload(0x70000FDC, LegitimationId.SERVER_SESSION_REQUEST)
     assert challenge_call.args == (FunctionCode.GET_VAR_SUBSTREAMED, expected, 4)
 
@@ -334,82 +335,82 @@ async def test_async_renewal_reads_the_challenge_with_the_reference_layout(famil
 async def test_async_rejected_renewal_never_installs_generated_key() -> None:
     client = _authenticated_client()
     challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
-    old_key = client._session_key
-    client._send_request_locked = AsyncMock(side_effect=[challenge_response, encode_uint32_vlq(0x8104)])  # type: ignore[method-assign]
+    old_key = client._connection._session_key
+    client._connection._send_request_locked = AsyncMock(side_effect=[challenge_response, encode_uint32_vlq(0x8104)])  # type: ignore[method-assign]
 
     with (
         patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
         pytest.raises(S7ConnectionError, match="return_value=0x8104"),
     ):
-        await client._renew_session_key_locked()
-    assert client._session_key == old_key
+        await client._connection._renew_session_key_locked()
+    assert client._connection._session_key == old_key
 
 
 @pytest.mark.asyncio
 async def test_async_error_frame_never_installs_generated_key() -> None:
     client = _authenticated_client()
     challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(TEST_CHALLENGE)]) + TEST_CHALLENGE
-    old_key = client._session_key
+    old_key = client._connection._session_key
     replies = iter([(FunctionCode.GET_VAR_SUBSTREAMED, challenge_response), (FunctionCode.ERROR, bytes.fromhex("893100000000"))])
 
     async def exchange(*_args: object) -> bytes:
-        client._last_response_function, reply = next(replies)
+        client._connection._last_response_function, reply = next(replies)
         return reply
 
-    client._send_request_locked = AsyncMock(side_effect=exchange)  # type: ignore[method-assign]
+    client._connection._send_request_locked = AsyncMock(side_effect=exchange)  # type: ignore[method-assign]
     with (
         patch("s7commplus.v1_session_key.handshake.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
         pytest.raises(S7ConnectionError, match="generic error"),
     ):
-        await client._renew_session_key_locked()
-    assert client._session_key == old_key
+        await client._connection._renew_session_key_locked()
+    assert client._connection._session_key == old_key
 
 
 @pytest.mark.asyncio
 async def test_async_short_interval_renews_and_disconnect_stops_it() -> None:
     client = _authenticated_client()
-    client._v1_session_key_family = KeyFamily.S7_1200
-    client._session_key_refresh_interval = 0.01
+    client._connection._v1_session_key_family = KeyFamily.S7_1200
+    client._connection._session_key_refresh_interval = 0.01
     renewed = asyncio.Event()
-    client._renew_session_key_locked = AsyncMock(side_effect=renewed.set)  # type: ignore[method-assign]
-    client._schedule_session_key_refresh()
+    client._connection._renew_session_key_locked = AsyncMock(side_effect=renewed.set)  # type: ignore[method-assign]
+    client._connection._schedule_session_key_refresh()
 
     await asyncio.wait_for(renewed.wait(), 1)
-    task = client._session_key_refresh_task
+    task = client._connection._session_key_refresh_task
     assert task is not None
     await client.disconnect()
     await asyncio.sleep(0)
     assert task.cancelled() or task.done()
-    assert client._session_key_refresh_task is None
+    assert client._connection._session_key_refresh_task is None
 
 
 @pytest.mark.asyncio
 async def test_async_refresh_failure_is_terminal_and_surfaces_on_next_request() -> None:
     client = _authenticated_client()
-    client._v1_session_key_family = KeyFamily.S7_1200
-    client._session_key_refresh_interval = 0.01
-    client._renew_session_key_locked = AsyncMock(side_effect=S7ConnectionError("PLC rejected key"))  # type: ignore[method-assign]
-    client._schedule_session_key_refresh()
-    task = client._session_key_refresh_task
+    client._connection._v1_session_key_family = KeyFamily.S7_1200
+    client._connection._session_key_refresh_interval = 0.01
+    client._connection._renew_session_key_locked = AsyncMock(side_effect=S7ConnectionError("PLC rejected key"))  # type: ignore[method-assign]
+    client._connection._schedule_session_key_refresh()
+    task = client._connection._session_key_refresh_task
     assert task is not None
     await asyncio.wait_for(task, 1)
 
     assert not client.connected
-    client._delete_session.assert_not_awaited()
+    client._connection._delete_session.assert_not_awaited()
     with pytest.raises(S7ConnectionError, match="renewal failed: PLC rejected key"):
-        await client._send_request(FunctionCode.GET_VARIABLE, bytes(4))
+        await client._connection._send_request(FunctionCode.GET_VARIABLE, bytes(4))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("family", [KeyFamily.S7_1500, KeyFamily.PLCSIM])
 async def test_async_family_that_refuses_renewal_does_not_schedule_it(family: KeyFamily) -> None:
     client = _authenticated_client()
-    client._v1_session_key_family = family
-    client._session_key_refresh_interval = 0.01
-    client._schedule_session_key_refresh()
+    client._connection._v1_session_key_family = family
+    client._connection._session_key_refresh_interval = 0.01
+    client._connection._schedule_session_key_refresh()
     # An S7-1500 answers the renewal SecurityKey write with a fatal SystemEvent
     # (#184) and PLCSIM resets the connection.
-    assert client._session_key_refresh_task is None
+    assert client._connection._session_key_refresh_task is None
 
 
 # --- Public API parity ---

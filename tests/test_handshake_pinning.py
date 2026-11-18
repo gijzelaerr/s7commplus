@@ -25,7 +25,7 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.protocol import ProtocolVersion
 from s7commplus.v1_session_key.keys import KeyFamily
@@ -111,8 +111,8 @@ def _sync_create(reply: bytes) -> dict[str, Any]:
     return {"sent": [f.hex() for f in sent], "result": result, "state": _state(conn)}
 
 
-def _async_client() -> tuple[S7CommPlusAsyncClient, list[bytes]]:
-    client = S7CommPlusAsyncClient()
+def _async_client() -> tuple[S7CommPlusAsyncConnection, list[bytes]]:
+    client = S7CommPlusAsyncConnection()
     _prepare(client)
     client._reader = object()  # type: ignore[assignment]
     client._writer = object()  # type: ignore[assignment]

@@ -28,5 +28,5 @@ def test_truncated_challenge_is_rejected(payload: bytes) -> None:
 @pytest.mark.parametrize("marker", [b"", b"\x00"])
 async def test_async_challenge_uses_shared_parser(marker: bytes) -> None:
     client = S7CommPlusAsyncClient()
-    client._send_request = AsyncMock(return_value=b"\x00" + marker + b"\x10\x02\x14" + _CHALLENGE + b"\x04")
-    assert await client._get_legitimation_challenge() == _CHALLENGE
+    client._connection._send_request = AsyncMock(return_value=b"\x00" + marker + b"\x10\x02\x14" + _CHALLENGE + b"\x04")
+    assert await client._connection._get_legitimation_challenge() == _CHALLENGE

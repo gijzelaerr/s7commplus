@@ -106,7 +106,7 @@ class TestSecuredSessionProperty:
 
         client = S7CommPlusAsyncClient()
         assert client.secured_session is False
-        client._server_session_role = SERVER_SESSION_ROLE_SECURED_BIT
+        client._connection._server_session_role = SERVER_SESSION_ROLE_SECURED_BIT
         assert client.secured_session is True
 
 
@@ -175,7 +175,7 @@ class TestServerSessionRoles:
 
         client = S7CommPlusAsyncClient()
         assert client.server_session_roles is None
-        client._server_session_roles = 7
+        client._connection._server_session_roles = 7
         assert client.server_session_roles == 7
 
 

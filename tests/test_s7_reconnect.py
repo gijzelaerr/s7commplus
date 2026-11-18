@@ -128,19 +128,19 @@ async def test_async_failed_reconnect_keeps_the_parameters(server: tuple[S7CommP
 def _legitimation(client: S7CommPlusAsyncClient, level_after: int) -> ExitStack:
     """Stub the legitimation exchange; the PLC then reports ``level_after``."""
     stack = ExitStack()
-    stack.enter_context(patch.object(client, "_decide_legitimation_mode", return_value=LegitimationType.LEGACY))
-    stack.enter_context(patch.object(client, "_get_legitimation_challenge", AsyncMock(return_value=bytes(20))))
-    stack.enter_context(patch.object(client, "_send_legitimation_legacy", AsyncMock()))
-    stack.enter_context(patch.object(client, "_get_effective_protection_level", AsyncMock(return_value=level_after)))
+    stack.enter_context(patch.object(client._connection, "_decide_legitimation_mode", return_value=LegitimationType.LEGACY))
+    stack.enter_context(patch.object(client._connection, "_get_legitimation_challenge", AsyncMock(return_value=bytes(20))))
+    stack.enter_context(patch.object(client._connection, "_send_legitimation_legacy", AsyncMock()))
+    stack.enter_context(patch.object(client._connection, "_get_effective_protection_level", AsyncMock(return_value=level_after)))
     return stack
 
 
 async def test_async_refused_authenticate_keeps_the_stored_credentials() -> None:
     client = S7CommPlusAsyncClient()
     client._connect_params = {"password": "known", "username": ""}
-    client._connected = True
-    client._tls_active = True
-    client._protection_level = 3
+    client._connection._connected = True
+    client._connection._tls_active = True
+    client._connection._protection_level = 3
     with _legitimation(client, level_after=3), pytest.raises(S7ConnectionError, match="refused"):
         await client.authenticate("wrong", "intruder")  # the PLC refuses the password
     assert client._connect_params == {"password": "known", "username": ""}
@@ -151,7 +151,7 @@ async def test_async_reconnect_reuses_the_password_and_username_of_authenticate(
     client = S7CommPlusAsyncClient()
     await client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=cert_path)
     try:
-        client._protection_level = 3
+        client._connection._protection_level = 3
         with _legitimation(client, level_after=1):
             await client.authenticate("secret", "operator")  # the PLC accepts the password
 

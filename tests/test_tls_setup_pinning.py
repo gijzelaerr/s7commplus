@@ -28,7 +28,7 @@ from unittest.mock import patch
 
 import pytest
 
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.codec import encode_header
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.protocol import FunctionCode, Opcode, ProtocolVersion
@@ -67,7 +67,7 @@ def _sync_init_ssl(name: str) -> dict[str, Any]:
 
 
 def _async_init_ssl(name: str) -> dict[str, Any]:
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     client._connected = True
     client._reader = object()  # type: ignore[assignment]
     client._writer = object()  # type: ignore[assignment]
@@ -120,9 +120,9 @@ def _sync_context() -> dict[str, Any]:
 
 
 def _async_context() -> dict[str, Any]:
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     client._writer = object()  # type: ignore[assignment]
-    captured, patcher = _capture("s7commplus.async_client")
+    captured, patcher = _capture("s7commplus.async_connection")
     with patcher, contextlib.suppress(_Captured):
         asyncio.run(client._activate_tls())
     return _describe(captured[0])

@@ -79,10 +79,10 @@ class _Client:
             self.client, self.send = sync_client, connection.send_request
         else:
             async_client = S7CommPlusAsyncClient()
-            async_client._connected = True
-            async_client._with_integrity_id = True
-            async_client._send_request = AsyncMock(side_effect=side_effect)  # type: ignore[method-assign]
-            self.client, self.send = async_client, async_client._send_request
+            async_client._connection._connected = True
+            async_client._connection._with_integrity_id = True
+            async_client._connection._send_request = AsyncMock(side_effect=side_effect)  # type: ignore[method-assign]
+            self.client, self.send = async_client, async_client._connection._send_request
         self.client.max_items_per_request = max_items
         self.client.max_request_bytes = max_request_bytes
 
@@ -465,13 +465,13 @@ class _Live:
             connection._send_s7_data = record  # type: ignore[method-assign]
         else:
             await self.client.connect("127.0.0.1", port=port, **kwargs)
-            send_async = self.client._send_cotp_dt
+            send_async = self.client._connection._send_cotp_dt
 
             async def record_async(data: bytes) -> None:
                 self.frames.append(len(data))
                 await send_async(data)
 
-            self.client._send_cotp_dt = record_async  # type: ignore[method-assign]
+            self.client._connection._send_cotp_dt = record_async  # type: ignore[method-assign]
 
     async def call(self, method: str, *args: Any) -> Any:
         result = getattr(self.client, method)(*args)
@@ -483,7 +483,9 @@ class _Live:
             connection = self.client._connection
             assert connection is not None
             return encode_uint32_vlq(connection._integrity_id_read) if connection._with_integrity_id else b""
-        return encode_uint32_vlq(self.client._integrity_id_read) if self.client._with_integrity_id else b""
+        return (
+            encode_uint32_vlq(self.client._connection._integrity_id_read) if self.client._connection._with_integrity_id else b""
+        )
 
     def object_qualifier_version(self) -> int:
         if isinstance(self.client, S7CommPlusClient):
@@ -590,12 +592,12 @@ class _Subscriber:
             self.client, self.send = sync_client, connection.send_request
         else:
             async_client = S7CommPlusAsyncClient()
-            async_client._connected = True
-            async_client._subscription_container_id = 0x3C2
-            async_client._protocol_version = ProtocolVersion.V2
-            async_client._with_integrity_id = True
-            async_client._send_request = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
-            self.client, self.send = async_client, async_client._send_request
+            async_client._connection._connected = True
+            async_client._connection._subscription_container_id = 0x3C2
+            async_client._connection._protocol_version = ProtocolVersion.V2
+            async_client._connection._with_integrity_id = True
+            async_client._connection._send_request = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
+            self.client, self.send = async_client, async_client._connection._send_request
 
     async def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
         result = getattr(self.client, method)(*args, **kwargs)

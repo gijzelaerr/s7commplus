@@ -121,7 +121,7 @@ def _sync_connect(session: str) -> dict[str, Any]:
 def _async_connect(session: str) -> dict[str, Any]:
     use_tls, _, password, _ = SESSIONS[session]
     client = S7CommPlusAsyncClient()
-    order = _stub_steps(client, session, run_async=True)
+    order = _stub_steps(client._connection, session, run_async=True)
     writer = MagicMock()
     writer.get_extra_info.return_value = None
     writer.wait_closed = AsyncMock(return_value=None)
@@ -132,10 +132,10 @@ def _async_connect(session: str) -> dict[str, Any]:
     async def open_connection(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
         return MagicMock(), writer
 
-    client._cotp_connect = cotp  # type: ignore[method-assign]
+    client._connection._cotp_connect = cotp  # type: ignore[method-assign]
 
     async def run() -> None:
-        with patch("s7commplus.async_client.asyncio.open_connection", open_connection):
+        with patch("s7commplus.async_connection.asyncio.open_connection", open_connection):
             await client.connect("127.0.0.1", use_tls=use_tls, password=password or None)
 
     return _outcome(order, lambda: asyncio.run(run()))

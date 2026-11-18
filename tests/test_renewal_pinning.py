@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.protocol import FunctionCode, ProtocolVersion
 from s7commplus.v1_session_key.keys import KeyFamily
@@ -103,7 +103,7 @@ def _sync_renewal(case: str) -> dict[str, Any]:
 def _async_renewal(case: str) -> dict[str, Any]:
     key, public, replies = RENEWAL_CASES[case]
     script = _Script(replies)
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     _prepare(client, key, public)
 
     async def send(fc: int, payload: bytes, integrity_tail: int = 4, reassemble: bool = False) -> bytes:
@@ -137,7 +137,7 @@ def _sync_schedule(case: str) -> dict[str, Any]:
 
 
 def _async_schedule(case: str) -> dict[str, Any]:
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     _schedule_setup(client, case)
 
     async def run() -> bool:
@@ -167,7 +167,7 @@ def _sync_activate(function: int) -> dict[str, Any]:
 
 def _async_activate(function: int) -> dict[str, Any]:
     script = _Script([SET_OK])
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     _prepare(client, OLD_KEY, PUBLIC_KEY)
 
     async def send(fc: int, payload: bytes, integrity_tail: int = 4, reassemble: bool = False) -> bytes:
@@ -192,7 +192,7 @@ def _sync_delete(version: int) -> dict[str, Any]:
 
 
 def _async_delete(version: int) -> dict[str, Any]:
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     _prepare(client, OLD_KEY, PUBLIC_KEY)
     client._protocol_version = version
     sent: list[bytes] = []

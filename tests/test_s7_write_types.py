@@ -31,7 +31,7 @@ async def test_scalar_write_validates_type_but_raw_access_uses_blob_on_wire(
     if asynchronous:
         client = S7CommPlusAsyncClient()
         send = AsyncMock(return_value=b"\x00\x00")
-        client._send_request = send
+        client._connection._send_request = send
         if operation == "symbolic":
             await client.write_symbolic(0x8A0E0001, [15], data, datatype=datatype)
         elif operation == "area":
@@ -86,7 +86,7 @@ def test_missing_multi_write_type_rejected_before_any_send(substreamed: bool) ->
 async def test_async_missing_multi_write_type_rejected_before_send() -> None:
     client = S7CommPlusAsyncClient()
     send = AsyncMock()
-    client._send_request = send
+    client._connection._send_request = send
     with pytest.raises(ValueError, match="require.*datatype"):
         await client.db_write_multi([(1, 0, b"\x00\x4d")])  # type: ignore[list-item]
     send.assert_not_called()
@@ -193,15 +193,15 @@ def test_write_tags_sends_strings_chars_and_date_and_time_in_the_write_forms() -
 
 async def test_async_write_tags_sends_strings_chars_and_date_and_time_in_the_write_forms() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._protocol_version = ProtocolVersion.V2
+    client._connection._connected = True
+    client._connection._protocol_version = ProtocolVersion.V2
     client._symbol_catalog = SymbolCatalog.from_browse(STRING_BROWSE)
-    client._send_request = AsyncMock(return_value=encode_uint64_vlq(0) + encode_uint32_vlq(0))  # type: ignore[method-assign]
+    client._connection._send_request = AsyncMock(return_value=encode_uint64_vlq(0) + encode_uint32_vlq(0))  # type: ignore[method-assign]
 
     results = await client.write_tags({name: bytes.fromhex(raw) for name, (raw, _pvalue) in STRING_WRITES.items()})
 
     assert all(result.success for result in results)
-    _assert_string_writes(client._send_request.await_args.args[1])
+    _assert_string_writes(client._connection._send_request.await_args.args[1])
 
 
 def test_write_tags_rejects_a_wstring_of_odd_length_before_sending() -> None:
@@ -228,9 +228,9 @@ async def test_write_tags_splits_strings_by_their_encoded_size(asynchronous: boo
     send: MagicMock
     if asynchronous:
         async_client = S7CommPlusAsyncClient()
-        async_client._connected = True
-        async_client._with_integrity_id = True
-        async_client._send_request = send = AsyncMock(return_value=answer)  # type: ignore[method-assign]
+        async_client._connection._connected = True
+        async_client._connection._with_integrity_id = True
+        async_client._connection._send_request = send = AsyncMock(return_value=answer)  # type: ignore[method-assign]
         async_client._symbol_catalog = catalog
         async_client.max_request_bytes = 700  # two 256-byte strings fit in one frame, three do not
         results = await async_client.write_tags({name: raw for name in names})

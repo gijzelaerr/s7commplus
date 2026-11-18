@@ -227,13 +227,13 @@ async def test_async_raw_db_reads_use_profile_qualifier(enabled: bool) -> None:
     from s7commplus.client import _build_read_payload
 
     client = S7CommPlusAsyncClient()
-    client._legacy_s7_1500 = enabled
-    client._session_key = _KEY
-    client._protocol_version = ProtocolVersion.V1
-    client._send_request = AsyncMock(return_value=_RID_VALUE)  # type: ignore[method-assign]
+    client._connection._legacy_s7_1500 = enabled
+    client._connection._session_key = _KEY
+    client._connection._protocol_version = ProtocolVersion.V1
+    client._connection._send_request = AsyncMock(return_value=_RID_VALUE)  # type: ignore[method-assign]
     await client.db_read(*_DB_READ_ITEM)
     version = ProtocolVersion.V2 if enabled else ProtocolVersion.V1
-    assert client._send_request.call_args.args[1] == _build_read_payload([_DB_READ_ITEM], version)
+    assert client._connection._send_request.call_args.args[1] == _build_read_payload([_DB_READ_ITEM], version)
 
 
 @pytest.mark.parametrize("family, skipped", [(KeyFamily.S7_1200, 1), (KeyFamily.S7_1500, 0)])
@@ -242,9 +242,9 @@ def test_s7_1200_legitimation_skips_one_integrity_id(family: KeyFamily, skipped:
     from s7commplus.async_client import S7CommPlusAsyncClient
 
     async_client = S7CommPlusAsyncClient()
-    async_client._session_key = _KEY
-    async_client._protocol_version = ProtocolVersion.V1
-    for client in (_connection(), async_client):
+    async_client._connection._session_key = _KEY
+    async_client._connection._protocol_version = ProtocolVersion.V1
+    for client in (_connection(), async_client._connection):
         client._v1_session_key_family = family
         client._integrity_id_read, client._integrity_id_write = 1, 2
         client._skip_integrity_ids_after_legitimation()
@@ -259,8 +259,8 @@ async def test_async_system_event_between_fragments_is_skipped() -> None:
 
     event = bytes([0x72, ProtocolVersion.SYSTEM_EVENT, 0x00, 0x10]) + bytes(16)
     client = S7CommPlusAsyncClient()
-    client._recv_cotp_dt = AsyncMock(side_effect=[frag(b"abc"), event, frag(b"de") + b"\x72\x02\0\0"])  # type: ignore[method-assign]
-    assert await client._recv_reassembled_payload() == b"abcde"
+    client._connection._recv_cotp_dt = AsyncMock(side_effect=[frag(b"abc"), event, frag(b"de") + b"\x72\x02\0\0"])  # type: ignore[method-assign]
+    assert await client._connection._recv_reassembled_payload() == b"abcde"
 
 
 @pytest.mark.parametrize("enabled", [False, True])

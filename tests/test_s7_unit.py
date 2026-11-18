@@ -1545,8 +1545,8 @@ class TestLegitimationRejection:
         from s7commplus.async_client import S7CommPlusAsyncClient
 
         client = S7CommPlusAsyncClient()
-        assert client._response_payload(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED) is not None
-        assert client._last_raw_response_payload == self._REJECTED
+        assert client._connection._response_payload(FunctionCode.SET_VAR_SUBSTREAMED, self._REJECTED) is not None
+        assert client._connection._last_raw_response_payload == self._REJECTED
 
 
 class TestServiceResultCodes:
@@ -1899,12 +1899,12 @@ class TestWriteDeleteQualifierVersion:
         from s7commplus.v1_session_key.keys import KeyFamily
 
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._session_key = b"k" * 24
-        client._protocol_version = ProtocolVersion.V1
-        client._v1_session_key_family = KeyFamily[family]
-        client._subscription_container_id = 0x70000F90
-        client._send_request = AsyncMock(return_value=b"\x00\x00")  # type: ignore[method-assign]
+        client._connection._connected = True
+        client._connection._session_key = b"k" * 24
+        client._connection._protocol_version = ProtocolVersion.V1
+        client._connection._v1_session_key_family = KeyFamily[family]
+        client._connection._subscription_container_id = 0x70000F90
+        client._connection._send_request = AsyncMock(return_value=b"\x00\x00")  # type: ignore[method-assign]
         assert client.write_delete_qualifier_version == version
 
         area, lids, data, crc = self._WRITE_ARGS
@@ -1915,9 +1915,9 @@ class TestWriteDeleteQualifierVersion:
             await client.delete_alarm_subscription(0x70000F92)
 
         asyncio.run(run())
-        (_, write_payload), _ = client._send_request.call_args_list[0]
-        (_, delete_payload), _ = client._send_request.call_args_list[1]
-        (_, alarm_delete_payload), _ = client._send_request.call_args_list[2]
+        (_, write_payload), _ = client._connection._send_request.call_args_list[0]
+        (_, delete_payload), _ = client._connection._send_request.call_args_list[1]
+        (_, alarm_delete_payload), _ = client._connection._send_request.call_args_list[2]
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
         assert alarm_delete_payload == self._expected_alarm_delete(version) != self._expected_alarm_delete(3 - version)
@@ -1989,10 +1989,10 @@ class TestS71200Subscriptions:
         from s7commplus.v1_session_key.keys import KeyFamily
 
         client = S7CommPlusAsyncClient()
-        client._session_key = b"k" * 24
-        client._protocol_version = ProtocolVersion.V1
-        client._v1_session_key_family = KeyFamily.S7_1200
-        payload = client._response_payload(FunctionCode.SET_MULTI_VARIABLES, bytes.fromhex(reply))
+        client._connection._session_key = b"k" * 24
+        client._connection._protocol_version = ProtocolVersion.V1
+        client._connection._v1_session_key_family = KeyFamily.S7_1200
+        payload = client._connection._response_payload(FunctionCode.SET_MULTI_VARIABLES, bytes.fromhex(reply))
         assert _write_item_errors(payload, 1) == {}
 
     def test_s7_1500_create_object_response_still_strips_the_leading_id(self) -> None:
@@ -2008,12 +2008,12 @@ class TestS71200Subscriptions:
         from s7commplus.v1_session_key.keys import KeyFamily
 
         client = S7CommPlusAsyncClient()
-        client._session_key = b"k" * 24
-        client._protocol_version = ProtocolVersion.V1
-        client._v1_session_key_family = KeyFamily.S7_1200
+        client._connection._session_key = b"k" * 24
+        client._connection._protocol_version = ProtocolVersion.V1
+        client._connection._v1_session_key_family = KeyFamily.S7_1200
         assert client.legacy_s7_1500
-        payload = client._response_payload(FunctionCode.CREATE_OBJECT, self._CREATE_RESPONSE)
+        payload = client._connection._response_payload(FunctionCode.CREATE_OBJECT, self._CREATE_RESPONSE)
         assert parse_create_object_session_id(payload)[0] == [0x70000F91]
-        client._v1_session_key_family = KeyFamily.S7_1500
+        client._connection._v1_session_key_family = KeyFamily.S7_1500
         leading = bytes([0x05]) + self._CREATE_RESPONSE[:-5]
-        assert client._response_payload(FunctionCode.CREATE_OBJECT, leading) == leading[1:]
+        assert client._connection._response_payload(FunctionCode.CREATE_OBJECT, leading) == leading[1:]

@@ -150,7 +150,7 @@ async def test_async_refresh_requires_a_connection() -> None:
 @pytest.mark.asyncio
 async def test_async_refreshes_only_on_change() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
+    client._connection._connected = True
     client.list_datablocks = AsyncMock(return_value=[ProgramObject(1, Ids.DB_CLASS_RID, "DB1")])  # type: ignore[method-assign]
     client._browse_layout = AsyncMock(  # type: ignore[method-assign]
         side_effect=lambda: ([], _block_signature(client.list_datablocks.return_value), {})
@@ -311,7 +311,7 @@ async def test_async_connect_disconnect_and_invalidate_forget_the_recorded_layou
 @pytest.mark.asyncio
 async def test_async_changed_modification_time_refreshes_the_catalog() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
+    client._connection._connected = True
     client._browse_layout = AsyncMock(  # type: ignore[method-assign]
         side_effect=[_layout({TI_RID: _time(5)}), _layout({TI_RID: _time(6)})]
     )
@@ -327,7 +327,7 @@ async def test_async_changed_modification_time_refreshes_the_catalog() -> None:
 @pytest.mark.asyncio
 async def test_async_type_info_that_no_longer_answers_refreshes_once() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
+    client._connection._connected = True
     client._browse_layout = AsyncMock(  # type: ignore[method-assign]
         side_effect=[_layout({TI_RID: _time(5)}), _layout({TI_RID: _time(5)})]
     )
@@ -428,8 +428,8 @@ def _async_reading_client(
     values: list[list[bytes | None]], changed: bool, known: set[str] | None = None
 ) -> S7CommPlusAsyncClient:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._protocol_version = ProtocolVersion.V2
+    client._connection._connected = True
+    client._connection._protocol_version = ProtocolVersion.V2
     client._symbol_catalog = _catalog(known if known is not None else {"DB1.a", "DB1.b"})
     client.read_symbolic_multi = AsyncMock(side_effect=values)  # type: ignore[method-assign]
     client.refresh_caches_if_program_changed = AsyncMock(return_value=changed)  # type: ignore[method-assign]
@@ -613,12 +613,12 @@ def test_write_of_an_unknown_name_is_resolved_before_it_is_sent() -> None:
 async def test_async_failed_write_is_never_resent() -> None:
     client = _async_reading_client([], changed=True)
     client.auto_refresh_tags = True
-    client._send_request = AsyncMock(return_value=WRITE_REJECTED)  # type: ignore[method-assign]
+    client._connection._send_request = AsyncMock(return_value=WRITE_REJECTED)  # type: ignore[method-assign]
 
     results = await client.write_tags({"DB1.a": b"\x00\x01"})
 
     assert results[0].error is not None
-    client._send_request.assert_awaited_once()
+    client._connection._send_request.assert_awaited_once()
     client.refresh_caches_if_program_changed.assert_not_awaited()
 
 

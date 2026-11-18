@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 import pytest
 
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.codec import encode_header
 from s7commplus.connection import _MAX_SYSTEM_EVENTS_PER_RESPONSE, S7CommPlusConnection
 from s7commplus.protocol import ProtocolVersion
@@ -139,7 +139,7 @@ def _run_async(name: str) -> dict[str, Any]:
     chunks, session = CASES[name]
     first, rest = chunks[0], list(chunks[1:])
     total = len(rest)
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     _prepare(client, session)
     client._reader = object()  # type: ignore[assignment]
     client._writer = object()  # type: ignore[assignment]

@@ -187,18 +187,18 @@ async def test_async_alarm_subscription_layout_per_key_family(family: str, sends
     from s7commplus.v1_session_key.keys import KeyFamily
 
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._session_key = b"k" * 24
-    client._protocol_version = ProtocolVersion.V1
-    client._v1_session_key_family = KeyFamily[family]
-    client._subscription_container_id = 0x70000CB8
-    client._send_request = AsyncMock(  # type: ignore[method-assign]
+    client._connection._connected = True
+    client._connection._session_key = b"k" * 24
+    client._connection._protocol_version = ProtocolVersion.V1
+    client._connection._v1_session_key_family = KeyFamily[family]
+    client._connection._subscription_container_id = 0x70000CB8
+    client._connection._send_request = AsyncMock(  # type: ignore[method-assign]
         return_value=encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x55667788)
     )
     assert client.alarm_texts_and_domain_filter is sends_texts
 
     assert await client.create_alarm_subscription() == 0x55667788
-    (_, payload), kwargs = client._send_request.call_args
+    (_, payload), kwargs = client._connection._send_request.call_args
     assert payload == _reference_payload(sends_texts)
     assert kwargs["integrity_tail"] == len(payload) - 11
 
@@ -217,13 +217,13 @@ async def test_async_s7_1200_alarm_subscription_refuses_languages_before_sending
     from s7commplus.v1_session_key.keys import KeyFamily
 
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._v1_session_key_family = KeyFamily.S7_1200
-    client._subscription_container_id = 0x70000CB8
-    client._send_request = AsyncMock()  # type: ignore[method-assign]
+    client._connection._connected = True
+    client._connection._v1_session_key_family = KeyFamily.S7_1200
+    client._connection._subscription_container_id = 0x70000CB8
+    client._connection._send_request = AsyncMock()  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="#173"):
         await client.create_alarm_subscription(language_ids=[1033])
-    client._send_request.assert_not_awaited()
+    client._connection._send_request.assert_not_awaited()
 
 
 def test_alarm_delete_matches_real_plc_reference_trace() -> None:
@@ -329,25 +329,25 @@ def test_sync_alarm_client_apis() -> None:
 @pytest.mark.asyncio
 async def test_async_alarm_client_apis() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._session_id = 0x1234
-    client._subscription_container_id = 0x1235
-    client._protocol_version = ProtocolVersion.V2
-    client._send_request = AsyncMock(
+    client._connection._connected = True
+    client._connection._session_id = 0x1234
+    client._connection._subscription_container_id = 0x1235
+    client._connection._protocol_version = ProtocolVersion.V2
+    client._connection._send_request = AsyncMock(
         side_effect=[
             encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x55667788),
             _explore_response(),
             b"\x00",
         ]
     )
-    client._recv_cotp_dt = AsyncMock(return_value=_notification_frame())
+    client._connection._recv_cotp_dt = AsyncMock(return_value=_notification_frame())
 
     assert await client.create_alarm_subscription([1031]) == 0x55667788
     assert (await client.read_alarms([1031]))[0].texts[1031].alarm_text == "Alarm 4 =F6+S2-G1"
     assert (await client.receive_alarm_notification(timeout=1)).credit_tick == 5
-    client._notification_frames.append(_notification_frame())
+    client._connection._notification_frames.append(_notification_frame())
     assert (await client.receive_alarm_notification(timeout=1)).sequence_number == 12
-    client._recv_cotp_dt.assert_awaited_once()
+    client._connection._recv_cotp_dt.assert_awaited_once()
     await client.delete_alarm_subscription(0x55667788)
 
 
@@ -367,9 +367,9 @@ def test_sync_read_alarms_raises_on_plc_error() -> None:
 @pytest.mark.asyncio
 async def test_async_read_alarms_raises_on_plc_error() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._protocol_version = ProtocolVersion.V2
-    client._send_request = AsyncMock(return_value=bytes.fromhex("c08895b080e6a5fff4000000000e00000000"))
+    client._connection._connected = True
+    client._connection._protocol_version = ProtocolVersion.V2
+    client._connection._send_request = AsyncMock(return_value=bytes.fromhex("c08895b080e6a5fff4000000000e00000000"))
 
     with pytest.raises(S7ReturnValueError, match="^Alarm browse failed") as excinfo:
         await client.read_alarms([1031])
@@ -400,8 +400,8 @@ def test_sync_alarm_receive_routes_interleaved_data_notification() -> None:
 @pytest.mark.asyncio
 async def test_async_alarm_receive_routes_interleaved_data_notification() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._recv_cotp_dt = AsyncMock(side_effect=[_data_notification_frame(), _notification_frame()])
+    client._connection._connected = True
+    client._connection._recv_cotp_dt = AsyncMock(side_effect=[_data_notification_frame(), _notification_frame()])
     client._alarm_subscription_ids.add(0x11223344)
     client._subscriptions.register(
         0x70400025,

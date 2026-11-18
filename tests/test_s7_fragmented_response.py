@@ -192,15 +192,15 @@ async def test_async_reads_an_authenticated_response_split_over_several_pdus(fra
     client = S7CommPlusAsyncClient()
     await client.connect("127.0.0.1", port=fragmenting_v3_server)
     try:
-        assert client._session_key == TEST_SESSION_KEY
+        assert client._connection._session_key == TEST_SESSION_KEY
         reassembled: list[bytes] = []
-        reassemble = client._recv_reassembled_payload
+        reassemble = client._connection._recv_reassembled_payload
 
         async def spy(initial_data: bytes = b"", timeout: float | None = None) -> bytes:
             reassembled.append(initial_data)
             return await reassemble(initial_data, timeout)
 
-        client._recv_reassembled_payload = spy  # type: ignore[method-assign]
+        client._connection._recv_reassembled_payload = spy  # type: ignore[method-assign]
         assert await client.db_read(2, 0, 200) == bytes(range(200))
         assert [frame[1] for frame in reassembled] == [ProtocolVersion.V3]
         assert await client.db_read_multi([(2, 10, 2), (2, 250, 6)]) == [bytes([10, 11]), bytes(range(250, 256))]
@@ -223,13 +223,13 @@ def _sync_connection(*frames: bytes) -> S7CommPlusConnection:
 
 def _async_client(*frames: bytes) -> S7CommPlusAsyncClient:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._reader = MagicMock()
-    client._writer = MagicMock()
-    client._protocol_version = ProtocolVersion.V2
-    client._sequence_number = 5
-    client._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
-    client._recv_cotp_dt = AsyncMock(side_effect=list(frames))  # type: ignore[method-assign]
+    client._connection._connected = True
+    client._connection._reader = MagicMock()
+    client._connection._writer = MagicMock()
+    client._connection._protocol_version = ProtocolVersion.V2
+    client._connection._sequence_number = 5
+    client._connection._send_cotp_dt = AsyncMock()  # type: ignore[method-assign]
+    client._connection._recv_cotp_dt = AsyncMock(side_effect=list(frames))  # type: ignore[method-assign]
     return client
 
 
@@ -247,8 +247,8 @@ def test_sync_drains_a_split_stale_response() -> None:
 @pytest.mark.asyncio
 async def test_async_drains_a_split_stale_response() -> None:
     client = _async_client(*STALE_SPLIT, CURRENT)
-    assert await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b"\xaa\xbb"
-    assert client._recv_cotp_dt.await_count == 3  # type: ignore[attr-defined]
+    assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b"\xaa\xbb"
+    assert client._connection._recv_cotp_dt.await_count == 3  # type: ignore[attr-defined]
 
 
 # The first read carries a whole fragment and the start of the next one: what follows
@@ -266,7 +266,7 @@ def test_sync_reassembles_when_the_next_fragment_follows_in_the_same_read() -> N
 @pytest.mark.asyncio
 async def test_async_reassembles_when_the_next_fragment_follows_in_the_same_read() -> None:
     client = _async_client(*RUN_ON_READS)
-    assert await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == bytes(range(40))
+    assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == bytes(range(40))
 
 
 # A fragment followed by a "trailer" that names another protocol version.
@@ -283,7 +283,7 @@ def test_sync_reassembly_rejects_a_trailer_of_another_version() -> None:
 async def test_async_reassembly_rejects_a_trailer_of_another_version() -> None:
     client = _async_client()
     with pytest.raises(S7ConnectionError, match="fragment version"):
-        await client._recv_reassembled_payload(WRONG_VERSION_TRAILER)
+        await client._connection._recv_reassembled_payload(WRONG_VERSION_TRAILER)
 
 
 # A V3 fragment on a session without a key: its HMAC cannot be checked.
@@ -300,7 +300,7 @@ def test_sync_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
 async def test_async_reassembly_rejects_a_v3_fragment_without_a_session_key() -> None:
     client = _async_client()
     with pytest.raises(S7ConnectionError, match="without a session key"):
-        await client._recv_reassembled_payload(V3_WITHOUT_A_KEY)
+        await client._connection._recv_reassembled_payload(V3_WITHOUT_A_KEY)
 
 
 # The same as one whole reply, with the digest length and digest of a V3 envelope.
@@ -321,4 +321,4 @@ def test_sync_rejects_a_whole_v3_reply_without_a_session_key() -> None:
 async def test_async_rejects_a_whole_v3_reply_without_a_session_key() -> None:
     client = _async_client(WHOLE_V3_WITHOUT_A_KEY)
     with pytest.raises(S7ConnectionError, match="without a session key"):
-        await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+        await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")

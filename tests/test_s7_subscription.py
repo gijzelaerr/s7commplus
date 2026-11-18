@@ -359,15 +359,15 @@ class TestSubscriptionRegistry:
 @pytest.mark.asyncio
 async def test_async_create_iterate_queue_and_delete_lifecycle() -> None:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._reader = MagicMock()
-    client._writer = MagicMock()
-    client._subscription_container_id = 0x3C2
-    client._protocol_version = ProtocolVersion.V2
+    client._connection._connected = True
+    client._connection._reader = MagicMock()
+    client._connection._writer = MagicMock()
+    client._connection._subscription_container_id = 0x3C2
+    client._connection._protocol_version = ProtocolVersion.V2
     create_response = encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400025)
-    client._send_request = AsyncMock(side_effect=[create_response, b""])
-    client._recv_cotp_dt = AsyncMock(return_value=_notification_frame(credit_tick=9))
-    client._send_subscription_credit = AsyncMock()
+    client._connection._send_request = AsyncMock(side_effect=[create_response, b""])
+    client._connection._recv_cotp_dt = AsyncMock(return_value=_notification_frame(credit_tick=9))
+    client._connection._send_subscription_credit = AsyncMock()
     tag = SymbolicTag("DB1.Count", 0x8A0E0001, (2,), Softdatatype.INT, DataType.INT)
 
     subscription_id = await client.create_subscription(
@@ -376,11 +376,11 @@ async def test_async_create_iterate_queue_and_delete_lifecycle() -> None:
     queue = client.subscription_queue(subscription_id)
     assert queue.qsize() == 0
     assert (await queue.get()).decoded_values[7] == 0x1234
-    client._send_subscription_credit.assert_awaited_once_with(subscription_id, 15)
+    client._connection._send_subscription_credit.assert_awaited_once_with(subscription_id, 15)
     with pytest.raises(asyncio.QueueEmpty):
         queue.get_nowait()
 
-    client._notification_frames.append(_notification_frame(sequence_number=10))
+    client._connection._notification_frames.append(_notification_frame(sequence_number=10))
     received = [item async for item in client.iter_subscription_notifications(subscription_id, limit=1)]
     assert received[0].sequence_number == 10
     await client.delete_subscription(subscription_id)
@@ -451,20 +451,20 @@ def _sync_credit_frame(version: int, session_key: bytes | None, with_integrity_i
 
 async def _async_credit_frame(version: int, session_key: bytes | None, with_integrity_id: bool) -> bytes:
     client = S7CommPlusAsyncClient()
-    client._connected = True
-    client._reader = MagicMock()
-    client._writer = MagicMock()
-    client._protocol_version = version
-    client._session_id = 0x70000CB8
-    client._with_integrity_id = with_integrity_id
-    client._integrity_id_write = 3
-    client._sequence_number = 6
-    client._session_key = session_key
-    client._send_cotp_dt = AsyncMock()
-    await client._send_subscription_credit(0x70400025, 15)
-    assert client._sequence_number == 7
-    assert client._integrity_id_write == (4 if with_integrity_id else 3)
-    frame: bytes = client._send_cotp_dt.await_args.args[0]
+    client._connection._connected = True
+    client._connection._reader = MagicMock()
+    client._connection._writer = MagicMock()
+    client._connection._protocol_version = version
+    client._connection._session_id = 0x70000CB8
+    client._connection._with_integrity_id = with_integrity_id
+    client._connection._integrity_id_write = 3
+    client._connection._sequence_number = 6
+    client._connection._session_key = session_key
+    client._connection._send_cotp_dt = AsyncMock()
+    await client._connection._send_subscription_credit(0x70400025, 15)
+    assert client._connection._sequence_number == 7
+    assert client._connection._integrity_id_write == (4 if with_integrity_id else 3)
+    frame: bytes = client._connection._send_cotp_dt.await_args.args[0]
     return frame
 
 

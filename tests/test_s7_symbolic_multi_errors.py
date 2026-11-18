@@ -29,9 +29,9 @@ async def test_symbolic_multi_preserves_item_order_and_errors(
 ) -> None:
     if async_client:
         client = S7CommPlusAsyncClient()
-        client._send_request = AsyncMock(return_value=response)
+        client._connection._send_request = AsyncMock(return_value=response)
         assert await client.read_symbolic_multi(ITEMS) == expected
-        client._send_request.assert_awaited_once()
+        client._connection._send_request.assert_awaited_once()
     else:
         sync = S7CommPlusClient()
         sync._connection = MagicMock(protocol_version=ProtocolVersion.V2)
@@ -54,7 +54,7 @@ async def test_symbolic_multi_rejects_incomplete_or_invalid_replies(async_client
     with pytest.raises(RuntimeError, match="Symbolic multi-read failed"):
         if async_client:
             client = S7CommPlusAsyncClient()
-            client._send_request = AsyncMock(return_value=response)
+            client._connection._send_request = AsyncMock(return_value=response)
             await client.read_symbolic_multi(ITEMS)
         else:
             sync = S7CommPlusClient()

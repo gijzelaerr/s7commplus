@@ -98,9 +98,9 @@ class TestAsyncClientTLSPreconditions:
     @pytest.mark.asyncio
     async def test_authenticate_no_tls(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._tls_active = False
-        client._oms_secret = None
+        client._connection._connected = True
+        client._connection._tls_active = False
+        client._connection._oms_secret = None
         with pytest.raises(S7ConnectionError, match="requires TLS"):
             await client.authenticate("password")
 
@@ -112,8 +112,8 @@ class TestAsyncClientTLSPreconditions:
     @pytest.mark.asyncio
     async def test_disconnect_resets_tls_state(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._tls_active = True
-        client._oms_secret = b"\x00" * 32
+        client._connection._tls_active = True
+        client._connection._oms_secret = b"\x00" * 32
         await client.disconnect()
         assert client.tls_active is False
         assert client.oms_secret is None
@@ -269,10 +269,10 @@ class TestAsyncClientV2WithTLS:
         await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
 
         try:
-            assert client._with_integrity_id is True
+            assert client._connection._with_integrity_id is True
             # Counters may already be non-zero from the probe request
-            assert client._integrity_id_read >= 0
-            assert client._integrity_id_write >= 0
+            assert client._connection._integrity_id_read >= 0
+            assert client._connection._integrity_id_write >= 0
         finally:
             await client.disconnect()
 
@@ -287,15 +287,15 @@ class TestAsyncClientV2WithTLS:
         await client.connect("127.0.0.1", port=srv.port, use_tls=True, tls_ca=cert_path)
 
         try:
-            initial_read_id = client._integrity_id_read
-            initial_write_id = client._integrity_id_write
+            initial_read_id = client._connection._integrity_id_read
+            initial_write_id = client._connection._integrity_id_write
 
             for value in (b"first", b"second", b"third"):
                 await client.db_write(1, 0, value)
                 assert await client.db_read(1, 0, len(value)) == value
 
-            assert client._integrity_id_read == initial_read_id + 3
-            assert client._integrity_id_write == initial_write_id + 3
+            assert client._connection._integrity_id_read == initial_read_id + 3
+            assert client._connection._integrity_id_write == initial_write_id + 3
         finally:
             await client.disconnect()
 
@@ -431,8 +431,8 @@ class TestOMSExporterSecret:
         await client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=cert_path)
         try:
             assert client.oms_secret is not None
-            assert client._ssl_object is not None
-            assert client.oms_secret == connection._derive_oms_secret(client._ssl_object, server_key_log)
+            assert client._connection._ssl_object is not None
+            assert client.oms_secret == connection._derive_oms_secret(client._connection._ssl_object, server_key_log)
             assert len(client.oms_secret) == 32
         finally:
             await client.disconnect()
@@ -515,7 +515,7 @@ class TestOMSExporterSecret:
         await client.connect("127.0.0.1", port=port, use_tls=True, tls_ca=cert_path)
         try:
             sent: list[bytes] = []
-            send = client._send_legitimation_new
+            send = client._connection._send_legitimation_new
 
             async def recording_send(encrypted_response: bytes) -> None:
                 sent.append(encrypted_response)
@@ -524,15 +524,15 @@ class TestOMSExporterSecret:
             async def full_access() -> int:
                 return AccessLevel.FULL_ACCESS
 
-            client._protection_level = AccessLevel.NO_ACCESS
-            monkeypatch.setattr(client, "_decide_legitimation_mode", lambda: LegitimationType.NEW)
-            monkeypatch.setattr(client, "_send_legitimation_new", recording_send)
-            monkeypatch.setattr(client, "_get_effective_protection_level", full_access)
+            client._connection._protection_level = AccessLevel.NO_ACCESS
+            monkeypatch.setattr(client._connection, "_decide_legitimation_mode", lambda: LegitimationType.NEW)
+            monkeypatch.setattr(client._connection, "_send_legitimation_new", recording_send)
+            monkeypatch.setattr(client._connection, "_get_effective_protection_level", full_access)
 
             await client.authenticate("secret")
 
-            assert client._ssl_object is not None
-            session_secret = connection._derive_oms_secret(client._ssl_object, server_key_log)
+            assert client._connection._ssl_object is not None
+            session_secret = connection._derive_oms_secret(client._connection._ssl_object, server_key_log)
             assert session_secret is not None
             assert sent == [build_new_response("secret", _LEGITIMATION_CHALLENGE, session_secret)]
             assert client.oms_secret == derive_legitimation_key(session_secret)

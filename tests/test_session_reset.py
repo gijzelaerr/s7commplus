@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from s7commplus._session_core import SessionCore
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.v1_session_key.keys import KeyFamily
 
@@ -61,7 +61,7 @@ def _dirty_all(obj: Any) -> None:
 
 
 def test_every_declared_attribute_exists_on_both_clients() -> None:
-    for obj in (S7CommPlusConnection("127.0.0.1"), S7CommPlusAsyncClient()):
+    for obj in (S7CommPlusConnection("127.0.0.1"), S7CommPlusAsyncConnection()):
         missing = [name for name in SESSION_STATE if not hasattr(obj, name)]
         assert missing == [], type(obj).__name__
 
@@ -76,15 +76,15 @@ def test_sync_disconnect_leaves_a_fresh_session() -> None:
 
 
 def test_async_reset_leaves_a_fresh_session() -> None:
-    fresh = _snapshot(S7CommPlusAsyncClient())
-    client = S7CommPlusAsyncClient()
+    fresh = _snapshot(S7CommPlusAsyncConnection())
+    client = S7CommPlusAsyncConnection()
     _dirty_all(client)
     assert _snapshot(client) != fresh
     client._reset_session()
     assert _snapshot(client) == fresh
 
 
-@pytest.mark.parametrize("make", [lambda: S7CommPlusConnection("127.0.0.1"), S7CommPlusAsyncClient], ids=["sync", "async"])
+@pytest.mark.parametrize("make", [lambda: S7CommPlusConnection("127.0.0.1"), S7CommPlusAsyncConnection], ids=["sync", "async"])
 def test_both_clients_start_from_the_same_session_state(make: Any) -> None:
     # The same starting values, so a reset to them means the same for both.
     assert _snapshot(make()) == _snapshot(S7CommPlusConnection("127.0.0.1"))

@@ -130,7 +130,7 @@ class TestTypeInfoRidErrorHandling:
     async def test_async_request_disconnected_is_connection_error(self) -> None:
         client = S7CommPlusAsyncClient()
         with pytest.raises(S7ConnectionError, match="Not connected"):
-            await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
 
     @pytest.mark.asyncio
     async def test_async_reconnect_without_parameters_is_connection_error(self) -> None:
@@ -141,13 +141,13 @@ class TestTypeInfoRidErrorHandling:
     @pytest.mark.asyncio
     async def test_async_non_data_cotp_frame_is_connection_error(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._reader = asyncio.StreamReader()
+        client._connection._reader = asyncio.StreamReader()
         payload = bytes.fromhex("02e080")
-        client._reader.feed_data(struct.pack(">BBH", 3, 0, len(payload) + 4) + payload)
-        client._reader.feed_eof()
+        client._connection._reader.feed_data(struct.pack(">BBH", 3, 0, len(payload) + 4) + payload)
+        client._connection._reader.feed_eof()
 
         with pytest.raises(S7ConnectionError, match="Expected COTP DT"):
-            await client._recv_cotp_raw()
+            await client._connection._recv_cotp_raw()
 
 
 class TestReadFunctionCodes:
@@ -541,21 +541,21 @@ class TestAuthenticateOnPlcsim:
     @pytest.mark.asyncio
     async def test_async(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._tls_active = True
-        client._protection_level = AccessLevel.NO_ACCESS
-        client._oms_secret = self.OMS_SECRET
-        client._server_session_version = PLCSIM_ADVANCED_V8_SESSION_VERSION
-        client._get_legitimation_challenge = AsyncMock(return_value=self.CHALLENGE)
-        client._send_legitimation_new = AsyncMock()
-        client._send_legitimation_legacy = AsyncMock()
-        client._get_effective_protection_level = AsyncMock(return_value=AccessLevel.FULL_ACCESS)
+        client._connection._connected = True
+        client._connection._tls_active = True
+        client._connection._protection_level = AccessLevel.NO_ACCESS
+        client._connection._oms_secret = self.OMS_SECRET
+        client._connection._server_session_version = PLCSIM_ADVANCED_V8_SESSION_VERSION
+        client._connection._get_legitimation_challenge = AsyncMock(return_value=self.CHALLENGE)
+        client._connection._send_legitimation_new = AsyncMock()
+        client._connection._send_legitimation_legacy = AsyncMock()
+        client._connection._get_effective_protection_level = AsyncMock(return_value=AccessLevel.FULL_ACCESS)
 
         await client.authenticate("secret")
 
-        client._send_legitimation_new.assert_awaited_once_with(self._expected_response())
-        client._send_legitimation_legacy.assert_not_awaited()
-        assert client._protection_level == AccessLevel.FULL_ACCESS
+        client._connection._send_legitimation_new.assert_awaited_once_with(self._expected_response())
+        client._connection._send_legitimation_legacy.assert_not_awaited()
+        assert client._connection._protection_level == AccessLevel.FULL_ACCESS
 
 
 def _session_version_with_device_string(device_string: str) -> bytes:
@@ -595,15 +595,15 @@ class TestAuthenticateOnOverlongFirmwareVersion:
     @pytest.mark.asyncio
     async def test_async(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._tls_active = True
-        client._protection_level = AccessLevel.NO_ACCESS
-        client._server_session_version = self.SESSION_VERSION
-        client._get_legitimation_challenge = AsyncMock()
+        client._connection._connected = True
+        client._connection._tls_active = True
+        client._connection._protection_level = AccessLevel.NO_ACCESS
+        client._connection._server_session_version = self.SESSION_VERSION
+        client._connection._get_legitimation_challenge = AsyncMock()
 
         with pytest.raises(S7ConnectionError, match="does not support legitimation"):
             await client.authenticate("secret")
-        client._get_legitimation_challenge.assert_not_awaited()
+        client._connection._get_legitimation_challenge.assert_not_awaited()
 
 
 class TestLegitimationPayload:
@@ -763,10 +763,10 @@ class TestIntegrityIdTracking:
     @pytest.mark.asyncio
     async def test_nonfatal_system_event_is_consumed_before_async_response(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
 
         confirmation = bytes.fromhex("00000000000002f60000000000000000")
         event_frame = encode_header(ProtocolVersion.SYSTEM_EVENT, len(confirmation)) + confirmation
@@ -774,24 +774,24 @@ class TestIntegrityIdTracking:
         response += b"\x00\x01"
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
         response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(side_effect=[event_frame, response_frame])
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(side_effect=[event_frame, response_frame])
 
-        assert await client._send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(4)) == b"\x00\x01"
-        assert client._recv_cotp_dt.await_count == 2
+        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(4)) == b"\x00\x01"
+        assert client._connection._recv_cotp_dt.await_count == 2
 
     @pytest.mark.asyncio
     async def test_too_many_async_system_events_raise_protocol_error_from_typeinfo_read(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
 
         confirmation = bytes.fromhex("00000000000002f60000000000000000")
         event_frame = encode_header(ProtocolVersion.SYSTEM_EVENT, len(confirmation)) + confirmation
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=event_frame)
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=event_frame)
 
         with pytest.raises(S7ProtocolError, match="Too many S7CommPlus SystemEvents"):
             await client._read_typeinfo_rid(0x8A0E0001)
@@ -800,35 +800,35 @@ class TestIntegrityIdTracking:
     @pytest.mark.parametrize("reassemble", [False, True])
     async def test_async_short_response_raises_connection_error(self, reassemble: bool) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
         response = b"short"
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
         response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=response_frame)
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ConnectionError, match="Response too short"):
-            await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
+            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("reassemble", [False, True])
     async def test_async_sequence_mismatch_raises_protocol_error(self, reassemble: bool) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
         response = struct.pack(">BHHHHB", 0x32, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 99, 0x34)
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
         response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=response_frame)
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ProtocolError, match="Response sequence mismatch"):
-            await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
+            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
 
     @pytest.mark.parametrize("reassemble", [False, True])
     def test_sync_function_mismatch_raises_protocol_error(self, reassemble: bool) -> None:
@@ -848,18 +848,18 @@ class TestIntegrityIdTracking:
     @pytest.mark.parametrize("reassemble", [False, True])
     async def test_async_function_mismatch_raises_protocol_error(self, reassemble: bool) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
         response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.SET_MULTI_VARIABLES, 0, 0, 0x34)
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
         response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=response_frame)
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ProtocolError, match="Response function mismatch"):
-            await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
+            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
 
     @pytest.mark.parametrize("opcode", [Opcode.REQUEST, 0x7F])
     def test_sync_unexpected_opcode_raises_protocol_error(self, opcode: int) -> None:
@@ -877,17 +877,17 @@ class TestIntegrityIdTracking:
     @pytest.mark.asyncio
     async def test_async_unexpected_opcode_raises_protocol_error(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
         response = struct.pack(">BHHHHB", Opcode.REQUEST, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 0, 0x34)
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=response_frame)
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ProtocolError, match="Unexpected S7CommPlus opcode"):
-            await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
 
     def test_sync_notification_before_response_is_queued(self) -> None:
         conn = S7CommPlusConnection("127.0.0.1")
@@ -908,20 +908,20 @@ class TestIntegrityIdTracking:
     @pytest.mark.asyncio
     async def test_async_notification_before_response_is_queued(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
         notification = struct.pack(">BHHHHB", Opcode.NOTIFICATION, 0, 0, 0, 12, 0x34)
         notification_frame = encode_header(ProtocolVersion.V2, len(notification)) + notification
         response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 0, 0x34)
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
         response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(side_effect=[notification_frame, response_frame])
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(side_effect=[notification_frame, response_frame])
 
-        assert await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
-        assert list(client._notification_frames) == [notification_frame]
+        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
+        assert list(client._connection._notification_frames) == [notification_frame]
 
     def test_stale_sync_response_is_skipped_before_next_response(self) -> None:
         conn = S7CommPlusConnection("127.0.0.1")
@@ -943,22 +943,22 @@ class TestIntegrityIdTracking:
     @pytest.mark.asyncio
     async def test_stale_async_response_is_skipped_before_next_response(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
         response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 0, 0x34)
         response_frame = encode_header(ProtocolVersion.V2, len(response)) + response
         response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
-        client._send_cotp_dt = AsyncMock()
+        client._connection._send_cotp_dt = AsyncMock()
         next_response = struct.pack(">BHHHHB", Opcode.RESPONSE, 0, FunctionCode.GET_MULTI_VARIABLES, 0, 1, 0x34)
         next_response_frame = encode_header(ProtocolVersion.V2, len(next_response)) + next_response
         next_response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
-        client._recv_cotp_dt = AsyncMock(side_effect=[response_frame, response_frame, next_response_frame])
+        client._connection._recv_cotp_dt = AsyncMock(side_effect=[response_frame, response_frame, next_response_frame])
 
-        assert await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
-        assert await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
-        assert client._recv_cotp_dt.await_count == 3
+        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
+        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
+        assert client._connection._recv_cotp_dt.await_count == 3
 
     def test_sync_requests_are_serialized(self) -> None:
         conn = S7CommPlusConnection("127.0.0.1")
@@ -1015,40 +1015,40 @@ class TestIntegrityIdTracking:
             return
 
         client = S7CommPlusAsyncClient()
-        client._connected = True
-        client._reader = MagicMock()
-        client._writer = MagicMock()
-        client._protocol_version = ProtocolVersion.V2
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=b"")
+        client._connection._connected = True
+        client._connection._reader = MagicMock()
+        client._connection._writer = MagicMock()
+        client._connection._protocol_version = ProtocolVersion.V2
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=b"")
         with pytest.raises(S7ConnectionError, match="Connection closed"):
-            await client._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
 
 
 class TestAsyncReassembledPayloadErrors:
     @pytest.mark.asyncio
     async def test_closed_connection_raises_connection_error(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._recv_cotp_dt = AsyncMock(return_value=b"")
+        client._connection._recv_cotp_dt = AsyncMock(return_value=b"")
 
         with pytest.raises(S7ConnectionError, match="closed during"):
-            await client._recv_reassembled_payload()
+            await client._connection._recv_reassembled_payload()
 
     @pytest.mark.asyncio
     async def test_bad_fragment_header_raises_connection_error(self) -> None:
         client = S7CommPlusAsyncClient()
 
         with pytest.raises(S7ConnectionError, match="fragment header"):
-            await client._recv_reassembled_payload(b"\x99\x02\x00\x01x")
+            await client._connection._recv_reassembled_payload(b"\x99\x02\x00\x01x")
 
     @pytest.mark.asyncio
     async def test_fragment_limit_raises_connection_error(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._MAX_REASSEMBLED_FRAGMENTS = 1
+        client._connection._MAX_REASSEMBLED_FRAGMENTS = 1
         fragments = b"\x72\x02\x00\x01a\x72\x02\x00\x01b\x72\x02\x00\x00"
 
         with pytest.raises(S7ConnectionError, match="exceeds limits"):
-            await client._recv_reassembled_payload(fragments)
+            await client._connection._recv_reassembled_payload(fragments)
 
 
 class TestServerResponseIntegrityId:
@@ -1261,11 +1261,11 @@ class TestLegitimationWireFormat:
         challenge = bytes(range(20))
         response = bytes([0x00, 0x00, 0x10, 0x02, len(challenge)]) + challenge + bytes([0x00])
         client = S7CommPlusAsyncClient()
-        client._session_id = 0x01020304
-        client._send_request = AsyncMock(return_value=response)
+        client._connection._session_id = 0x01020304
+        client._connection._send_request = AsyncMock(return_value=response)
 
-        assert await client._get_legitimation_challenge() == challenge
-        client._send_request.assert_awaited_once_with(
+        assert await client._connection._get_legitimation_challenge() == challenge
+        client._connection._send_request.assert_awaited_once_with(
             FunctionCode.GET_VAR_SUBSTREAMED,
             _build_get_var_substreamed_payload(0x01020304, LegitimationId.SERVER_SESSION_REQUEST),
             integrity_tail=4,
@@ -1386,15 +1386,15 @@ class TestCreateSessionRequest:
     @pytest.mark.asyncio
     async def test_async_request_shape(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=bytes.fromhex("72010000"))
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=bytes.fromhex("72010000"))
 
         with pytest.raises(S7ConnectionError, match="CreateObject response too short"):
-            await client._create_session()
+            await client._connection._create_session()
 
-        client._send_cotp_dt.assert_awaited_once()
-        assert client._send_cotp_dt.await_args is not None
-        frame = client._send_cotp_dt.await_args[0][0]
+        client._connection._send_cotp_dt.assert_awaited_once()
+        assert client._connection._send_cotp_dt.await_args is not None
+        frame = client._connection._send_cotp_dt.await_args[0][0]
         request = struct.pack(
             ">BHHHHIB",
             Opcode.REQUEST,
@@ -1421,34 +1421,34 @@ class TestCreateSessionRequest:
         response += struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
 
         client = S7CommPlusAsyncClient()
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=response)
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=response)
 
-        await client._create_session()
+        await client._connection._create_session()
 
-        assert client._public_key_fingerprint == "01:BD426B091F08731A"
-        assert client._session_challenge == bytes(range(20))
-        assert client._server_session_version is not None
+        assert client._connection._public_key_fingerprint == "01:BD426B091F08731A"
+        assert client._connection._session_challenge == bytes(range(20))
+        assert client._connection._server_session_version is not None
 
 
 class TestInitSSLResponse:
     @pytest.mark.asyncio
     async def test_async_short_response_raises_connection_error(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(return_value=bytes.fromhex("72010000"))
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=bytes.fromhex("72010000"))
 
         with pytest.raises(S7ConnectionError, match="InitSSL response too short"):
-            await client._init_ssl()
+            await client._connection._init_ssl()
 
     @pytest.mark.asyncio
     async def test_async_ten_byte_response_is_accepted(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._send_cotp_dt = AsyncMock()
+        client._connection._send_cotp_dt = AsyncMock()
         response = bytes(10)
-        client._recv_cotp_dt = AsyncMock(return_value=encode_header(ProtocolVersion.V1, len(response)) + response)
+        client._connection._recv_cotp_dt = AsyncMock(return_value=encode_header(ProtocolVersion.V1, len(response)) + response)
 
-        await client._init_ssl()
+        await client._connection._init_ssl()
 
 
 class TestDeleteSessionRequest:
@@ -1481,12 +1481,12 @@ class TestDeleteSessionRequest:
     @pytest.mark.asyncio
     async def test_async_request_shape(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._protocol_version = ProtocolVersion.V2
-        client._session_id = 0x70000001
-        client._send_cotp_dt = AsyncMock()
-        client._recv_cotp_dt = AsyncMock(side_effect=OSError("no reply"))
+        client._connection._protocol_version = ProtocolVersion.V2
+        client._connection._session_id = 0x70000001
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(side_effect=OSError("no reply"))
 
-        await client._delete_session()
+        await client._connection._delete_session()
 
         request = struct.pack(
             ">BHHHHIB",
@@ -1501,7 +1501,7 @@ class TestDeleteSessionRequest:
         request += struct.pack(">I", 0)
         expected = encode_header(ProtocolVersion.V2, len(request)) + request
         expected += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0x0000)
-        client._send_cotp_dt.assert_awaited_once_with(expected)
+        client._connection._send_cotp_dt.assert_awaited_once_with(expected)
 
 
 class TestProtectionLevel:
@@ -1555,11 +1555,11 @@ class TestProtectionLevel:
     @pytest.mark.asyncio
     async def test_async_read_uses_protocol_request_shape(self) -> None:
         client = S7CommPlusAsyncClient()
-        client._session_id = 0x01020304
-        client._send_request = AsyncMock(return_value=self.RESPONSE)
+        client._connection._session_id = 0x01020304
+        client._connection._send_request = AsyncMock(return_value=self.RESPONSE)
 
-        assert await client._get_effective_protection_level() == AccessLevel.NO_ACCESS
-        client._send_request.assert_awaited_once_with(
+        assert await client._connection._get_effective_protection_level() == AccessLevel.NO_ACCESS
+        client._connection._send_request.assert_awaited_once_with(
             FunctionCode.GET_VAR_SUBSTREAMED,
             _build_get_var_substreamed_payload(0x01020304, Ids.EFFECTIVE_PROTECTION_LEVEL),
             integrity_tail=4,
@@ -1944,25 +1944,25 @@ class TestAtomicSessionSetup:
         reader = MagicMock()
         writer = MagicMock()
         writer.wait_closed = AsyncMock()
-        monkeypatch.setattr("s7commplus.async_client.asyncio.open_connection", AsyncMock(return_value=(reader, writer)))
-        client._cotp_connect = AsyncMock()
-        client._init_ssl = AsyncMock()
+        monkeypatch.setattr("s7commplus.async_connection.asyncio.open_connection", AsyncMock(return_value=(reader, writer)))
+        client._connection._cotp_connect = AsyncMock()
+        client._connection._init_ssl = AsyncMock()
 
         async def create_session() -> None:
-            client._protocol_version = ProtocolVersion.V1
-            client._session_id = 7
-            client._server_session_version = bytes([0x00, DataType.UDINT, 0x01])
+            client._connection._protocol_version = ProtocolVersion.V1
+            client._connection._session_id = 7
+            client._connection._server_session_version = bytes([0x00, DataType.UDINT, 0x01])
 
-        client._create_session = AsyncMock(side_effect=create_session)
-        client._setup_session = AsyncMock(return_value=False)
+        client._connection._create_session = AsyncMock(side_effect=create_session)
+        client._connection._setup_session = AsyncMock(return_value=False)
 
         with pytest.raises(S7ConnectionError, match="session setup was rejected"):
             await client.connect("127.0.0.1")
 
         assert not client.connected
         assert not client.session_setup_ok
-        assert not client._session_ready
-        assert not client._transport_connected
+        assert not client._connection._session_ready
+        assert not client._connection._transport_connected
         writer.close.assert_called_once()
 
 

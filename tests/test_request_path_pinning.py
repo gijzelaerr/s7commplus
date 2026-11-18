@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 import pytest
 
-from s7commplus.async_client import S7CommPlusAsyncClient
+from s7commplus.async_connection import S7CommPlusAsyncConnection
 from s7commplus.connection import S7CommPlusConnection, _frame_request
 from s7commplus.protocol import FunctionCode, Opcode, ProtocolVersion
 
@@ -116,7 +116,7 @@ def _run_sync(case: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_async(case: dict[str, Any]) -> dict[str, Any]:
-    client = S7CommPlusAsyncClient()
+    client = S7CommPlusAsyncConnection()
     _setup(client, case)
     client._reader = object()  # type: ignore[assignment]
     client._writer = object()  # type: ignore[assignment]

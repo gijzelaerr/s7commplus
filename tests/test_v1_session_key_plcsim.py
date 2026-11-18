@@ -280,8 +280,8 @@ async def test_async_client_authenticates_against_family_03(
     await client.connect("127.0.0.1", port=port)
     try:
         assert client.connected
-        assert client._v1_session_key_family == KeyFamily.PLCSIM
-        assert client._session_key == TEST_SESSION_KEY
+        assert client._connection._v1_session_key_family == KeyFamily.PLCSIM
+        assert client._connection._session_key == TEST_SESSION_KEY
         assert server._accepted_session_key_setups == 1
         assert [len(blob) for blob in blobs] == [216]
         assert abs(struct.unpack(">f", await client.db_read(1, 0, 4))[0] - 23.5) < 0.001

@@ -86,7 +86,7 @@ def _async_client(*answers: bytes | Exception) -> Any:
     """The asyncio counterpart of :func:`_sync_client`."""
     client = S7CommPlusAsyncClient()
     client._connect_params = {"host": "127.0.0.1", "port": 102}
-    client._send_request = AsyncMock(side_effect=list(answers))  # type: ignore[method-assign]
+    client._connection._send_request = AsyncMock(side_effect=list(answers))  # type: ignore[method-assign]
     client._symbol_catalog = _catalog()
     client.auto_reconnect = True
     client._auto_reconnect_min_interval = 0.0
@@ -253,7 +253,7 @@ async def test_async_nested_reads_reconnect_once_when_the_retry_fails() -> None:
     with pytest.raises(S7ConnectionError):
         await client.read_tag("DB1.Speed")
     assert client._rebuild_session.await_count == 1
-    assert client._send_request.await_count == 2
+    assert client._connection._send_request.await_count == 2
 
 
 def test_sync_nested_read_succeeds_after_one_reconnect() -> None:
@@ -282,7 +282,7 @@ async def test_async_typed_read_reconnects_once() -> None:
     with pytest.raises(S7ConnectionError):
         await client.read_value("DB1.Speed")
     assert client._rebuild_session.await_count == 1
-    assert client._send_request.await_count == 2
+    assert client._connection._send_request.await_count == 2
 
 
 def test_sync_typed_read_succeeds_after_one_reconnect() -> None:
@@ -320,7 +320,7 @@ def test_sync_read_does_not_tear_down_a_session_rebuilt_meanwhile() -> None:
 
 async def test_async_read_does_not_tear_down_a_session_rebuilt_meanwhile() -> None:
     client = _async_client()
-    client._send_request.side_effect = _drop_after_a_rebuild_elsewhere(client)
+    client._connection._send_request.side_effect = _drop_after_a_rebuild_elsewhere(client)
     assert await client.db_read(1, 0, 4) == DB1
     assert client._rebuild_session.await_count == 0
 
@@ -487,7 +487,7 @@ async def test_async_read_recovers_after_the_session_was_closed_internally(serve
     client = S7CommPlusAsyncClient()
     await client.connect("127.0.0.1", port=port, auto_reconnect=True)
     try:
-        await client._close()  # as an integrity failure does, keeping the parameters
+        await client._connection._close()  # as an integrity failure does, keeping the parameters
         assert await client.db_read(1, 0, 4) == DB1
         assert client.connection_generation == 1
     finally:
@@ -543,7 +543,7 @@ async def test_async_read_reconnects_once_the_plc_is_back(server: tuple[S7CommPl
     client._auto_reconnect_min_interval = 0.0
     try:
         srv.stop()  # the PLC goes down and drops the connection
-        client._close_failed_stream(client._writer)
+        client._connection._close_failed_stream(client._connection._writer)
         with pytest.raises((S7ConnectionError, OSError)):
             await client.db_read(1, 0, 4)  # the reconnect attempt is refused
         _start(srv, port)  # the PLC is back
@@ -559,7 +559,7 @@ async def test_async_tasks_that_find_the_same_drop_share_one_reconnect(server: t
     await client.connect("127.0.0.1", port=port, auto_reconnect=True)
     client._auto_reconnect_min_interval = 0.0  # only the generation check may prevent extra reconnects
     try:
-        client._close_failed_stream(client._writer)
+        client._connection._close_failed_stream(client._connection._writer)
         results = await asyncio.gather(*(client.db_read(1, 0, 4) for _ in range(5)))
         assert results == [DB1] * 5
         assert client.connection_generation == 1
