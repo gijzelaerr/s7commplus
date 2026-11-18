@@ -20,7 +20,7 @@ import logging
 import struct
 from collections import deque
 from enum import Enum, auto
-from typing import NamedTuple, Optional
+from typing import Generator, NamedTuple, Optional
 
 from ._handshake import (
     _build_get_var_substreamed_payload,
@@ -1039,3 +1039,104 @@ class SessionCore:
         if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.S7_1200:
             self._integrity_id_read = (self._integrity_id_read + 1) & 0xFFFFFFFF
             self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
+
+    # --- Reassembling a reply split over several PDUs ---
+
+    # Sanity caps for fragment reassembly: generous vs. any real PLC EXPLORE response,
+    # but bounded so a malformed/adversarial stream can't drive unbounded allocation.
+    _MAX_REASSEMBLED_BYTES = 16 * 1024 * 1024
+    _MAX_REASSEMBLED_FRAGMENTS = 4096
+
+    def _reassemble(self, initial_data: bytes = b"") -> Generator[None, bytes, bytes]:
+        """Reassemble a possibly-fragmented S7CommPlus response and return its data section.
+
+        A large response is split into several S7CommPlus PDUs. Each fragment is
+        ``0x72 <ver> <len:2> <data:len>`` with no trailer; only the final fragment is
+        followed by the ``0x72 <ver> 0x0000`` trailer. We concatenate the data parts
+        of every fragment until the trailer is seen. Works for single-PDU responses
+        too (one fragment immediately followed by the trailer). After SessionKey
+        auth every fragment must be V3, and its HMAC covers the fragments so far.
+
+        A generator, so that both clients can drive it with their own I/O: it
+        starts from ``initial_data``, yields whenever it needs more bytes, and
+        takes the next chunk the transport delivered as the value sent in.
+
+        Raises:
+            S7IntegrityError: A fragment of a SessionKey reply is not V3, its
+                HMAC is wrong, or its version changes. The caller must then
+                close the session.
+            S7ConnectionError: The framing is broken, or the reply exceeds the limits.
+            S7ProtocolError: A fatal SystemEvent, or too many of them.
+        """
+        buf = bytearray(initial_data)
+        data = bytearray()
+        fragments = 0
+        system_events = 0
+        expected_version: int | None = None
+        from ._fragment_hmac import FragmentHMACVerifier
+
+        session_key = self._session_key
+        legacy_verifier = FragmentHMACVerifier(session_key) if self.legacy_s7_1500 and session_key else None
+        digest_state = hmac.new(session_key[:24], digestmod=hashlib.sha256) if session_key is not None else None
+        while True:
+            while len(buf) < 4:
+                buf.extend((yield))
+            if buf[0] != 0x72:
+                raise S7ConnectionError("Expected S7CommPlus fragment header (0x72)")
+            fragment_version = buf[1]
+            if fragment_version == ProtocolVersion.SYSTEM_EVENT:
+                # PLCs interleave SystemEvents between the fragments of a large
+                # response (seen on S7-1200 FW V4.2); skip them like the receive path.
+                event_len = (buf[2] << 8) | buf[3]
+                while len(buf) < 4 + event_len:
+                    buf.extend((yield))
+                event = bytes(buf[4 : 4 + event_len])
+                del buf[: 4 + event_len]
+                _check_system_event(event)
+                system_events += 1
+                if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
+                    raise S7ProtocolError("Too many S7CommPlus SystemEvents during response reassembly")
+                continue
+            if session_key is not None and fragment_version != ProtocolVersion.V3:
+                raise S7IntegrityError(
+                    f"Authenticated response used unauthenticated frame version V{fragment_version}; reconnect"
+                )
+            if expected_version is None:
+                expected_version = fragment_version
+            elif fragment_version != expected_version:
+                if session_key is not None:
+                    raise S7IntegrityError(
+                        f"Authenticated S7CommPlus response changed fragment version from {expected_version} "
+                        f"to {fragment_version}; reconnect"
+                    )
+                raise S7ConnectionError(
+                    f"S7CommPlus response changed fragment version from {expected_version} to {fragment_version}"
+                )
+            frag_len = (buf[2] << 8) | buf[3]
+            del buf[:4]
+            if frag_len == 0:
+                break  # standalone trailer (defensive)
+            while len(buf) < frag_len:
+                buf.extend((yield))
+            fragment_data = bytes(buf[:frag_len])
+            del buf[:frag_len]
+            if fragment_version == ProtocolVersion.V3:
+                if digest_state is None:
+                    raise S7ConnectionError("V3 response received without a session key")
+                fragment_data = (
+                    legacy_verifier.verify(fragment_data)
+                    if legacy_verifier is not None
+                    else _verify_v3_hmac(fragment_data, digest_state)
+                )
+            data.extend(fragment_data)
+            fragments += 1
+            if fragments > self._MAX_REASSEMBLED_FRAGMENTS or len(data) > self._MAX_REASSEMBLED_BYTES:
+                raise S7ConnectionError(f"Reassembled response exceeds limits ({len(data)} bytes, {fragments} fragments)")
+            # The next 4 bytes are either the trailer (0x72 ver 0x0000) or the next
+            # fragment's header (0x72 ver len>0).
+            while len(buf) < 4:
+                buf.extend((yield))
+            if buf[0] == 0x72 and buf[1] == expected_version and buf[2] == 0 and buf[3] == 0:
+                del buf[:4]  # consume trailer: last fragment
+                break
+        return bytes(data)

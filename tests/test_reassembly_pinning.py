@@ -105,7 +105,9 @@ def _prepare(obj: Any, session: str) -> None:
     obj._MAX_REASSEMBLED_BYTES = 200_000
 
 
-def _outcome(result: Any, chunks: list[bytes], total: int, invalidated: list[bool], extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def _outcome(
+    result: Any, chunks: list[bytes], total: int, invalidated: list[bool], extra: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     out = {"result": result, "chunks_read": total - len(chunks), "invalidated": bool(invalidated)}
     out.update(extra or {})
     return out
@@ -178,3 +180,11 @@ def test_sync_reassembly_matches_the_recording(name: str) -> None:
 @pytest.mark.parametrize("name", list(CASES))
 def test_async_reassembly_matches_the_recording(name: str) -> None:
     assert _run_async(name) == _GOLDEN[name]["async"]
+
+
+@pytest.mark.parametrize("name", list(CASES))
+def test_sync_and_async_reassembly_agree(name: str) -> None:
+    # The async client also tracks whether the stream sits inside a reply.
+    asynchronous = _run_async(name)
+    del asynchronous["rx_partial"]
+    assert _run_sync(name) == asynchronous

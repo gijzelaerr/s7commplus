@@ -1384,11 +1384,6 @@ class S7CommPlusConnection(SessionCore):
             return True
         return self._iso_conn.data_available(0.0)
 
-    # Sanity caps for fragment reassembly — generous vs. any real PLC EXPLORE response,
-    # but bounded so a malformed/adversarial stream can't drive unbounded allocation.
-    _MAX_REASSEMBLED_BYTES = 16 * 1024 * 1024
-    _MAX_REASSEMBLED_FRAGMENTS = 4096
-
     def _recv_reassembled_payload(self, initial_data: bytes = b"", timeout: Optional[float] = None) -> bytes:
         """Receive a possibly-fragmented S7CommPlus response, returning its data section.
 
@@ -1399,87 +1394,20 @@ class S7CommPlusConnection(SessionCore):
         too (one fragment immediately followed by the trailer). ``timeout`` bounds
         the wait for each further part in seconds (``None``: :meth:`_receive_timeout`).
         """
-        buf = bytearray(initial_data)
-
-        def ensure(n: int) -> None:
-            while len(buf) < n:
+        reassembly = self._reassemble(initial_data)
+        try:
+            next(reassembly)
+            while True:
                 chunk = self._recv_s7_data(timeout)
                 if not chunk:
                     raise S7ConnectionError("Connection closed during response reassembly")
-                buf.extend(chunk)
-
-        data = bytearray()
-        fragments = 0
-        system_events = 0
-        expected_version: int | None = None
-        from ._fragment_hmac import FragmentHMACVerifier
-
-        legacy_verifier = FragmentHMACVerifier(self._session_key) if self.legacy_s7_1500 and self._session_key else None
-        digest_state = hmac.new(self._session_key[:24], digestmod=hashlib.sha256) if self._session_key is not None else None
-        while True:
-            ensure(4)
-            if buf[0] != 0x72:
-                raise S7ConnectionError("Expected S7CommPlus fragment header (0x72)")
-            fragment_version = buf[1]
-            if fragment_version == ProtocolVersion.SYSTEM_EVENT:
-                # PLCs interleave SystemEvents between the fragments of a large
-                # response (seen on S7-1200 FW V4.2); skip them like the receive path.
-                event_len = (buf[2] << 8) | buf[3]
-                ensure(4 + event_len)
-                event = bytes(buf[4 : 4 + event_len])
-                del buf[: 4 + event_len]
-                _check_system_event(event)
-                system_events += 1
-                if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
-                    raise S7ProtocolError("Too many S7CommPlus SystemEvents during response reassembly")
-                continue
-            if self._session_key is not None and fragment_version != ProtocolVersion.V3:
-                self._invalidate_integrity_failure()
-                raise S7IntegrityError(
-                    f"Authenticated response used unauthenticated frame version V{fragment_version}; reconnect"
-                )
-            if expected_version is None:
-                expected_version = fragment_version
-            elif fragment_version != expected_version:
-                if self._session_key is not None:
-                    self._invalidate_integrity_failure()
-                    raise S7IntegrityError(
-                        f"Authenticated S7CommPlus response changed fragment version from {expected_version} "
-                        f"to {fragment_version}; reconnect"
-                    )
-                raise S7ConnectionError(
-                    f"S7CommPlus response changed fragment version from {expected_version} to {fragment_version}"
-                )
-            frag_len = (buf[2] << 8) | buf[3]
-            del buf[:4]
-            if frag_len == 0:
-                break  # standalone trailer (defensive)
-            ensure(frag_len)
-            fragment_data = bytes(buf[:frag_len])
-            del buf[:frag_len]
-            if fragment_version == ProtocolVersion.V3:
-                if digest_state is None:
-                    raise S7ConnectionError("V3 response received without a session key")
-                try:
-                    fragment_data = (
-                        legacy_verifier.verify(fragment_data)
-                        if legacy_verifier is not None
-                        else _verify_v3_hmac(fragment_data, digest_state)
-                    )
-                except S7IntegrityError:
-                    self._invalidate_integrity_failure()
-                    raise
-            data.extend(fragment_data)
-            fragments += 1
-            if fragments > self._MAX_REASSEMBLED_FRAGMENTS or len(data) > self._MAX_REASSEMBLED_BYTES:
-                raise S7ConnectionError(f"Reassembled response exceeds limits ({len(data)} bytes, {fragments} fragments)")
-            # The next 4 bytes are either the trailer (0x72 ver 0x0000) or the next
-            # fragment's header (0x72 ver len>0).
-            ensure(4)
-            if buf[0] == 0x72 and buf[1] == expected_version and buf[2] == 0 and buf[3] == 0:
-                del buf[:4]  # consume trailer — last fragment
-                break
-        return bytes(data)
+                reassembly.send(chunk)
+        except StopIteration as done:
+            data: bytes = done.value
+            return data
+        except S7IntegrityError:
+            self._invalidate_integrity_failure()
+            raise
 
     def _init_ssl(self) -> None:
         """Send InitSSL request to prepare the connection.

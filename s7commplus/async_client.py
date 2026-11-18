@@ -6,8 +6,6 @@ Reference: thomas-v2/S7CommPlusDriver (C#, LGPL-3.0)
 import asyncio
 import contextlib
 import functools
-import hashlib
-import hmac
 import logging
 import ssl
 import struct
@@ -91,7 +89,6 @@ from .connection import (
     _DEFAULT_EXPLORE_TIMEOUT,
     _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
     _MAX_QUEUED_NOTIFICATION_FRAMES,
-    _MAX_SYSTEM_EVENTS_PER_RESPONSE,
     _S7_CIPHERS,
     FamilyOnlyFingerprintError,
     SessionKeyAuthenticationDependencyError,
@@ -101,7 +98,6 @@ from .connection import (
     _build_session_activate_payload,
     _build_set_variable_payload,
     _check_set_variable_response,
-    _check_system_event,
     _check_timeout,
     _check_v1_legitimation_response,
     _derive_oms_secret,
@@ -121,7 +117,6 @@ from .connection import (
     _write_delete_qualifier_version,
     _response_continues,
     _verify_pinned_certificate,
-    _verify_v3_hmac,
 )
 from .subscription import (
     SubscriptionDiagnostics,
@@ -2278,11 +2273,6 @@ class S7CommPlusAsyncClient(SessionCore):
 
     # -- Internal methods --
 
-    # Sanity caps for fragment reassembly — generous vs. any real PLC EXPLORE response,
-    # but bounded so a malformed/adversarial stream can't drive unbounded allocation.
-    _MAX_REASSEMBLED_BYTES = 16 * 1024 * 1024
-    _MAX_REASSEMBLED_FRAGMENTS = 4096
-
     async def _send_subscription_credit(self, subscription_id: int, credit_limit: int) -> None:
         """Send a fire-and-forget update before finite credits expire."""
         if not 1 <= credit_limit <= 255:
@@ -2428,12 +2418,12 @@ class S7CommPlusAsyncClient(SessionCore):
         the request timeout).
         """
         wait = self._request_timeout if timeout is None else timeout
-        buf = bytearray(initial_data)
         # Until the trailer is read the stream sits inside this reply.
         self._rx_partial = True
-
-        async def ensure(n: int) -> None:
-            while len(buf) < n:
+        reassembly = self._reassemble(initial_data)
+        try:
+            next(reassembly)
+            while True:
                 chunk = await self._receive_bounded(
                     self._recv_cotp_dt(),
                     wait,
@@ -2442,81 +2432,14 @@ class S7CommPlusAsyncClient(SessionCore):
                 self._rx_partial = True
                 if not chunk:
                     raise S7ConnectionError("Connection closed during response reassembly")
-                buf.extend(chunk)
-
-        from ._fragment_hmac import FragmentHMACVerifier
-
-        session_key = self._session_key
-        legacy_verifier = FragmentHMACVerifier(session_key) if self.legacy_s7_1500 and session_key else None
-        digest_state = hmac.new(session_key[:24], digestmod=hashlib.sha256) if session_key is not None else None
-        data = bytearray()
-        fragments = 0
-        system_events = 0
-        expected_version: int | None = None
-        while True:
-            await ensure(4)
-            if buf[0] != 0x72:
-                raise S7ConnectionError("Expected S7CommPlus fragment header (0x72)")
-            fragment_version = buf[1]
-            if fragment_version == ProtocolVersion.SYSTEM_EVENT:
-                # See S7CommPlusConnection._recv_reassembled_payload.
-                event_len = (buf[2] << 8) | buf[3]
-                await ensure(4 + event_len)
-                event = bytes(buf[4 : 4 + event_len])
-                del buf[: 4 + event_len]
-                _check_system_event(event)
-                system_events += 1
-                if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
-                    raise S7ProtocolError("Too many S7CommPlus SystemEvents during response reassembly")
-                continue
-            if session_key is not None and fragment_version != ProtocolVersion.V3:
-                await self._invalidate_integrity_failure()
-                raise S7IntegrityError(
-                    f"Authenticated response used unauthenticated frame version V{fragment_version}; reconnect"
-                )
-            if expected_version is None:
-                expected_version = fragment_version
-            elif fragment_version != expected_version:
-                if session_key is not None:
-                    await self._invalidate_integrity_failure()
-                    raise S7IntegrityError(
-                        f"Authenticated S7CommPlus response changed fragment version from {expected_version} "
-                        f"to {fragment_version}; reconnect"
-                    )
-                raise S7ConnectionError(
-                    f"S7CommPlus response changed fragment version from {expected_version} to {fragment_version}"
-                )
-            frag_len = (buf[2] << 8) | buf[3]
-            del buf[:4]
-            if frag_len == 0:
-                break  # standalone trailer (defensive)
-            await ensure(frag_len)
-            fragment_data = bytes(buf[:frag_len])
-            del buf[:frag_len]
-            if fragment_version == ProtocolVersion.V3:
-                if digest_state is None:
-                    raise S7ConnectionError("V3 response received without a session key")
-                try:
-                    fragment_data = (
-                        legacy_verifier.verify(fragment_data)
-                        if legacy_verifier is not None
-                        else _verify_v3_hmac(fragment_data, digest_state)
-                    )
-                except S7IntegrityError:
-                    await self._invalidate_integrity_failure()
-                    raise
-            data.extend(fragment_data)
-            fragments += 1
-            if fragments > self._MAX_REASSEMBLED_FRAGMENTS or len(data) > self._MAX_REASSEMBLED_BYTES:
-                raise S7ConnectionError(f"Reassembled response exceeds limits ({len(data)} bytes, {fragments} fragments)")
-            # The next 4 bytes are either the trailer (0x72 ver 0x0000) or the next
-            # fragment's header (0x72 ver len>0).
-            await ensure(4)
-            if buf[0] == 0x72 and buf[1] == expected_version and buf[2] == 0 and buf[3] == 0:
-                del buf[:4]  # consume trailer — last fragment
-                break
-        self._rx_partial = False
-        return bytes(data)
+                reassembly.send(chunk)
+        except StopIteration as done:
+            self._rx_partial = False
+            data: bytes = done.value
+            return data
+        except S7IntegrityError:
+            await self._invalidate_integrity_failure()
+            raise
 
     async def _cotp_connect(self, local_tsap: int, remote_tsap: bytes) -> None:
         """Perform COTP Connection Request / Confirm handshake."""
