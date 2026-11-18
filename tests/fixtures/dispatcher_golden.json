@@ -1,0 +1,306 @@
+{
+ "empty_frame": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ConnectionError: Connection closed while waiting for an S7CommPlus response"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ConnectionError: Connection closed while waiting for an S7CommPlus response"
+  }
+ },
+ "fatal_system_event": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Fatal S7CommPlus SystemEvent return_value=-6773067493363548280: 000000000003610100000000000000000000001700009d6c00009d6d000000080000000200009d6e000000040000038c00009d6f00000004000004f200009d7000000003060700009d7100000009a2013b000251ff8800009d72000000040000000000009d7300000004000004f200009d7400000004000004b60000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Fatal S7CommPlus SystemEvent return_value=-6773067493363548280: 000000000003610100000000000000000000001700009d6c00009d6d000000080000000200009d6e000000040000038c00009d6f00000004000004f200009d7000000003060700009d7100000009a2013b000251ff8800009d72000000040000000000009d7300000004000004f200009d7400000004000004b60000"
+  }
+ },
+ "keyed-notification-then-reply": {
+  "async": {
+   "frames_read": 2,
+   "invalidated": false,
+   "notifications_queued": [
+    "7203003220bde2766ea122a68afff353b151b701aa602bb4be13bb7c743d81565b107f3ec4330000000000000000000000000000000072030000"
+   ],
+   "result": "7203002e2021e5f3c8456015dec03e7b95050673c2a58d501af7c2cf6cdf4e6dc3c49d84d1320000054c000000283400010272030000"
+  },
+  "sync": {
+   "frames_read": 2,
+   "invalidated": false,
+   "notifications_queued": [
+    "7203003220bde2766ea122a68afff353b151b701aa602bb4be13bb7c743d81565b107f3ec4330000000000000000000000000000000072030000"
+   ],
+   "result": "7203002e2021e5f3c8456015dec03e7b95050673c2a58d501af7c2cf6cdf4e6dc3c49d84d1320000054c000000283400010272030000"
+  }
+ },
+ "keyed-reply": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7203002e2021e5f3c8456015dec03e7b95050673c2a58d501af7c2cf6cdf4e6dc3c49d84d1320000054c000000283400010272030000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7203002e2021e5f3c8456015dec03e7b95050673c2a58d501af7c2cf6cdf4e6dc3c49d84d1320000054c000000283400010272030000"
+  }
+ },
+ "keyed-short_data": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ConnectionError: Response too short"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "720300242017b1da7048c23b772e51760eeda93dfe22b4fc0c20b54e37c1862aedc4299f0332000072030000"
+  }
+ },
+ "keyed-tampered": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": true,
+   "notifications_queued": [],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": true,
+   "notifications_queued": [],
+   "result": "S7IntegrityError: S7CommPlus response integrity check failed"
+  }
+ },
+ "keyed-unauthenticated_frame": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": true,
+   "notifications_queued": [],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V2; reconnect"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": true,
+   "notifications_queued": [],
+   "result": "S7IntegrityError: Authenticated response used unauthenticated frame version V2; reconnect"
+  }
+ },
+ "malformed_system_event": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Malformed S7CommPlus SystemEvent: 00000000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Malformed S7CommPlus SystemEvent: 00000000"
+  }
+ },
+ "newer_sequence": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000293400010272020000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000293400010272020000"
+  }
+ },
+ "notification-then-reply": {
+  "async": {
+   "frames_read": 3,
+   "invalidated": false,
+   "notifications_queued": [
+    "7202001133000102030405060708090a0b0c0d0e0f72020000",
+    "7202001133000102030405060708090a0b0c0d0e0f72020000"
+   ],
+   "result": "7202000d320000054c000000283400010272020000"
+  },
+  "sync": {
+   "frames_read": 3,
+   "invalidated": false,
+   "notifications_queued": [
+    "7202001133000102030405060708090a0b0c0d0e0f72020000",
+    "7202001133000102030405060708090a0b0c0d0e0f72020000"
+   ],
+   "result": "7202000d320000054c000000283400010272020000"
+  }
+ },
+ "reply": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  }
+ },
+ "reply-no_expected_sequence": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000073400010272020000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000073400010272020000"
+  }
+ },
+ "reply2_opcode": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d020000054c000000283400010272020000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d020000054c000000283400010272020000"
+  }
+ },
+ "short_data": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000332000072020000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000332000072020000"
+  }
+ },
+ "split_stale-then-reply": {
+  "async": {
+   "frames_read": 3,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  },
+  "sync": {
+   "frames_read": 3,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  }
+ },
+ "stale-then-reply": {
+  "async": {
+   "frames_read": 2,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  },
+  "sync": {
+   "frames_read": 2,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  }
+ },
+ "system_event-then-reply": {
+  "async": {
+   "frames_read": 3,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  },
+  "sync": {
+   "frames_read": 3,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7202000d320000054c000000283400010272020000"
+  }
+ },
+ "too_many_stale": {
+  "async": {
+   "frames_read": 17,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Too many stale S7CommPlus responses while waiting for sequence 40"
+  },
+  "sync": {
+   "frames_read": 17,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Too many stale S7CommPlus responses while waiting for sequence 40"
+  }
+ },
+ "too_many_system_events": {
+  "async": {
+   "frames_read": 17,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Too many S7CommPlus SystemEvents while waiting for a response"
+  },
+  "sync": {
+   "frames_read": 17,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Too many S7CommPlus SystemEvents while waiting for a response"
+  }
+ },
+ "unexpected_opcode": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Unexpected S7CommPlus opcode 0x31 while waiting for a response"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Unexpected S7CommPlus opcode 0x31 while waiting for a response"
+  }
+ },
+ "v3_unkeyed": {
+  "async": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "7203002e2021e5f3c8456015dec03e7b95050673c2a58d501af7c2cf6cdf4e6dc3c49d84d1320000054c000000283400010272030000"
+  },
+  "sync": {
+   "frames_read": 1,
+   "invalidated": false,
+   "notifications_queued": [],
+   "result": "S7ProtocolError: Unexpected S7CommPlus opcode 0x20 while waiting for a response"
+  }
+ }
+}
