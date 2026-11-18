@@ -1,0 +1,102 @@
+{
+ "context": {
+  "async": {
+   "check_hostname": false,
+   "ciphers": [
+    "AES128-GCM-SHA256",
+    "AES128-SHA256",
+    "AES256-GCM-SHA384",
+    "AES256-SHA256",
+    "ECDHE-RSA-AES128-GCM-SHA256",
+    "ECDHE-RSA-AES256-GCM-SHA384",
+    "TLS_AES_128_GCM_SHA256",
+    "TLS_AES_256_GCM_SHA384",
+    "TLS_CHACHA20_POLY1305_SHA256"
+   ],
+   "minimum_version": "771",
+   "options": 2186952785,
+   "verify_mode": "0"
+  },
+  "sync": {
+   "check_hostname": false,
+   "ciphers": [
+    "AES128-GCM-SHA256",
+    "AES128-SHA256",
+    "AES256-GCM-SHA384",
+    "AES256-SHA256",
+    "ECDHE-RSA-AES128-GCM-SHA256",
+    "ECDHE-RSA-AES256-GCM-SHA384",
+    "TLS_AES_128_GCM_SHA256",
+    "TLS_AES_256_GCM_SHA384",
+    "TLS_CHACHA20_POLY1305_SHA256"
+   ],
+   "minimum_version": "771",
+   "options": 2186952785,
+   "verify_mode": "0"
+  }
+ },
+ "init_ssl-accepted": {
+  "async": {
+   "result": null,
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  }
+ },
+ "init_ssl-empty": {
+  "async": {
+   "result": "S7ConnectionError: InitSSL response too short",
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  },
+  "sync": {
+   "result": "S7ConnectionError: InitSSL response too short",
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  }
+ },
+ "init_ssl-header_only": {
+  "async": {
+   "result": null,
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  }
+ },
+ "init_ssl-nine_bytes": {
+  "async": {
+   "result": "S7ConnectionError: InitSSL response too short",
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  },
+  "sync": {
+   "result": null,
+   "sent": [
+    "7201001231000005b30000000000000000300000000072010000"
+   ],
+   "sequence_number": 1
+  }
+ }
+}
