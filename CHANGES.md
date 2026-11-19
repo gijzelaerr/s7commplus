@@ -1,6 +1,112 @@
 CHANGES
 =======
 
+0.7.0 (2026-11-19)
+------------------
+
+The sync and async clients now share their session code and behave the same,
+`browse()` gives Bool array elements their packed bit, failed requests raise
+their own exception type, and the S7-1500 system datatypes can be read and
+written. Nothing in this release was run on a PLC except where an entry says so.
+
+### Upgrading from 0.6.0
+
+Most applications need no changes. Check the following if you use them:
+
+* Saved `browse()` results for data blocks with Bool arrays must be refreshed:
+  their elements now report other offsets and, for multi-dimensional arrays,
+  other access ids (see the first bug fix below) (#195).
+* `AsyncClient` checks for a connection before doing anything else, as `Client`
+  does. On a client that is not connected, `db_read_multi([])` and
+  `read_symbolic_multi([])` now raise `S7NotConnectedError` where they returned
+  `[]`, and `db_write_multi` with an item too large for one request raises it
+  where it raised `ValueError`. `S7NotConnectedError` is an `S7ConnectionError`
+  and a `RuntimeError`, so existing handlers keep working (#213).
+* The calls that raised a bare `RuntimeError` when the PLC refused a request, or
+  when its reply did not answer every item, now raise `S7RequestError` with the
+  same messages. `except RuntimeError` still catches it (#198).
+* A write the PLC answers with a partial error now fails per item: `write_tag`
+  and the other single writes raise `RuntimeError("Write failed: item 1: error
+  <item error>")` where they raised `RuntimeError("Write failed with return
+  value <ReturnValue>")` (#194).
+* On a session without a SessionKey, the sync client refuses a V3 reply with
+  `S7ConnectionError("V3 response received without a session key")`, as the
+  async client did. It used to raise `S7ProtocolError` (#201).
+* Log records of the async client's transport, TLS, handshake and SessionKey
+  renewal now come from the `s7commplus.async_connection` logger instead of
+  `s7commplus.async_client` (#211).
+* The `analysis` extra is gone; the SessionKey research it served moved to a
+  separate repository (#207). The `docs` extra now installs nothing on Python
+  below 3.11.5; the library itself still supports Python 3.10 (#214).
+
+### New features
+
+* DB members of the S7-1500 system types (`HW_*`, `OB_*`, `EVENT_*`, `CONN_*`,
+  `DB_ANY`, `DB_WWW`, `DB_DYN`, `PORT`, `RTM`, `PIP`, `AOM_IDENT`,
+  `OPC_UA_LocalizedTextEncodingMask` and `OPC_UA_ByteStringActualLength`) are
+  browsed as tags and read and written as `int`; `OB_*` values are signed
+  (#192).
+* `S7RequestError`, a subclass of both `S7Error` and `RuntimeError`, is raised
+  when the PLC refuses a request or its reply does not answer every item.
+  `S7Error` and its subclasses are importable from `s7commplus`, except
+  `S7StalePacketError` and `S7PacketLostError` (#198).
+* Experimental: `Client.request_operating_state()` and
+  `AsyncClient.request_operating_state()`, with the `OperatingStateChange`
+  result type, send CPU RUN/STOP requests. They are unvalidated and meant for a
+  dedicated test PLC; `set_plc_operating_state()` still raises
+  `NotImplementedError`. The server emulator accepts the request and reflects
+  it in `get_cpu_state()`, and a gated real-PLC acceptance scenario records a
+  RUN/STOP cycle (#8, #124).
+* `S7CommPlusServer.register_symbolic_db()` serves an emulator data block with
+  caller-supplied type info and symbol layout, for `browse()` and symbolic
+  reads and writes (#212, #216).
+* The wheel and sdist carry an attribution notice for the zlib preset
+  dictionaries, which come from S7CommPlusDriver (LGPL-3.0) (#197).
+
+### Bug fixes and hardening
+
+* `browse()`: Bool array elements in standard-access data blocks report their
+  packed `nonopt_address` and `nonopt_bitoffset`, for example `aBool[7]` at
+  926.7 where it was 933.0, and multi-dimensional `BOOL` arrays pad each row of
+  their `access_sequence` to a byte (`aBool2d[2,2]` is `….2C.12`, was
+  `….2C.C`). The layout was confirmed on one S7-1500 (6ES7 512-1CK01, FW V2.9)
+  by reading and writing every element; `BBOOL` arrays keep their offsets
+  (#195).
+* A write the PLC answers with a partial error reports the PLC's error for each
+  refused item, instead of failing every item with the request's ReturnValue
+  (#193, #194).
+* A sync notification wait no longer takes the reply of a request sent from
+  another thread meanwhile, such as the automatic SessionKey renewal. On an
+  `AsyncClient`, other requests no longer wait for a running notification wait
+  to end (#196).
+* `AsyncClient` connects with the same CreateObject and SessionSetup frames as
+  `Client`, and refuses a CreateObject reply without a session ObjectId with
+  `S7ConnectionError` where it failed with a `struct.error` or took the session
+  id from the reply header. This was not retested on a PLC with `AsyncClient`
+  (#200).
+* `S7CommPlusConnection.peer_certificate_fingerprint()` returns `None` after a
+  disconnect instead of the previous PLC's fingerprint (#209).
+* `AsyncClient.create_subscription()` advances the subscription change counter
+  and relation id once the PLC has accepted the subscription, before
+  registering it, as `Client` does (#215).
+
+### Internal
+
+* The two clients share one session core: the request path, CreateObject and
+  SessionSetup, the reply dispatcher, password legitimation, reply reassembly,
+  SessionKey renewal, session activation, DeleteObject and the session reset
+  (#199-#203, #205, #209). `AsyncClient` holds its own
+  `S7CommPlusAsyncConnection`, as `Client` holds an `S7CommPlusConnection`
+  (#211), and the methods the clients do not share are checked to stay
+  identical apart from `await` (#208, #213, #215).
+* The sync client's substreamed data-access path, which never ran, is gone
+  (#213).
+
+### Documentation
+
+* The async hardware validation is described as predating the shared connect
+  frames (#206).
+
 0.6.0 (2026-11-14)
 ------------------
 
