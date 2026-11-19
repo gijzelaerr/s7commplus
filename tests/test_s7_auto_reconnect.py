@@ -85,6 +85,7 @@ def _sync_client(*answers: bytes | Exception) -> Any:
 def _async_client(*answers: bytes | Exception) -> Any:
     """The asyncio counterpart of :func:`_sync_client`."""
     client = S7CommPlusAsyncClient()
+    client._connection._connected = True
     client._connect_params = {"host": "127.0.0.1", "port": 102}
     client._connection._send_request = AsyncMock(side_effect=list(answers))  # type: ignore[method-assign]
     client._symbol_catalog = _catalog()

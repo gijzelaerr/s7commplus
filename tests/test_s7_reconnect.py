@@ -8,6 +8,7 @@ import pickle
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -16,7 +17,7 @@ from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
 from s7commplus.connection import S7CommPlusConnection
 from s7commplus.error import S7ConnectionError, S7NotConnectedError
-from s7commplus.protocol import LegitimationType, ProtocolVersion
+from s7commplus.protocol import DataType, Ids, LegitimationType, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from tests.test_s7_tls import _generate_self_signed_cert
 
@@ -269,6 +270,42 @@ class TestNotConnected:
     async def test_async_before_connect(self, expected: type[Exception]) -> None:
         with pytest.raises(expected, match="Not connected"):
             await S7CommPlusAsyncClient().db_read(1, 0, 1)
+
+    # Some calls do work before their first request (an empty batch, an item
+    # too large to send); each one checks the connection first.
+    _CALLS: dict[str, tuple[Any, ...]] = {
+        "db_read": (1, 0, 1),
+        "db_write": (1, 0, b"\x00"),
+        "db_read_multi": ([],),
+        "db_write_multi": ([(1, 0, bytes(1 << 20), DataType.BLOB)],),
+        "read_area": (Ids.NATIVE_THE_M_AREA_RID, 0, 1),
+        "write_area": (Ids.NATIVE_THE_M_AREA_RID, 0, b"\x00"),
+        "read_symbolic": (Ids.DB_ACCESS_AREA_BASE + 1, [1]),
+        "read_symbolic_multi": ([],),
+        "write_symbolic": (Ids.DB_ACCESS_AREA_BASE + 1, [1], b"\x00"),
+        "explore": (),
+        "get_cpu_state": (),
+        "request_operating_state": (1,),
+        "list_datablocks": (),
+        "program_objects": (),
+        "browse": (),
+        "create_subscription": ([],),
+        "delete_subscription": (1,),
+        "create_alarm_subscription": (),
+        "delete_alarm_subscription": (1,),
+        "read_alarms": (),
+        "authenticate": ("secret",),
+    }
+
+    @pytest.mark.parametrize("name", sorted(_CALLS))
+    def test_sync_every_operation_before_connect(self, name: str) -> None:
+        with pytest.raises(S7NotConnectedError, match="Not connected"):
+            getattr(S7CommPlusClient(), name)(*self._CALLS[name])
+
+    @pytest.mark.parametrize("name", sorted(_CALLS))
+    async def test_async_every_operation_before_connect(self, name: str) -> None:
+        with pytest.raises(S7NotConnectedError, match="Not connected"):
+            await getattr(S7CommPlusAsyncClient(), name)(*self._CALLS[name])
 
     def test_it_survives_a_pickle_round_trip(self) -> None:
         restored = pickle.loads(pickle.dumps(S7NotConnectedError("Not connected")))

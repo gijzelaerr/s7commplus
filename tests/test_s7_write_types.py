@@ -30,6 +30,7 @@ async def test_scalar_write_validates_type_but_raw_access_uses_blob_on_wire(
 ) -> None:
     if asynchronous:
         client = S7CommPlusAsyncClient()
+        client._connection._connected = True
         send = AsyncMock(return_value=b"\x00\x00")
         client._connection._send_request = send
         if operation == "symbolic":
@@ -85,6 +86,7 @@ def test_missing_multi_write_type_rejected_before_any_send(substreamed: bool) ->
 
 async def test_async_missing_multi_write_type_rejected_before_send() -> None:
     client = S7CommPlusAsyncClient()
+    client._connection._connected = True
     send = AsyncMock()
     client._connection._send_request = send
     with pytest.raises(ValueError, match="require.*datatype"):

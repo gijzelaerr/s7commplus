@@ -227,6 +227,7 @@ async def test_async_raw_db_reads_use_profile_qualifier(enabled: bool) -> None:
     from s7commplus.client import _build_read_payload
 
     client = S7CommPlusAsyncClient()
+    client._connection._connected = True
     client._connection._legacy_s7_1500 = enabled
     client._connection._session_key = _KEY
     client._connection._protocol_version = ProtocolVersion.V1
