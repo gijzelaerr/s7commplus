@@ -1,14 +1,17 @@
-"""The fingerprint SPN matches HarpoS7's gate network and the direct port it replaced."""
+"""The fingerprint SPN matches the answers of HarpoS7's gate network and the direct port it replaced."""
 
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 import pytest
 
 from s7commplus.v1_session_key.real_plc import fingerprint
-from old.family0 import fingerprint as harpo
-from tools import recover_fingerprint
+
+# Recorded from the retired HarpoS7 port, which also agreed with its gate network on every challenge.
+_VECTORS = json.loads((Path(__file__).parent / "fixtures/family0/reference_vectors.json").read_text(encoding="utf-8"))
 
 
 def _fingerprint(challenge: bytes) -> bytes:
@@ -17,53 +20,17 @@ def _fingerprint(challenge: bytes) -> bytes:
     return bytes(output)
 
 
-def _reference(challenge: bytes, destination: bytes = bytes(8)) -> bytes:
-    output = bytearray(destination)
-    harpo.harpo_fingerprint(output, challenge)
-    return bytes(output)
+@pytest.mark.parametrize("vector", _VECTORS["fingerprint"], ids=lambda vector: vector["challenge"])
+def test_matches_the_recorded_harpo_answers(vector: dict[str, str]) -> None:
+    """Random, constant and single-nibble challenges, with the answers HarpoS7's port and gate network gave."""
+    assert _fingerprint(bytes.fromhex(vector["challenge"])) == bytes.fromhex(vector["fingerprint"])
 
 
-def test_constants_are_recovered_from_the_gate_network() -> None:
-    recovered = recover_fingerprint.recover(harpo.gates())
-    assert recovered.input_key == fingerprint.INPUT_KEY
-    assert recovered.round_keys == list(fingerprint.ROUND_KEYS)
-    assert recovered.round_wiring == [list(wiring) for wiring in fingerprint.ROUND_WIRING]
-    assert recovered.output == list(fingerprint.OUTPUT_CRUMBS)
-    assert recovered.output_encoding == list(fingerprint.OUTPUT_ENCODING)
-
-
-def test_inverse_sbox_is_aes() -> None:
-    assert list(fingerprint.INV_SBOX) == recover_fingerprint.inv_sbox_table()
-
-
-def test_matches_the_gate_network_on_random_challenges() -> None:
-    network = harpo.gates()
-    rng = random.Random(4603)
-    for _ in range(300):
-        challenge = rng.randbytes(18)
-        assert _fingerprint(challenge) == harpo.evaluate(network, challenge)
-
-
-def test_matches_the_harpo_port_on_random_challenges() -> None:
-    rng = random.Random(4600)
-    for _ in range(300):
-        challenge = rng.randbytes(20)
-        # The port's output ignores the destination's previous contents too.
-        assert _fingerprint(challenge) == _reference(challenge, rng.randbytes(8))
-
-
-@pytest.mark.parametrize("fill", [0x00, 0x0F, 0xF0, 0xFF])
-def test_matches_the_harpo_port_on_constant_challenges(fill: int) -> None:
-    assert _fingerprint(bytes([fill]) * 18) == _reference(bytes([fill]) * 18)
-
-
-def test_matches_the_harpo_port_on_single_nibble_changes() -> None:
-    base = bytes(18)
-    for nibble in range(32):
-        for value in (1, 8, 15):
-            challenge = bytearray(base)
-            challenge[2 + nibble // 2] = value << 4 if nibble % 2 == 0 else value
-            assert _fingerprint(bytes(challenge)) == _reference(bytes(challenge))
+def test_output_ignores_the_destination_contents() -> None:
+    challenge = bytes.fromhex(_VECTORS["fingerprint"][0]["challenge"])
+    output = bytearray(random.Random(4600).randbytes(8))
+    fingerprint.fingerprint_challenge(output, challenge)
+    assert bytes(output) == _fingerprint(challenge)
 
 
 def test_only_challenge_bytes_2_to_18_are_used() -> None:

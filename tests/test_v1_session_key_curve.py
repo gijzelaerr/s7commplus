@@ -1,25 +1,24 @@
-"""SeedTransform's Transform7/Monolith1/Monolith2 chain is an x-only ECDH ladder."""
+"""SeedTransform's Transform7/Monolith1/Monolith2 chain is an x-only ECDH ladder.
+
+The Transform7 answers below were recorded from the retired HarpoS7 ports and
+recovery tools before they moved to the s7commplus-research repository.
+"""
 
 from __future__ import annotations
 
 import json
 import random
-from collections.abc import Iterator
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
-from s7commplus.v1_session_key.real_plc import curve, seed
-from old.family0 import encoding, transform7_compact, transform12_compact
-from old.family0 import seed_transform as old_seed_transform
-from old.family0._generated import monolith2
-from old.family0._generated.data import TRANSFORM7_DATA
 from s7commplus.v1_session_key.keys import KeyFamily, fingerprints_for_family, get_public_key
-from tools import trace_scalar_seed_boundary as boundary
-from tools.recover_scalar_encodings import scalar_xor_mask
-from tools.verify_v1_session_key_evidence import PROVENANCE
+from s7commplus.v1_session_key.real_plc import curve, seed
 
-_GENERATOR = bytes(TRANSFORM7_DATA[0xD8:0x100])
+_FIXTURES = Path(__file__).parent / "fixtures" / "family0"
+_VECTORS = json.loads((_FIXTURES / "reference_vectors.json").read_text(encoding="utf-8"))
+_PROVENANCE = json.loads((_FIXTURES / "provenance.json").read_text(encoding="utf-8"))
 _PUBLIC_KEYS = [get_public_key(fingerprint)[:40] for family in KeyFamily for fingerprint in fingerprints_for_family(family)]
 
 Point = tuple[int, int] | None
@@ -66,24 +65,12 @@ def _is_probable_prime(value: int) -> bool:
     return True
 
 
-def _transform7_value(prng1: bytes, prng2: bytes, source: bytes) -> int:
-    span = bytearray(transform7_compact.DESTINATION_SIZE)
-    transform7_compact.execute(span, bytearray(prng1), bytearray(prng2), source)
-    return encoding.span_value(span)
-
-
 def test_domain_parameters() -> None:
-    assert _GENERATOR == curve.GENERATOR_X.to_bytes(20, "little") + curve.GENERATOR_Y.to_bytes(20, "little")
     generator = (curve.GENERATOR_X, curve.GENERATOR_Y)
     assert _is_probable_prime(curve.P) and _is_probable_prime(curve.ORDER)
     assert (curve.GENERATOR_Y**2 - (curve.GENERATOR_X**3 + curve.A * curve.GENERATOR_X + curve.B)) % curve.P == 0
     assert _affine_multiply(curve.ORDER, generator) is None
     assert curve.x_multiply(curve.ORDER, curve.GENERATOR_X) == 0
-    assert transform12_compact._CONSTANTS[58] % curve.P == curve.B  # The ladder's doubling constant.
-
-
-def test_scalar_mask_is_the_source_derived_branch_mask() -> None:
-    assert curve.SCALAR_MASK == scalar_xor_mask()
 
 
 def test_ladder_matches_affine_arithmetic() -> None:
@@ -97,12 +84,17 @@ def test_ladder_matches_affine_arithmetic() -> None:
     assert curve.x_multiply(0, curve.GENERATOR_X) == 0
 
 
-@pytest.mark.parametrize("source", [_GENERATOR, *_PUBLIC_KEYS], ids=lambda source: source[:4].hex())
-def test_ladder_is_the_value_transform7_decodes_to(source: bytes) -> None:
-    rng = random.Random(source)
-    prng1, prng2 = rng.randbytes(20), rng.randbytes(20)
-    expected = _transform7_value(prng1, prng2, source)
-    assert curve.x_multiply(curve.ladder_scalar(prng2), int.from_bytes(source[:20], "little")) == expected
+@pytest.mark.parametrize("vector", _VECTORS["transform7_ladder"], ids=lambda vector: vector["source"][:8])
+def test_ladder_is_the_value_transform7_decodes_to(vector: dict[str, str]) -> None:
+    """The generator and every vendored public key, with the value HarpoS7's Transform7 output decoded to."""
+    x = int.from_bytes(bytes.fromhex(vector["source"])[:20], "little")
+    assert curve.x_multiply(curve.ladder_scalar(bytes.fromhex(vector["prng2"])), x) == int(vector["x"], 16)
+
+
+def test_ladder_vectors_cover_the_generator_and_every_vendored_key() -> None:
+    sources = {bytes.fromhex(vector["source"]) for vector in _VECTORS["transform7_ladder"]}
+    generator = curve.GENERATOR_X.to_bytes(20, "little") + curve.GENERATOR_Y.to_bytes(20, "little")
+    assert sources == {generator, *_PUBLIC_KEYS}
 
 
 def test_catalogue_contains_keys_on_the_curve_and_its_twist() -> None:
@@ -113,94 +105,46 @@ def test_catalogue_contains_keys_on_the_curve_and_its_twist() -> None:
     assert kinds == {True, False}  # The x-only ladder covers both; Transform7 agrees on each above.
 
 
-@pytest.mark.parametrize("number", [0, 1])
-def test_upstream_transform7_known_answers(number: int) -> None:
-    record = json.loads(PROVENANCE.read_text(encoding="utf-8"))["transform7_vectors"][number]
-    fields = {key: bytes.fromhex(field["hex"]) for key, field in record["fields"].items()}
+@pytest.mark.parametrize("record", _PROVENANCE["transform7_vectors"], ids=lambda record: record["name"])
+def test_upstream_transform7_known_answers(record: dict[str, object]) -> None:
+    fields = {key: bytes.fromhex(field["hex"]) for key, field in record["fields"].items()}  # type: ignore[attr-defined]
     x = int.from_bytes(fields["source"][:20], "little")
-    expected = encoding.span_value(fields["destination"])
+    expected = int(_VECTORS["upstream_decoded"]["transform7_x"][record["name"]], 16)
     assert curve.x_multiply(curve.ladder_scalar(fields["prng2"]), x) == expected
 
 
-def test_ignored_inputs_and_value_preserving_monoliths() -> None:
-    rng = random.Random(5401)
-    prng2 = rng.randbytes(20)
-    values = {_transform7_value(rng.randbytes(20), prng2, _GENERATOR[:20] + rng.randbytes(20)) for _ in range(3)}
-    assert values == {curve.x_multiply(curve.ladder_scalar(prng2), curve.GENERATOR_X)}
-    for _ in range(3):
-        span = bytearray(transform7_compact.DESTINATION_SIZE)
-        transform7_compact.execute(span, bytearray(rng.randbytes(20)), bytearray(rng.randbytes(20)), rng.choice(_PUBLIC_KEYS))
-        value = encoding.span_value(span)
-        old_seed_transform._monolith1_loop(span)
-        assert encoding.span_value(span) == value
-        serialized = bytearray(20)
-        monolith2.execute(serialized, bytes(span))
-        assert serialized == value.to_bytes(20, "little")
-
-
-def test_transform7_is_not_modular_for_a_small_source() -> None:
-    """For x = 5 the original's result depends on its blinding inputs; the ladder is the true multiple."""
-    rng = random.Random(5402)
-    prng2 = rng.randbytes(20)
-    source = (5).to_bytes(20, "little")
-    values = {_transform7_value(rng.randbytes(20), prng2, source + rng.randbytes(20)) for _ in range(3)}
-    assert len(values) > 1
-    scalar = curve.ladder_scalar(prng2)
-    assert curve.x_multiply(scalar, 5) not in values
-    split = rng.randrange(1, curve.ORDER)
-    composed = curve.x_multiply(scalar * pow(split, -1, curve.ORDER) % curve.ORDER, curve.x_multiply(split, 5))
-    assert composed == curve.x_multiply(scalar, 5)
-
-
-def _entropy(rng: random.Random, forced: list[bytes] | None = None) -> Iterator[bytes]:
-    yield from forced or []
-    while True:
-        yield rng.randbytes(20)
-
-
-def _run(implementation: object, public_key: bytes, pre_seed: int, entropy: Iterator[bytes]) -> tuple[bytes, int]:
+def _run(public_key: bytes, pre_seed: int, entropy: list[str]) -> tuple[bytes, int]:
+    values = iter(bytes.fromhex(value) for value in entropy)
     requests = 0
 
     def urandom(length: int) -> bytes:
         nonlocal requests
         assert length == 20
         requests += 1
-        return next(entropy)
+        return next(values)
 
     destination = bytearray(seed.SEED_LENGTH)
     with mock.patch("os.urandom", urandom):
-        implementation(destination, public_key, pre_seed)  # type: ignore[operator]
+        seed.write_seed(destination, public_key, pre_seed)
     return bytes(destination), requests
 
 
-@pytest.mark.parametrize("trial", range(4))
-def test_seed_transform_matches_the_transform7_chain(trial: int) -> None:
-    rng = random.Random(5403 + trial)
-    public_key, pre_seed = rng.choice(_PUBLIC_KEYS), rng.getrandbits(160)
-    outputs = [
-        _run(implementation, public_key, pre_seed, _entropy(random.Random(trial)))
-        for implementation in (seed.write_seed, old_seed_transform.reference_execute_value)
-    ]
-    assert outputs[0] == outputs[1]
-    assert outputs[0][1] == 2
+@pytest.mark.parametrize(
+    "vector", _VECTORS["write_seed"], ids=lambda vector: f"{vector['pre_seed'][:8]}-{len(vector['entropy'])}"
+)
+def test_seed_transform_matches_the_transform7_chain(vector: dict[str, object]) -> None:
+    """The seed HarpoS7's Transform7/Monolith1/Monolith2 chain wrote for the same inputs and entropy.
+
+    The last vector forces the scalar 0 first, so both retry an infinite ephemeral and draw a third value.
+    """
+    entropy: list[str] = vector["entropy"]  # type: ignore[assignment]
+    result, requests = _run(bytes.fromhex(vector["public_key"]), int(vector["pre_seed"], 16), entropy)  # type: ignore[arg-type]
+    assert result.hex() == vector["seed"]
+    assert requests == len(entropy)
 
 
-def test_seed_transform_retries_an_infinite_ephemeral_like_the_transform7_chain() -> None:
-    forced = [bytes(20), curve.SCALAR_MASK.to_bytes(20, "little")]  # prng1, then the scalar 0.
-    outputs = [
-        _run(implementation, _PUBLIC_KEYS[0], 0, _entropy(random.Random(5404), forced))
-        for implementation in (seed.write_seed, old_seed_transform.reference_execute_value)
-    ]
-    assert outputs[0] == outputs[1]
-    assert outputs[0][1] == 3
-
-
-def test_seed_transform_runtime_does_not_execute_transform7() -> None:
-    with (
-        mock.patch.object(transform7_compact, "execute", side_effect=AssertionError("Transform7 executed")),
-        mock.patch.object(monolith2, "execute", side_effect=AssertionError("Monolith2 executed")),
-    ):
-        _run(seed.write_seed, _GENERATOR, 0, _entropy(random.Random(5405)))
+def test_seed_vectors_include_a_retried_infinite_ephemeral() -> None:
+    assert sorted(len(vector["entropy"]) for vector in _VECTORS["write_seed"]) == [2, 2, 2, 2, 3]
 
 
 def test_negative_scalars_are_rejected() -> None:
@@ -212,10 +156,14 @@ class _Exhausted(Exception):
     pass
 
 
-@pytest.mark.parametrize("case", boundary.cases(), ids=lambda case: case.name)
-def test_runtime_is_the_modular_candidate_on_constructed_carry_cases(case: boundary.Case) -> None:
-    """Where Transform7's lost carries change the original seed, the runtime follows the true ECDH."""
-    entropy = iter((case.prng1.to_bytes(20, "little"), case.selector.to_bytes(20, "little")))
+@pytest.mark.parametrize("case", _VECTORS["carry_cases"], ids=lambda case: case["name"])
+def test_runtime_is_the_modular_candidate_on_constructed_carry_cases(case: dict[str, object]) -> None:
+    """Where Transform7's lost carries change the original seed, the runtime follows the true ECDH.
+
+    The setup-carry difference is erased before the seed; the on-curve and scalar carries reach it,
+    so for those two the original HarpoS7 seed differs from the recorded one.
+    """
+    entropy = iter(bytes.fromhex(value) for value in case["entropy"])  # type: ignore[attr-defined]
 
     def urandom(length: int) -> bytes:
         try:
@@ -226,11 +174,9 @@ def test_runtime_is_the_modular_candidate_on_constructed_carry_cases(case: bound
     destination = bytearray(seed.SEED_LENGTH)
     with mock.patch("os.urandom", urandom):
         try:
-            old_seed_transform.execute(destination, case.public_key, case.transform1)
-            runtime: bytes | None = bytes(destination)
+            seed.write_seed(destination, bytes.fromhex(case["public_key"]), int(case["pre_seed"], 16))  # type: ignore[arg-type]
+            runtime: str | None = destination.hex()
         except _Exhausted:
             runtime = None
-    candidate, original = boundary.first_nonce(case, "modular"), boundary.first_nonce(case, "original")
-    assert runtime == candidate.seed
-    # The setup-carry difference is erased before the seed; the other two carries reach it.
-    assert (runtime == original.seed) == (case.name not in {"synthetic-on-curve-carry", "vendored-key-scalar-carry"})
+    assert runtime == case["seed"]
+    assert case["original_seed_differs"] == (case["name"] in {"synthetic-on-curve-carry", "vendored-key-scalar-carry"})
