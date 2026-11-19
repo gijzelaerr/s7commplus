@@ -479,7 +479,7 @@ class S7CommPlusAsyncConnection(SessionCore):
     async def _get_effective_protection_level(self) -> Optional[int]:
         """Read the session's effective protection level (see `AccessLevel`), None if request failed."""
         try:
-            reply = await self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, self._protection_level_payload(), integrity_tail=4)
+            reply = await self.send_request(FunctionCode.GET_VAR_SUBSTREAMED, self._protection_level_payload(), integrity_tail=4)
             return _parse_protection_level_response(reply)
         except S7ConnectionError as exc:
             logger.warning(f"PLC did not report a protection level: {exc}")
@@ -487,21 +487,21 @@ class S7CommPlusAsyncConnection(SessionCore):
 
     async def _get_legitimation_challenge(self) -> bytes:
         """Request legitimation challenge from PLC."""
-        reply = await self._send_request(
+        reply = await self.send_request(
             FunctionCode.GET_VAR_SUBSTREAMED, self._legitimation_challenge_payload(), integrity_tail=4
         )
         return _parse_get_var_substreamed_response(reply)
 
     async def _send_legitimation_new(self, encrypted_response: bytes) -> None:
         """Send new-style legitimation response (AES-256-CBC encrypted)."""
-        reply = await self._send_request(
+        reply = await self.send_request(
             FunctionCode.SET_VARIABLE, self._new_legitimation_payload(encrypted_response), integrity_tail=4
         )
         _check_set_variable_response(reply, self._last_response_function)
 
     async def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR)."""
-        reply = await self._send_request(FunctionCode.SET_VARIABLE, self._legacy_legitimation_payload(response), integrity_tail=4)
+        reply = await self.send_request(FunctionCode.SET_VARIABLE, self._legacy_legitimation_payload(response), integrity_tail=4)
         _check_set_variable_response(reply, self._last_response_function)
 
     async def _close(self) -> None:
@@ -662,7 +662,7 @@ class S7CommPlusAsyncConnection(SessionCore):
             if self._with_integrity_id:
                 self._integrity_id_write = (self._integrity_id_write + 1) & 0xFFFFFFFF
 
-    async def _send_request(
+    async def send_request(
         self,
         function_code: int,
         payload: bytes,
@@ -693,7 +693,7 @@ class S7CommPlusAsyncConnection(SessionCore):
         integrity_tail: int = 4,
         reassemble: bool = False,
     ) -> bytes:
-        """:meth:`_send_request` for a caller that already holds the request lock."""
+        """:meth:`send_request` for a caller that already holds the request lock."""
         if self._session_key_refresh_error is not None:
             raise self._session_key_refresh_error
         if not (self._connected or self._transport_connected) or self._writer is None or self._reader is None:

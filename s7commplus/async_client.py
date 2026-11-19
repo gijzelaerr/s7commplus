@@ -571,10 +571,10 @@ class S7CommPlusAsyncClient(_ClientMethods):
             S7ConnectionError: If TLS is not active, the firmware does not
                 support legitimation, or the password was refused.
         """
-        self._require_connected()
-        level_before = self._connection.protection_level
-        await self._connection.authenticate(password, username)
-        level_after = self._connection.protection_level
+        connection = self._require_connected()
+        level_before = connection.protection_level
+        await connection.authenticate(password, username)
+        level_after = connection.protection_level
         # The level only drops when the PLC confirmed a legitimation; a CPU that
         # already grants full access returns early and keeps the old parameters.
         legitimated = level_before is not None and level_after is not None and level_after < level_before
@@ -631,10 +631,14 @@ class S7CommPlusAsyncClient(_ClientMethods):
             self._rebuild_task = None
         self._generation += 1
 
-    def _require_connected(self) -> None:
-        """Raise ``S7NotConnectedError`` unless the session is up, before any work is done."""
+    def _require_connected(self) -> S7CommPlusAsyncConnection:
+        """The connection, or ``S7NotConnectedError`` when its session is not up.
+
+        Operations call this before doing any work, as the sync client does.
+        """
         if not self._connection._connected:
             raise S7NotConnectedError("Not connected")
+        return self._connection
 
     def _blocked_by_rebuild(self) -> bool:
         """Whether another task is rebuilding the session right now."""
@@ -682,9 +686,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
     @_retry_on_dropped_connection
     async def db_read(self, db_number: int, start: int, size: int) -> bytes:
         """Read raw bytes from a data block."""
-        self._require_connected()
-        payload = _build_read_payload([(db_number, start, size)], self._connection.object_qualifier_version)
-        response = await self._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+        connection = self._require_connected()
+        payload = _build_read_payload([(db_number, start, size)], connection.object_qualifier_version)
+        response = await connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
 
         results = _parse_read_response(response)
         if not results:
@@ -717,16 +721,16 @@ class S7CommPlusAsyncClient(_ClientMethods):
                 nothing is sent.
         """
 
-        self._require_connected()
+        connection = self._require_connected()
 
         def build_write(chunk: list[DBWriteItem]) -> bytes:
-            return _build_write_payload(chunk, self._connection.object_qualifier_version)
+            return _build_write_payload(chunk, connection.object_qualifier_version)
 
         item_errors: dict[int, int] = {}
         answered = 0
         for chunk, payload in self._plan_requests(items, build_write):
             try:
-                response = await self._connection._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+                response = await connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
                 errors = _write_item_errors(response, len(chunk))
             except Exception as error:
                 if answered == 0:
@@ -751,23 +755,23 @@ class S7CommPlusAsyncClient(_ClientMethods):
         whole, is ``b""``; see :meth:`S7CommPlusClient.db_read_multi`.
         """
 
-        self._require_connected()
+        connection = self._require_connected()
 
         def build_read(chunk: list[tuple[int, int, int]]) -> bytes:
-            return _build_read_payload(chunk, self._connection.object_qualifier_version)
+            return _build_read_payload(chunk, connection.object_qualifier_version)
 
         results: list[bytes] = []
         for chunk, payload in self._plan_requests(items, build_read):
-            response = await self._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            response = await connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
             results.extend(_db_read_values(response, len(chunk)))
         return results
 
     @_retry_on_dropped_connection
     async def read_area(self, area_rid: int, start: int, size: int) -> bytes:
         """Read raw bytes from a controller memory area (M, I, Q, counters, timers)."""
-        self._require_connected()
-        payload = _build_area_read_payload(area_rid, start, size, self._connection.object_qualifier_version)
-        response = await self._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+        connection = self._require_connected()
+        payload = _build_area_read_payload(area_rid, start, size, connection.object_qualifier_version)
+        response = await connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
             raise S7RequestError("Area read failed")
@@ -775,9 +779,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
     async def write_area(self, area_rid: int, start: int, data: bytes, *, datatype: DataType = DataType.BLOB) -> None:
         """Write a controller memory area, specifying the target datatype for scalar writes."""
-        self._require_connected()
-        payload = _build_area_write_payload(area_rid, start, data, self._connection.object_qualifier_version, datatype=datatype)
-        response = await self._connection._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+        connection = self._require_connected()
+        payload = _build_area_write_payload(area_rid, start, data, connection.object_qualifier_version, datatype=datatype)
+        response = await connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
 
     async def explore(self, explore_id: int = 0, attributes: Sequence[int] | None = None) -> bytes:
@@ -794,14 +798,14 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Raises:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue, e.g. for an object that does not exist.
         """
-        self._require_connected()
-        if self._connection._session_key is not None:
+        connection = self._require_connected()
+        if connection._session_key is not None:
             explore_id = explore_id or 0x38
             payload = _build_explore_payload_v3(explore_id)
         else:
             explore_id = explore_id or Ids.NATIVE_THE_PLC_PROGRAM_RID
             payload = _build_explore_request(explore_id, list(attributes or []))
-        response = await self._connection._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+        response = await connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, f"EXPLORE of 0x{explore_id:08X}")
         return response
 
@@ -859,9 +863,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Returns:
             One of ``"RUN"``, ``"STOP"``, or ``"UNKNOWN"``.
         """
-        self._require_connected()
+        connection = self._require_connected()
         payload = _build_explore_request(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, [])
-        response = await self._connection._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+        response = await connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, "CPU state read")
         return _parse_cpu_state(response)
 
@@ -890,9 +894,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
             An :class:`~s7commplus.client.OperatingStateChange` with the sent and
             received bytes.
         """
-        self._require_connected()
+        connection = self._require_connected()
         payload = _build_set_operating_state_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, int(state))
-        response = await self._connection._send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
+        response = await connection.send_request(FunctionCode.SET_VARIABLE, payload, integrity_tail=4)
         return_value, _ = decode_uint64_vlq(response, 0)
         return OperatingStateChange(state=int(state), request=payload, response=response, return_value=return_value)
 
@@ -962,15 +966,15 @@ class S7CommPlusAsyncClient(_ClientMethods):
             ValueError: The request would exceed :attr:`max_request_bytes`; use
                 :meth:`create_subscriptions` for that many items.
         """
-        self._require_connected()
-        if self._connection._subscription_container_id == 0:
+        connection = self._require_connected()
+        if connection.subscription_container_id == 0:
             raise S7RequestError("PLC did not provide a subscription container object")
         if not 0 <= credit_step <= 255:
             raise ValueError("credit_step must be between 0 and 255")
         normalized = _normalize_subscription_items(items)
         change_counter = self._subscription_change_counter
         payload, integrity_tail = build_subscription_request(
-            self._connection._subscription_container_id,
+            connection.subscription_container_id,
             normalized,
             cycle_ms=cycle_ms,
             credit_limit=credit_limit,
@@ -978,10 +982,13 @@ class S7CommPlusAsyncClient(_ClientMethods):
             relation_id=self._subscription_relation_id,
         )
         _check_subscription_size(payload, self.max_request_bytes, self._frame_overhead())
-        response = await self._connection._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=integrity_tail)
+        response = await connection.send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=integrity_tail)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
             raise S7RequestError(f"Subscription creation failed: PLC returned 0x{return_value:X}")
+
+        self._subscription_change_counter = self._subscription_change_counter % 0xFF + 1
+        self._subscription_relation_id = (self._subscription_relation_id + 1) & 0xFFFFFFFF
         subscription_id = object_ids[0]
         self._subscriptions.register(
             subscription_id,
@@ -992,8 +999,6 @@ class S7CommPlusAsyncClient(_ClientMethods):
             queue_size=queue_size,
             cycle_ms=cycle_ms,
         )
-        self._subscription_change_counter = self._subscription_change_counter % 0xFF + 1
-        self._subscription_relation_id = (self._subscription_relation_id + 1) & 0xFFFFFFFF
         logger.info(f"Subscription created, id={subscription_id:#x}")
         return subscription_id
 
@@ -1017,10 +1022,10 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Returns:
             The subscription object IDs, one per group, in item order.
         """
-        self._require_connected()
+        connection = self._require_connected()
         groups = _plan_subscription_groups(
             items,
-            self._connection._subscription_container_id,
+            connection.subscription_container_id,
             cycle_ms,
             credit_limit,
             self.max_request_bytes,
@@ -1156,18 +1161,18 @@ class S7CommPlusAsyncClient(_ClientMethods):
             subscription_id: ID returned by :meth:`create_subscription`, used
                 for logging.
         """
-        self._require_connected()
-        if self._connection._subscription_container_id == 0:
+        connection = self._require_connected()
+        if connection.subscription_container_id == 0:
             raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_delete_subscription_request(
-            self._connection._subscription_container_id, self._connection.write_delete_qualifier_version
+            connection.subscription_container_id, connection.write_delete_qualifier_version
         )
-        await self._connection._send_request(FunctionCode.DELETE_OBJECT, payload)
+        await connection.send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
             self._subscriptions.unregister(active_id)
         self._alarm_subscription_ids.clear()
         self._alarm_notification_frames.clear()
-        self._connection._notification_frames.clear()
+        connection._notification_frames.clear()
         logger.info(f"Subscription {subscription_id:#x} deleted")
 
     async def create_alarm_subscription(
@@ -1182,17 +1187,17 @@ class S7CommPlusAsyncClient(_ClientMethods):
         without TLS (key family 01), ``language_ids`` and ``domains`` must be
         ``None`` (#173).
         """
-        self._require_connected()
-        if self._connection._subscription_container_id == 0:
+        connection = self._require_connected()
+        if connection.subscription_container_id == 0:
             raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_alarm_subscription_request(
-            self._connection._subscription_container_id,
+            connection.subscription_container_id,
             language_ids,
             domains,
             credit_limit,
-            texts_and_domain_filter=self._connection.alarm_texts_and_domain_filter,
+            texts_and_domain_filter=connection.alarm_texts_and_domain_filter,
         )
-        response = await self._connection._send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=len(payload) - 11)
+        response = await connection.send_request(FunctionCode.CREATE_OBJECT, payload, integrity_tail=len(payload) - 11)
         object_ids, _, return_value = parse_create_object_session_id(response)
         if return_value != 0 or not object_ids:
             raise S7RequestError(f"Alarm subscription failed: PLC returned {return_value:#x}")
@@ -1206,18 +1211,18 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Like :meth:`delete_subscription`, this deletes the session's whole
         subscription container, data subscriptions included.
         """
-        self._require_connected()
-        if self._connection._subscription_container_id == 0:
+        connection = self._require_connected()
+        if connection.subscription_container_id == 0:
             raise S7RequestError("PLC did not provide a subscription container object")
         payload = build_delete_alarm_subscription_request(
-            self._connection._subscription_container_id, self._connection.write_delete_qualifier_version
+            connection.subscription_container_id, connection.write_delete_qualifier_version
         )
-        await self._connection._send_request(FunctionCode.DELETE_OBJECT, payload)
+        await connection.send_request(FunctionCode.DELETE_OBJECT, payload)
         for active_id in self._subscriptions.subscription_ids:
             self._subscriptions.unregister(active_id)
         self._alarm_subscription_ids.clear()
         self._alarm_notification_frames.clear()
-        self._connection._notification_frames.clear()
+        connection._notification_frames.clear()
         logger.info(f"Alarm subscription {subscription_id:#x} deleted")
 
     async def receive_alarm_notification(
@@ -1265,8 +1270,8 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Raises:
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
         """
-        self._require_connected()
-        response = await self._connection._send_request(
+        connection = self._require_connected()
+        response = await connection.send_request(
             FunctionCode.EXPLORE, build_alarm_explore_request(), integrity_tail=5, reassemble=True
         )
         return parse_alarm_explore_response(response, language_ids)
@@ -1277,9 +1282,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
         .. warning:: This method is **experimental** and may change.
         """
-        self._require_connected()
-        payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, self._connection.object_qualifier_version)
-        response = await self._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+        connection = self._require_connected()
+        payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, connection.object_qualifier_version)
+        response = await connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
             raise S7RequestError("Symbolic read failed")
@@ -1305,16 +1310,16 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Raises:
             S7RequestError: If the PLC does not answer every requested item.
         """
-        self._require_connected()
+        connection = self._require_connected()
         if not items:
             return []
 
         def build_read(chunk: list[SymbolicReadItem]) -> bytes:
-            return _build_multi_symbolic_read_payload(chunk, self._connection.object_qualifier_version)
+            return _build_multi_symbolic_read_payload(chunk, connection.object_qualifier_version)
 
         results: list[Optional[bytes]] = []
         for chunk, payload in self._plan_requests(items, build_read):
-            response = await self._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
+            response = await connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
             parsed = _parse_read_response(response, expected_count=len(chunk))
             if len(parsed) != len(chunk):
                 raise S7RequestError(f"Symbolic multi-read failed: PLC returned {len(parsed)} of {len(chunk)} items")
@@ -1331,11 +1336,11 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Set ``datatype`` to the target PLC datatype reported by browse().
         The legacy BLOB default is not a generic replacement for scalar types.
         """
-        self._require_connected()
+        connection = self._require_connected()
         payload = _build_symbolic_write_payload(
-            access_area, lids, data, symbol_crc, self._connection.write_delete_qualifier_version, datatype=datatype
+            access_area, lids, data, symbol_crc, protocol_version=connection.write_delete_qualifier_version, datatype=datatype
         )
-        response = await self._connection._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+        response = await connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
         _parse_write_response(response)
 
     async def refresh_tag_catalog(self) -> SymbolCatalog:
@@ -1391,9 +1396,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
     async def _read_type_info_time(self, ti_rid: int) -> Optional[bytes]:
         """EXPLORE one type-info object for its modification time (``None`` if not reported)."""
-        self._require_connected()
+        connection = self._require_connected()
         payload = _build_explore_request(ti_rid, [Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME])
-        response = await self._connection._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+        response = await connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         return typeinfo.find_object_attribute(response, ti_rid, Ids.VARIABLE_TYPE_STRUCT_MODIFICATION_TIME)
 
     async def resolve_tag(self, name: str) -> SymbolicTag:
@@ -1513,16 +1518,18 @@ class S7CommPlusAsyncClient(_ClientMethods):
         if not values:
             return []
         tags, _ = await self._resolve_tags(list(values))
+        # Resolving may browse and reconnect, which gives the sync client a new connection.
+        connection = self._require_connected()
         items = _plan_tag_writes(tags, values.values())
 
         def build_write(chunk: list[SymbolicWriteItem]) -> bytes:
-            return _build_multi_symbolic_write_payload(chunk, self._connection.object_qualifier_version)
+            return _build_multi_symbolic_write_payload(chunk, connection.object_qualifier_version)
 
         results: list[TagResult] = [TagResult(tag=tag) for tag in tags]
         answered = 0
         for chunk, payload in self._plan_requests(items, build_write):
             try:
-                response = await self._connection._send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
+                response = await connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
             except Exception as error:
                 if answered == 0:
                     raise
@@ -1613,12 +1620,12 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
         See `S7CommPlusClient.list_datablocks`.
         """
-        self._require_connected()
-        if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
+        connection = self._require_connected()
+        if connection._session_key is not None and not connection.legacy_s7_1500:
             # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
             # matching TIA Portal's browse pattern
             payload = _build_explore_payload_v3(0x8A11FFFF)
-            response = await self._connection._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+            response = await connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
             parse_or_raise_for_return_value(response, "Data block list")
             return _parse_explore_datablocks(response)
         return [obj for obj in await self.program_objects() if obj.is_datablock]
@@ -1634,13 +1641,11 @@ class S7CommPlusAsyncClient(_ClientMethods):
             NotImplementedError: On a V1 SessionKey session, which does not explore the program.
             S7ReturnValueError: If the PLC answers with a non-zero ReturnValue.
         """
-        self._require_connected()
-        if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
+        connection = self._require_connected()
+        if connection._session_key is not None and not connection.legacy_s7_1500:
             raise NotImplementedError("program_objects() is not supported on V1 SessionKey sessions")
 
-        response = await self._connection._send_request(
-            FunctionCode.EXPLORE, _PROGRAM_TREE_EXPLORE, integrity_tail=5, reassemble=True
-        )
+        response = await connection.send_request(FunctionCode.EXPLORE, _PROGRAM_TREE_EXPLORE, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, "Program object list")
         return _parse_program_objects(response)
 
@@ -1731,9 +1736,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
     async def _explore_type_info_container(self) -> list["typeinfo.PObject"]:
         """EXPLORE the OMS type-info container and return its per-type objects."""
-        self._require_connected()
+        connection = self._require_connected()
         payload = _build_explore_request(Ids.OBJECT_OMS_TYPE_INFO_CONTAINER, [])
-        response = await self._connection._send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
+        response = await connection.send_request(FunctionCode.EXPLORE, payload, integrity_tail=5, reassemble=True)
         parse_or_raise_for_return_value(response, "Type-info browse")
         return typeinfo.extract_type_info_objects(response)
 

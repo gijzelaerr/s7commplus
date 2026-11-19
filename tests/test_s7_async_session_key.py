@@ -267,7 +267,7 @@ async def test_async_session_key_request_frame_matches_the_sync_layout() -> None
     client._connection._recv_cotp_dt = AsyncMock(side_effect=OSError("no reply"))  # type: ignore[method-assign]
 
     with pytest.raises(OSError, match="no reply"):
-        await client._connection._send_request(FunctionCode.GET_VARIABLE, bytes(4))
+        await client._connection.send_request(FunctionCode.GET_VARIABLE, bytes(4))
 
     request = struct.pack(">BHHHHIB", Opcode.REQUEST, 0, FunctionCode.GET_VARIABLE, 0, 0, 0x70000FDC, 0x34)
     request += bytes(4)
@@ -287,7 +287,7 @@ async def test_async_forged_response_invalidates_the_session() -> None:
     client._connection._recv_cotp_dt = AsyncMock(return_value=frame)  # type: ignore[method-assign]
 
     with pytest.raises(S7IntegrityError):
-        await client._connection._send_request(FunctionCode.GET_VARIABLE, bytes(4))
+        await client._connection.send_request(FunctionCode.GET_VARIABLE, bytes(4))
     assert not client._connection._session_ready
     assert client._connection._session_key is None
     assert client._connection._writer is None
@@ -398,7 +398,7 @@ async def test_async_refresh_failure_is_terminal_and_surfaces_on_next_request() 
     assert not client.connected
     client._connection._delete_session.assert_not_awaited()
     with pytest.raises(S7ConnectionError, match="renewal failed: PLC rejected key"):
-        await client._connection._send_request(FunctionCode.GET_VARIABLE, bytes(4))
+        await client._connection.send_request(FunctionCode.GET_VARIABLE, bytes(4))
 
 
 @pytest.mark.asyncio

@@ -601,7 +601,7 @@ class TestAsyncClientServerIntegration:
     async def test_explore(self, server: S7CommPlusServer, attributes: list[int] | None, expected_hex: str) -> None:
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            with patch.object(client._connection, "_send_request", wraps=client._connection._send_request) as send:
+            with patch.object(client._connection, "send_request", wraps=client._connection.send_request) as send:
                 response = await client.explore(attributes=attributes)
 
             expected_payload = bytes.fromhex(expected_hex)
@@ -623,7 +623,7 @@ class TestAsyncClientServerIntegration:
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
             # The first 3 bytes of the -12 reply a real S7-1500 sends for a missing object
-            with patch.object(client._connection, "_send_request", return_value=b"\xc0\x88\x95"):
+            with patch.object(client._connection, "send_request", return_value=b"\xc0\x88\x95"):
                 with pytest.raises(ValueError, match="truncated ReturnValue"):
                     await client.explore(0x12345678)
 
@@ -641,7 +641,7 @@ class TestAsyncClientServerIntegration:
             server.register_program_object(obj.rid, obj.class_id, obj.name or None)
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            with patch.object(client._connection, "_send_request", wraps=client._connection._send_request) as send:
+            with patch.object(client._connection, "send_request", wraps=client._connection.send_request) as send:
                 objects = await client.program_objects()
                 datablocks = await client.list_datablocks()
             # Both send thePLCProgram with ObjectVariableTypeName (233) and Block.BlockNumber (2521) as VLQ
@@ -675,7 +675,7 @@ class TestAsyncClientServerIntegration:
     ) -> None:
         async with S7CommPlusAsyncClient() as client:
             await client.connect("127.0.0.1", port=server.port)
-            with patch.object(client._connection, "_send_request", side_effect=replies):
+            with patch.object(client._connection, "send_request", side_effect=replies):
                 with pytest.raises(S7ReturnValueError, match=f"^{operation} failed"):
                     await getattr(client, method)()
 

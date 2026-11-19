@@ -613,12 +613,12 @@ def test_write_of_an_unknown_name_is_resolved_before_it_is_sent() -> None:
 async def test_async_failed_write_is_never_resent() -> None:
     client = _async_reading_client([], changed=True)
     client.auto_refresh_tags = True
-    client._connection._send_request = AsyncMock(return_value=WRITE_REJECTED)  # type: ignore[method-assign]
+    client._connection.send_request = AsyncMock(return_value=WRITE_REJECTED)  # type: ignore[method-assign]
 
     results = await client.write_tags({"DB1.a": b"\x00\x01"})
 
     assert results[0].error is not None
-    client._connection._send_request.assert_awaited_once()
+    client._connection.send_request.assert_awaited_once()
     client.refresh_caches_if_program_changed.assert_not_awaited()
 
 

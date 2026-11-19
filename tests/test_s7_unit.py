@@ -1877,7 +1877,7 @@ class TestWriteDeleteQualifierVersion:
         client._connection._protocol_version = ProtocolVersion.V1
         client._connection._v1_session_key_family = KeyFamily[family]
         client._connection._subscription_container_id = 0x70000F90
-        client._connection._send_request = AsyncMock(return_value=b"\x00\x00")  # type: ignore[method-assign]
+        client._connection.send_request = AsyncMock(return_value=b"\x00\x00")  # type: ignore[method-assign]
         assert client.write_delete_qualifier_version == version
 
         area, lids, data, crc = self._WRITE_ARGS
@@ -1888,9 +1888,9 @@ class TestWriteDeleteQualifierVersion:
             await client.delete_alarm_subscription(0x70000F92)
 
         asyncio.run(run())
-        (_, write_payload), _ = client._connection._send_request.call_args_list[0]
-        (_, delete_payload), _ = client._connection._send_request.call_args_list[1]
-        (_, alarm_delete_payload), _ = client._connection._send_request.call_args_list[2]
+        (_, write_payload), _ = client._connection.send_request.call_args_list[0]
+        (_, delete_payload), _ = client._connection.send_request.call_args_list[1]
+        (_, alarm_delete_payload), _ = client._connection.send_request.call_args_list[2]
         assert write_payload == self._expected_write(version) != self._expected_write(3 - version)
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
         assert alarm_delete_payload == self._expected_alarm_delete(version) != self._expected_alarm_delete(3 - version)

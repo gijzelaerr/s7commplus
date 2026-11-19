@@ -365,7 +365,7 @@ async def test_async_create_iterate_queue_and_delete_lifecycle() -> None:
     client._connection._subscription_container_id = 0x3C2
     client._connection._protocol_version = ProtocolVersion.V2
     create_response = encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400025)
-    client._connection._send_request = AsyncMock(side_effect=[create_response, b""])
+    client._connection.send_request = AsyncMock(side_effect=[create_response, b""])
     client._connection._recv_cotp_dt = AsyncMock(return_value=_notification_frame(credit_tick=9))
     client._connection._send_subscription_credit = AsyncMock()
     tag = SymbolicTag("DB1.Count", 0x8A0E0001, (2,), Softdatatype.INT, DataType.INT)

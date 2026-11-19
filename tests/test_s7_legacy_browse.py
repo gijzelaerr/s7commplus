@@ -231,10 +231,10 @@ async def test_async_raw_db_reads_use_profile_qualifier(enabled: bool) -> None:
     client._connection._legacy_s7_1500 = enabled
     client._connection._session_key = _KEY
     client._connection._protocol_version = ProtocolVersion.V1
-    client._connection._send_request = AsyncMock(return_value=_RID_VALUE)  # type: ignore[method-assign]
+    client._connection.send_request = AsyncMock(return_value=_RID_VALUE)  # type: ignore[method-assign]
     await client.db_read(*_DB_READ_ITEM)
     version = ProtocolVersion.V2 if enabled else ProtocolVersion.V1
-    assert client._connection._send_request.call_args.args[1] == _build_read_payload([_DB_READ_ITEM], version)
+    assert client._connection.send_request.call_args.args[1] == _build_read_payload([_DB_READ_ITEM], version)
 
 
 @pytest.mark.parametrize("family, skipped", [(KeyFamily.S7_1200, 1), (KeyFamily.S7_1500, 0)])

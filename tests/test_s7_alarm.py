@@ -192,13 +192,13 @@ async def test_async_alarm_subscription_layout_per_key_family(family: str, sends
     client._connection._protocol_version = ProtocolVersion.V1
     client._connection._v1_session_key_family = KeyFamily[family]
     client._connection._subscription_container_id = 0x70000CB8
-    client._connection._send_request = AsyncMock(  # type: ignore[method-assign]
+    client._connection.send_request = AsyncMock(  # type: ignore[method-assign]
         return_value=encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x55667788)
     )
     assert client.alarm_texts_and_domain_filter is sends_texts
 
     assert await client.create_alarm_subscription() == 0x55667788
-    (_, payload), kwargs = client._connection._send_request.call_args
+    (_, payload), kwargs = client._connection.send_request.call_args
     assert payload == _reference_payload(sends_texts)
     assert kwargs["integrity_tail"] == len(payload) - 11
 
@@ -220,10 +220,10 @@ async def test_async_s7_1200_alarm_subscription_refuses_languages_before_sending
     client._connection._connected = True
     client._connection._v1_session_key_family = KeyFamily.S7_1200
     client._connection._subscription_container_id = 0x70000CB8
-    client._connection._send_request = AsyncMock()  # type: ignore[method-assign]
+    client._connection.send_request = AsyncMock()  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="#173"):
         await client.create_alarm_subscription(language_ids=[1033])
-    client._connection._send_request.assert_not_awaited()
+    client._connection.send_request.assert_not_awaited()
 
 
 def test_alarm_delete_matches_real_plc_reference_trace() -> None:
@@ -333,7 +333,7 @@ async def test_async_alarm_client_apis() -> None:
     client._connection._session_id = 0x1234
     client._connection._subscription_container_id = 0x1235
     client._connection._protocol_version = ProtocolVersion.V2
-    client._connection._send_request = AsyncMock(
+    client._connection.send_request = AsyncMock(
         side_effect=[
             encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x55667788),
             _explore_response(),
@@ -369,7 +369,7 @@ async def test_async_read_alarms_raises_on_plc_error() -> None:
     client = S7CommPlusAsyncClient()
     client._connection._connected = True
     client._connection._protocol_version = ProtocolVersion.V2
-    client._connection._send_request = AsyncMock(return_value=bytes.fromhex("c08895b080e6a5fff4000000000e00000000"))
+    client._connection.send_request = AsyncMock(return_value=bytes.fromhex("c08895b080e6a5fff4000000000e00000000"))
 
     with pytest.raises(S7ReturnValueError, match="^Alarm browse failed") as excinfo:
         await client.read_alarms([1031])

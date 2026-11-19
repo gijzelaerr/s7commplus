@@ -639,7 +639,7 @@ async def test_values_of_a_large_array_are_split_like_any_batch(asynchronous: bo
     if asynchronous:
         async_client = S7CommPlusAsyncClient()
         async_client._connection._connected = True
-        async_client._connection._send_request = send = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
+        async_client._connection.send_request = send = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
         async_client._symbol_catalog = SymbolCatalog.from_browse(browse)
         async_client.max_items_per_request = 2
         assert await async_client.read_value("T.a") == [1, 2, 3, 4, 5]
@@ -797,7 +797,7 @@ def _forms_client(asynchronous: bool, browse: list[dict[str, Any]] = FORMS_BROWS
         async_client._connection._connected = True
         async_client._connection._protocol_version = ProtocolVersion.V2
         async_client._symbol_catalog = SymbolCatalog.from_browse(browse)
-        async_client._connection._send_request = send = AsyncMock(return_value=WRITE_ANSWER)  # type: ignore[method-assign]
+        async_client._connection.send_request = send = AsyncMock(return_value=WRITE_ANSWER)  # type: ignore[method-assign]
         return async_client, send
     client = S7CommPlusClient()
     client._connection = MagicMock(protocol_version=ProtocolVersion.V2, object_qualifier_version=ProtocolVersion.V2)

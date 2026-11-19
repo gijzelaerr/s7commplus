@@ -651,14 +651,14 @@ async def test_async_every_part_of_an_explore_reply_gets_the_explore_timeout() -
 
     client._connection._recv_cotp_dt = slow_part  # type: ignore[method-assign]
     await asyncio.wait_for(
-        client._connection._send_request(FunctionCode.EXPLORE, bytes(8), integrity_tail=5, reassemble=True), timeout=5
+        client._connection.send_request(FunctionCode.EXPLORE, bytes(8), integrity_tail=5, reassemble=True), timeout=5
     )
     assert len(parts) == 2
     assert client.connected
 
     with pytest.raises(S7TimeoutError):
         await asyncio.wait_for(
-            client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(8), reassemble=True), timeout=5
+            client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(8), reassemble=True), timeout=5
         )
     assert not client.connected
 

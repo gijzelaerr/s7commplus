@@ -247,7 +247,7 @@ def test_sync_drains_a_split_stale_response() -> None:
 @pytest.mark.asyncio
 async def test_async_drains_a_split_stale_response() -> None:
     client = _async_client(*STALE_SPLIT, CURRENT)
-    assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b"\xaa\xbb"
+    assert await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b"\xaa\xbb"
     assert client._connection._recv_cotp_dt.await_count == 3  # type: ignore[attr-defined]
 
 
@@ -266,7 +266,7 @@ def test_sync_reassembles_when_the_next_fragment_follows_in_the_same_read() -> N
 @pytest.mark.asyncio
 async def test_async_reassembles_when_the_next_fragment_follows_in_the_same_read() -> None:
     client = _async_client(*RUN_ON_READS)
-    assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == bytes(range(40))
+    assert await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == bytes(range(40))
 
 
 # A fragment followed by a "trailer" that names another protocol version.
@@ -321,4 +321,4 @@ def test_sync_rejects_a_whole_v3_reply_without_a_session_key() -> None:
 async def test_async_rejects_a_whole_v3_reply_without_a_session_key() -> None:
     client = _async_client(WHOLE_V3_WITHOUT_A_KEY)
     with pytest.raises(S7ConnectionError, match="without a session key"):
-        await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+        await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"")

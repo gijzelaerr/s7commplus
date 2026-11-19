@@ -79,8 +79,8 @@ class _Client:
             async_client = S7CommPlusAsyncClient()
             async_client._connection._connected = True
             async_client._connection._with_integrity_id = True
-            async_client._connection._send_request = AsyncMock(side_effect=side_effect)  # type: ignore[method-assign]
-            self.client, self.send = async_client, async_client._connection._send_request
+            async_client._connection.send_request = AsyncMock(side_effect=side_effect)  # type: ignore[method-assign]
+            self.client, self.send = async_client, async_client._connection.send_request
         self.client.max_items_per_request = max_items
         self.client.max_request_bytes = max_request_bytes
 
@@ -594,8 +594,8 @@ class _Subscriber:
             async_client._connection._subscription_container_id = 0x3C2
             async_client._connection._protocol_version = ProtocolVersion.V2
             async_client._connection._with_integrity_id = True
-            async_client._connection._send_request = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
-            self.client, self.send = async_client, async_client._connection._send_request
+            async_client._connection.send_request = AsyncMock(side_effect=answers)  # type: ignore[method-assign]
+            self.client, self.send = async_client, async_client._connection.send_request
 
     async def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
         result = getattr(self.client, method)(*args, **kwargs)

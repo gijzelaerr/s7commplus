@@ -87,7 +87,7 @@ def _async_client(*answers: bytes | Exception) -> Any:
     client = S7CommPlusAsyncClient()
     client._connection._connected = True
     client._connect_params = {"host": "127.0.0.1", "port": 102}
-    client._connection._send_request = AsyncMock(side_effect=list(answers))  # type: ignore[method-assign]
+    client._connection.send_request = AsyncMock(side_effect=list(answers))  # type: ignore[method-assign]
     client._symbol_catalog = _catalog()
     client.auto_reconnect = True
     client._auto_reconnect_min_interval = 0.0
@@ -254,7 +254,7 @@ async def test_async_nested_reads_reconnect_once_when_the_retry_fails() -> None:
     with pytest.raises(S7ConnectionError):
         await client.read_tag("DB1.Speed")
     assert client._rebuild_session.await_count == 1
-    assert client._connection._send_request.await_count == 2
+    assert client._connection.send_request.await_count == 2
 
 
 def test_sync_nested_read_succeeds_after_one_reconnect() -> None:
@@ -283,7 +283,7 @@ async def test_async_typed_read_reconnects_once() -> None:
     with pytest.raises(S7ConnectionError):
         await client.read_value("DB1.Speed")
     assert client._rebuild_session.await_count == 1
-    assert client._connection._send_request.await_count == 2
+    assert client._connection.send_request.await_count == 2
 
 
 def test_sync_typed_read_succeeds_after_one_reconnect() -> None:
@@ -321,7 +321,7 @@ def test_sync_read_does_not_tear_down_a_session_rebuilt_meanwhile() -> None:
 
 async def test_async_read_does_not_tear_down_a_session_rebuilt_meanwhile() -> None:
     client = _async_client()
-    client._connection._send_request.side_effect = _drop_after_a_rebuild_elsewhere(client)
+    client._connection.send_request.side_effect = _drop_after_a_rebuild_elsewhere(client)
     assert await client.db_read(1, 0, 4) == DB1
     assert client._rebuild_session.await_count == 0
 

@@ -174,14 +174,14 @@ async def test_async_resubscribe_recreates_subscriptions_and_reports_failures(mo
     import s7commplus.async_client as client_module
 
     client = _async_client()
-    client._connection._send_request = AsyncMock(side_effect=[_created(OLD_FIRST), _created(OLD_SECOND)])
+    client._connection.send_request = AsyncMock(side_effect=[_created(OLD_FIRST), _created(OLD_SECOND)])
     first = await client.create_subscription(["8A0E0007.A"], cycle_ms=250, credit_limit=20, queue_size=4)
     second = await client.create_subscription([SubscriptionItem.from_access_sequence("8A0E0007.B")], cycle_ms=500)
     delivered: list[SubscriptionNotification] = []
     client._subscriptions.add_callback(first, delivered.append)
 
     client._subscriptions.clear()  # what _close() does when the session ends
-    client._connection._send_request = AsyncMock(side_effect=[_created(NEW_FIRST), _rejected()])
+    client._connection.send_request = AsyncMock(side_effect=[_created(NEW_FIRST), _rejected()])
     recorded = _recording_requests(monkeypatch, client_module)
 
     result = await client.resubscribe()
@@ -198,7 +198,7 @@ async def test_async_resubscribe_recreates_subscriptions_and_reports_failures(mo
     )
     assert len(delivered) == 1
 
-    client._connection._send_request = AsyncMock(side_effect=[_created(NEW_SECOND)])
+    client._connection.send_request = AsyncMock(side_effect=[_created(NEW_SECOND)])
     assert (await client.resubscribe()).restored == {second: NEW_SECOND}
     assert client._subscriptions.pending_restore == ()
 
@@ -206,7 +206,7 @@ async def test_async_resubscribe_recreates_subscriptions_and_reports_failures(mo
 @pytest.mark.asyncio
 async def test_async_close_remembers_subscriptions_and_disconnect_keeps_them() -> None:
     client = _async_client()
-    client._connection._send_request = AsyncMock(side_effect=[_created(OLD_FIRST)])
+    client._connection.send_request = AsyncMock(side_effect=[_created(OLD_FIRST)])
     first = await client.create_subscription(["8A0E0007.A"])
 
     await client._connection._close()
@@ -256,7 +256,7 @@ def test_sync_resubscribe_with_a_reused_id_drops_what_arrived_before_the_reconne
 @pytest.mark.asyncio
 async def test_async_resubscribe_with_a_reused_id_drops_what_arrived_before_the_reconnect() -> None:
     client = _async_client()
-    client._connection._send_request = AsyncMock(side_effect=[_created(OLD_FIRST)])
+    client._connection.send_request = AsyncMock(side_effect=[_created(OLD_FIRST)])
     first = await client.create_subscription(["8A0E0007.A"])
     delivered: list[SubscriptionNotification] = []
     client._subscriptions.add_callback(first, delivered.append)
@@ -266,7 +266,7 @@ async def test_async_resubscribe_with_a_reused_id_drops_what_arrived_before_the_
     client._subscriptions._orphans.append(parse_subscription_notification(_notification_frame(first, next_counter)))
 
     client._subscriptions.clear()  # what _close() does when the session ends
-    client._connection._send_request = AsyncMock(side_effect=[_created(OLD_FIRST)])
+    client._connection.send_request = AsyncMock(side_effect=[_created(OLD_FIRST)])
 
     result = await client.resubscribe()
 

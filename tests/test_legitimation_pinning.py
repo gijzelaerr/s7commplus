@@ -157,7 +157,7 @@ def _async_client(script: _Script) -> S7CommPlusAsyncConnection:
     async def send(fc: int, payload: bytes, integrity_tail: int = 4, reassemble: bool = False) -> bytes:
         return script.answer(fc, payload, integrity_tail)
 
-    client._send_request = send  # type: ignore[method-assign]
+    client.send_request = send  # type: ignore[method-assign]
     client._send_request_locked = send  # type: ignore[method-assign]
     return client
 

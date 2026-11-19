@@ -130,7 +130,7 @@ class TestTypeInfoRidErrorHandling:
     async def test_async_request_disconnected_is_connection_error(self) -> None:
         client = S7CommPlusAsyncClient()
         with pytest.raises(S7ConnectionError, match="Not connected"):
-            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+            await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
 
     @pytest.mark.asyncio
     async def test_async_reconnect_without_parameters_is_connection_error(self) -> None:
@@ -777,7 +777,7 @@ class TestIntegrityIdTracking:
         client._connection._send_cotp_dt = AsyncMock()
         client._connection._recv_cotp_dt = AsyncMock(side_effect=[event_frame, response_frame])
 
-        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(4)) == b"\x00\x01"
+        assert await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, bytes(4)) == b"\x00\x01"
         assert client._connection._recv_cotp_dt.await_count == 2
 
     @pytest.mark.asyncio
@@ -811,7 +811,7 @@ class TestIntegrityIdTracking:
         client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ConnectionError, match="Response too short"):
-            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
+            await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("reassemble", [False, True])
@@ -828,7 +828,7 @@ class TestIntegrityIdTracking:
         client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ProtocolError, match="Response sequence mismatch"):
-            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
+            await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
 
     @pytest.mark.parametrize("reassemble", [False, True])
     def test_sync_function_mismatch_raises_protocol_error(self, reassemble: bool) -> None:
@@ -859,7 +859,7 @@ class TestIntegrityIdTracking:
         client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ProtocolError, match="Response function mismatch"):
-            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
+            await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"", reassemble=reassemble)
 
     @pytest.mark.parametrize("opcode", [Opcode.REQUEST, 0x7F])
     def test_sync_unexpected_opcode_raises_protocol_error(self, opcode: int) -> None:
@@ -887,7 +887,7 @@ class TestIntegrityIdTracking:
         client._connection._recv_cotp_dt = AsyncMock(return_value=response_frame)
 
         with pytest.raises(S7ProtocolError, match="Unexpected S7CommPlus opcode"):
-            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+            await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
 
     def test_sync_notification_before_response_is_queued(self) -> None:
         conn = S7CommPlusConnection("127.0.0.1")
@@ -920,7 +920,7 @@ class TestIntegrityIdTracking:
         client._connection._send_cotp_dt = AsyncMock()
         client._connection._recv_cotp_dt = AsyncMock(side_effect=[notification_frame, response_frame])
 
-        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
+        assert await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
         assert list(client._connection._notification_frames) == [notification_frame]
 
     def test_stale_sync_response_is_skipped_before_next_response(self) -> None:
@@ -956,8 +956,8 @@ class TestIntegrityIdTracking:
         next_response_frame += struct.pack(">BBH", 0x72, ProtocolVersion.V2, 0)
         client._connection._recv_cotp_dt = AsyncMock(side_effect=[response_frame, response_frame, next_response_frame])
 
-        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
-        assert await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
+        assert await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
+        assert await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"") == b""
         assert client._connection._recv_cotp_dt.await_count == 3
 
     def test_sync_requests_are_serialized(self) -> None:
@@ -1022,7 +1022,7 @@ class TestIntegrityIdTracking:
         client._connection._send_cotp_dt = AsyncMock()
         client._connection._recv_cotp_dt = AsyncMock(return_value=b"")
         with pytest.raises(S7ConnectionError, match="Connection closed"):
-            await client._connection._send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
+            await client._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, b"")
 
 
 class TestAsyncReassembledPayloadErrors:
@@ -1262,10 +1262,10 @@ class TestLegitimationWireFormat:
         response = bytes([0x00, 0x00, 0x10, 0x02, len(challenge)]) + challenge + bytes([0x00])
         client = S7CommPlusAsyncClient()
         client._connection._session_id = 0x01020304
-        client._connection._send_request = AsyncMock(return_value=response)
+        client._connection.send_request = AsyncMock(return_value=response)
 
         assert await client._connection._get_legitimation_challenge() == challenge
-        client._connection._send_request.assert_awaited_once_with(
+        client._connection.send_request.assert_awaited_once_with(
             FunctionCode.GET_VAR_SUBSTREAMED,
             _build_get_var_substreamed_payload(0x01020304, LegitimationId.SERVER_SESSION_REQUEST),
             integrity_tail=4,
@@ -1556,10 +1556,10 @@ class TestProtectionLevel:
     async def test_async_read_uses_protocol_request_shape(self) -> None:
         client = S7CommPlusAsyncClient()
         client._connection._session_id = 0x01020304
-        client._connection._send_request = AsyncMock(return_value=self.RESPONSE)
+        client._connection.send_request = AsyncMock(return_value=self.RESPONSE)
 
         assert await client._connection._get_effective_protection_level() == AccessLevel.NO_ACCESS
-        client._connection._send_request.assert_awaited_once_with(
+        client._connection.send_request.assert_awaited_once_with(
             FunctionCode.GET_VAR_SUBSTREAMED,
             _build_get_var_substreamed_payload(0x01020304, Ids.EFFECTIVE_PROTECTION_LEVEL),
             integrity_tail=4,

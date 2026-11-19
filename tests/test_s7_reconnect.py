@@ -154,7 +154,7 @@ async def test_async_authenticate_that_sends_nothing_keeps_the_stored_credential
     client._connection._connected = True
     client._connection._tls_active = True
     client._connection._protection_level = level
-    with _legitimation(client, level_after=1), patch.object(client._connection, "_send_request", AsyncMock()) as sent:
+    with _legitimation(client, level_after=1), patch.object(client._connection, "send_request", AsyncMock()) as sent:
         await client.authenticate(password, "operator")  # nothing to legitimate
     sent.assert_not_awaited()
     assert client._connect_params == {"password": "known", "username": ""}

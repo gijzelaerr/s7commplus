@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
-from s7commplus.catalog import SymbolCatalog, _write_type
+from s7commplus.catalog import SymbolCatalog, SymbolicTag, _write_type
 from s7commplus.client import S7CommPlusClient, _build_multi_symbolic_write_payload
 from s7commplus.codec import PValueArray, encode_pvalue_array, encode_pvalue_blob
 from s7commplus.protocol import DataType, FunctionCode, ProtocolVersion
@@ -32,7 +32,7 @@ async def test_scalar_write_validates_type_but_raw_access_uses_blob_on_wire(
         client = S7CommPlusAsyncClient()
         client._connection._connected = True
         send = AsyncMock(return_value=b"\x00\x00")
-        client._connection._send_request = send
+        client._connection.send_request = send
         if operation == "symbolic":
             await client.write_symbolic(0x8A0E0001, [15], data, datatype=datatype)
         elif operation == "area":
@@ -85,7 +85,7 @@ async def test_async_missing_multi_write_type_rejected_before_send() -> None:
     client = S7CommPlusAsyncClient()
     client._connection._connected = True
     send = AsyncMock()
-    client._connection._send_request = send
+    client._connection.send_request = send
     with pytest.raises(ValueError, match="require.*datatype"):
         await client.db_write_multi([(1, 0, b"\x00\x4d")])  # type: ignore[list-item]
     send.assert_not_called()
@@ -181,12 +181,34 @@ async def test_async_write_tags_sends_strings_chars_and_date_and_time_in_the_wri
     client._connection._connected = True
     client._connection._protocol_version = ProtocolVersion.V2
     client._symbol_catalog = SymbolCatalog.from_browse(STRING_BROWSE)
-    client._connection._send_request = AsyncMock(return_value=encode_uint64_vlq(0) + encode_uint32_vlq(0))  # type: ignore[method-assign]
+    client._connection.send_request = AsyncMock(return_value=encode_uint64_vlq(0) + encode_uint32_vlq(0))  # type: ignore[method-assign]
 
     results = await client.write_tags({name: bytes.fromhex(raw) for name, (raw, _pvalue) in STRING_WRITES.items()})
 
     assert all(result.success for result in results)
-    _assert_string_writes(client._connection._send_request.await_args.args[1])
+    _assert_string_writes(client._connection.send_request.await_args.args[1])
+
+
+def test_write_tags_sends_on_the_connection_that_resolving_the_names_left() -> None:
+    # Resolving can browse, and a browse that finds the connection dropped
+    # reconnects, which gives the sync client a new connection.
+    client = S7CommPlusClient()
+    old = MagicMock(object_qualifier_version=ProtocolVersion.V2)
+    new = MagicMock(object_qualifier_version=ProtocolVersion.V2)
+    new.send_request.return_value = encode_uint64_vlq(0) + encode_uint32_vlq(0)
+    client._connection = old
+    catalog = SymbolCatalog.from_browse(STRING_BROWSE)
+
+    def resolve_after_a_reconnect(names: list[str]) -> tuple[list[SymbolicTag], bool]:
+        client._connection = new
+        return [catalog.resolve(name) for name in names], False
+
+    client._resolve_tags = resolve_after_a_reconnect  # type: ignore[method-assign]
+    results = client.write_tags({"DB.c": b"A"})
+
+    assert [result.success for result in results] == [True]
+    old.send_request.assert_not_called()
+    new.send_request.assert_called_once()
 
 
 def test_write_tags_rejects_a_wstring_of_odd_length_before_sending() -> None:
@@ -215,7 +237,7 @@ async def test_write_tags_splits_strings_by_their_encoded_size(asynchronous: boo
         async_client = S7CommPlusAsyncClient()
         async_client._connection._connected = True
         async_client._connection._with_integrity_id = True
-        async_client._connection._send_request = send = AsyncMock(return_value=answer)  # type: ignore[method-assign]
+        async_client._connection.send_request = send = AsyncMock(return_value=answer)  # type: ignore[method-assign]
         async_client._symbol_catalog = catalog
         async_client.max_request_bytes = 700  # two 256-byte strings fit in one frame, three do not
         results = await async_client.write_tags({name: raw for name in names})
