@@ -15,6 +15,6 @@ algorithm in ``v1_session_key.plcsim``.
   SPN on AES's inverse S-box.
 
 HarpoS7's transpiled originals, their vendored tables and the ports these
-modules replace live in ``old/family0`` in the repository and are not
-distributed.
+modules replace are not part of this package; the tests check each module
+against answers recorded from them (``tests/fixtures/family0``).
 """

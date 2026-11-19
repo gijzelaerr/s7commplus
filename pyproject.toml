@@ -48,7 +48,6 @@ s7commplus = [
     "v1_session_key/**/*.bin",
     "v1_session_key/ARCHITECTURE.md",
     "v1_session_key/MAINTAINER_GUIDE.md",
-    "v1_session_key/MODEL_BENCHMARKS.md",
     "v1_session_key/LICENSE-HarpoS7",
     "zlib_dicts/*.xml",
     "zlib_dicts/NOTICE-S7CommPlusDriver",

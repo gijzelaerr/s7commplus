@@ -3,9 +3,8 @@
 HarpoS7's Monolith9 is PRESENT-80 (standard S-box and P-layer, 31 rounds plus
 whitening) applied to a byte-reversed little-endian block, and Monolith10 lays
 out its round keys with three fixed deviations from the standard schedule
-(``round_keys``). The transpiled originals are kept in
-``old/family0/_generated`` in the repository and pinned against this module
-by tests.
+(``round_keys``). The tests check this module against the published
+PRESENT-80 vectors and against answers recorded from the transpiled originals.
 """
 
 from __future__ import annotations

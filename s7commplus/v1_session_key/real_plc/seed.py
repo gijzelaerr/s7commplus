@@ -16,9 +16,8 @@ PRESENT-80 (``present``) and an elliptic-curve Diffie-Hellman (``curve``):
 
 HarpoS7 passes these values between its transforms in an encoded
 three-words-per-bit form. The runtime passes the decoded integers instead. The
-encoded ports, and the original Transform7 chain that ``write_seed``'s ladder
-replaces, are kept in ``old/family0`` in the repository and pinned against
-this module by tests.
+tests check this module against answers recorded from the encoded ports and
+from the original Transform7 chain that ``write_seed``'s ladder replaces.
 """
 
 from __future__ import annotations

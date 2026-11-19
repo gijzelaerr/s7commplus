@@ -67,24 +67,20 @@ Build the documentation
 The same warning-strict Sphinx command runs in GitHub Actions and Read the
 Docs. Open ``docs/_build/html/index.html`` after a local build.
 
-Session authentication research
--------------------------------
+Session authentication code
+----------------------------
 
-The research behind the V1 SessionKey implementation, that is the recovery,
-proof and model tools, the analyses of the transpiled HarpoS7 code and the
-tests that check them (formerly run with ``pytest --analysis`` and
-``--slow``), lives in the separate s7commplus-research repository. It is a
-copy of this repository at commit ``7b5d3e4``, so its proof reports and paths
-still match.
+The research behind the V1 SessionKey implementation (HarpoS7's transpiled
+code, the recovery, proof and model tools, and their analyses) is kept outside
+this repository. The runtime is self-contained: its tests check it against
+answers recorded from that reference code, kept in
+``tests/fixtures/family0/reference_vectors.json``, and
+``python -m tools.verify_v1_session_key`` checks the provenance of the public
+keys and test vectors taken from HarpoS7.
 
-This checkout keeps what the runtime's own tests need: the transpiled
-monoliths and their data in ``old/``, the reference transforms and the
-fingerprint recovery in ``tools/``, and the artifact verifier that pre-commit
-runs. Read the `analysis and verification boundary
-<https://github.com/gijzelaerr/s7commplus/blob/master/s7commplus/v1_session_key/ARCHITECTURE.md>`_,
-the `model benchmark findings
-<https://github.com/gijzelaerr/s7commplus/blob/master/s7commplus/v1_session_key/MODEL_BENCHMARKS.md>`_
-and the `SessionKey maintainer and evidence guide
+Read the `SessionKey architecture
+<https://github.com/gijzelaerr/s7commplus/blob/master/s7commplus/v1_session_key/ARCHITECTURE.md>`_
+and the `SessionKey maintainer guide
 <https://github.com/gijzelaerr/s7commplus/blob/master/s7commplus/v1_session_key/MAINTAINER_GUIDE.md>`_
 before changing the runtime SessionKey code.
 

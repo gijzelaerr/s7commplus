@@ -7,7 +7,7 @@ values read little endian and bit i as the coefficient of x^i. That is not the
 AES-GCM field or bit order.
 
 HarpoS7's ``ChecksumTransform`` and ``LutGenerator`` compute the same product
-with a 4 KB table; their ports are kept in ``old/family0`` in the repository.
+with a 4 KB table.
 """
 
 from __future__ import annotations

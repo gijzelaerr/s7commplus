@@ -66,30 +66,25 @@ tested against an isolated, non-safety-critical controller.
   legitimation, used only for S7CommPlus V1 without TLS; HarpoS7-derived
 - `s7commplus/v1_session_key/real_plc/`: the blob algorithm for real
   S7-1200/1500 keys (HarpoS7's "Family 0") and its
-  recovered primitives (`seed`, `curve`, `present`, `checksum`, `fingerprint`);
-  `fingerprint.py`'s constants are recovered by `tools/recover_fingerprint.py`
-- `old/`: retired, repository-only reference code (the transpiled HarpoS7
-  monoliths, their vendored tables in `old/family0/_generated/data/`, and the
-  Transform7/12/13 ports) that the runtime tests compare the runtime against;
-  not packaged. Proof reports pin many of these files' SHA-256, so do not edit
-  them
-- `tools/`: the reference models and recovery tools those runtime tests import,
-  the artifact verifier pre-commit runs, `run_real_plc_acceptance.py` and
-  `check_devices_table.py`. The rest of the SessionKey research (the other
-  recovery, proof and model tools, the `*_ANALYSIS.md` write-ups and the
-  former `analysis` and `slow` tests) lives in the separate
-  s7commplus-research repository, a copy of this one at commit `7b5d3e4`
+  recovered primitives (`seed`, `curve`, `present`, `checksum`, `fingerprint`)
+- `tools/`: `verify_v1_session_key.py` (the HarpoS7 provenance check CI and
+  pre-commit run), `run_real_plc_acceptance.py` and `check_devices_table.py`
+- `tests/fixtures/family0/`: the HarpoS7 provenance (`public_keys.json`,
+  `provenance.json`), six upstream known-answer files, and
+  `reference_vectors.json`, the answers recorded from the retired HarpoS7 ports
+  that the SessionKey tests check the runtime against. The SessionKey research
+  (transpiled monoliths, ports, recovery and proof tools) lives in the separate
+  s7commplus-research repository, not here
 - `s7commplus/zlib_dicts/`: preset dictionaries used to decompress PLC metadata
 - `tests/`: unit, protocol conformance, emulator, TLS, authentication, and
   opt-in real-PLC tests
 
 Package data matters: `py.typed`, the V1 SessionKey documents
-(`ARCHITECTURE.md`, `MAINTAINER_GUIDE.md`, `MODEL_BENCHMARKS.md`),
+(`ARCHITECTURE.md`, `MAINTAINER_GUIDE.md`),
 `LICENSE-HarpoS7`, the zlib dictionary `.xml` files and their
 `zlib_dicts/NOTICE-S7CommPlusDriver` are included through
-`pyproject.toml`. The artifact manifest of retired HarpoS7 code lives in
-`old/family0/` and is not distributed. The runtime currently ships no `.bin` tables;
-the `v1_session_key/**/*.bin` glob stays so that any manifested table added later
+`pyproject.toml`. The runtime currently ships no `.bin` tables;
+the `v1_session_key/**/*.bin` glob stays so that any table added later
 is distributed. Do not move, rename, or omit package data from distributions
 accidentally.
 
@@ -209,12 +204,11 @@ pytest --e2e --plc-ip 192.168.1.10 --plc-port 102 \
   --plc-rack 0 --plc-slot 1 --plc-db-read 1 --plc-db-write 2
 ```
 
-The runtime's own tests, including its comparisons against the `old/`
-references, run in a plain `pytest`. The tests that re-derived recovered
-SessionKey proofs (`--slow`) and studied the retired HarpoS7 code
-(`--analysis`) moved to the s7commplus-research repository with the tools
-they check; run them there when changing a file under `old/` or `tools/` that
-it also has.
+All tests, including the SessionKey checks against recorded reference
+answers, run in a plain `pytest`. A change to a recovered SessionKey constant or
+formula that fails those vectors is a change to the algorithm: justify it
+against the original code in the s7commplus-research repository instead of
+re-recording the answers.
 
 The write DB supplied to E2E tests must be disposable and safe to modify. Never
 run E2E tests against an unknown, production, or safety-related PLC. Do not turn

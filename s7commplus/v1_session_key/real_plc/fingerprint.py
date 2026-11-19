@@ -20,10 +20,9 @@ for bits ``j`` and ``j + 4`` of byte ``v`` as a 2-bit value; then:
    bijections are not affine and look like the white-box's external output
    encoding.
 
-``tools/recover_fingerprint.py`` recovers every constant below from HarpoS7's
-gate network (kept in ``old/family0/fingerprint.py`` in the repository) and
-checks this module against it; each recovered key byte and source order is
-the only one that fits. The wiring follows no evident schedule and the keys
+Every constant below was recovered from HarpoS7's gate network, and each
+recovered key byte and source order is the only one that fits. The tests check
+this module against the gate network's recorded answers. The wiring follows no evident schedule and the keys
 no evident key schedule, so this is probably a generated cipher rather than a
 published one.
 """
