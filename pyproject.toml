@@ -32,7 +32,9 @@ s7commplus = "s7commplus.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest<9.3", "pytest-asyncio", "pytest-bdd>=9.0.1,<10", "pytest-cov", "hypothesis", "mypy", "ruff"]
-docs = ["sphinx>=7.2", "furo>=2024.8.6"]
+# Python 3.11.5+ only: soupsieve (via furo) has no fixed release for older
+# Pythons, and every docs build (CI, release, Read the Docs) uses a newer one.
+docs = ["sphinx>=7.2; python_full_version >= '3.11.5'", "furo>=2024.8.6; python_full_version >= '3.11.5'"]
 
 [project.urls]
 Homepage = "https://github.com/gijzelaerr/s7commplus"
