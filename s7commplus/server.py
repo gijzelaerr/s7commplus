@@ -7,6 +7,8 @@ Handles the S7CommPlus protocol including:
 - CreateObject session handshake
 - Explore (browse registered data blocks and variables)
 - GetMultiVariables / SetMultiVariables (read/write by address)
+- Type info and symbolic (LID) reads/writes for a data block registered with
+  ``register_symbolic_db()``, from a layout the caller supplies
 - Internal PLC memory model with thread-safe access
 - V2 protocol emulation with TLS and IntegrityId tracking
 
@@ -30,7 +32,7 @@ import socket
 import ssl
 import struct
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import IntEnum
 from typing import Any, Callable, Optional
 
@@ -39,6 +41,7 @@ from .codec import (
     decode_pvalue_to_bytes,
     encode_header,
     encode_pvalue_blob,
+    encode_pvalue_typed,
     encode_typed_value,
     skip_typed_value,
 )
@@ -142,6 +145,10 @@ class DataBlock:
         self.lock = threading.Lock()
         # Assign a unique object ID for the S7CommPlus object tree
         self.object_id = 0x00010000 | (number & 0xFFFF)
+        # Symbolic access, set by S7CommPlusServer.register_symbolic_db(): the type-info RID a LID=1
+        # read returns, and per LID path the wire datatype, byte offset, bit offset and size.
+        self.type_info_rid: Optional[int] = None
+        self.symbols: dict[tuple[int, ...], tuple[DataType, int, int, int]] = {}
 
     def add_variable(self, name: str, type_name: str, byte_offset: int) -> None:
         """Register a named variable in this data block.
@@ -199,6 +206,35 @@ class DataBlock:
             raise KeyError(f"Variable not found: {name!r}")
         self.write(var.byte_offset, data)
 
+    def read_symbol(self, lids: tuple[int, ...]) -> Optional[bytes]:
+        """The PValue a symbolic read of ``lids`` returns, or None when this block has no such symbol."""
+        # Unverified: no capture shows the PValue types of these replies (RID for LID 1, the symbol's
+        # own type otherwise); the clients use only the value bytes.
+        if lids == (1,) and self.type_info_rid is not None:
+            return encode_pvalue_typed(DataType.RID, struct.pack(">I", self.type_info_rid))
+        symbol = self.symbols.get(lids)
+        if symbol is None:
+            return None
+        datatype, byte_offset, bit_offset, size = symbol
+        raw = self.read(byte_offset, size)
+        if datatype == DataType.BOOL:
+            raw = bytes([(raw[0] >> bit_offset) & 1])
+        return encode_pvalue_typed(datatype, raw)
+
+    def write_symbol(self, lids: tuple[int, ...], data: bytes) -> bool:
+        """Write the symbol ``lids``. False, with nothing written, when there is none or ``data`` is the wrong size."""
+        symbol = self.symbols.get(lids)
+        if symbol is None or len(data) != symbol[3]:
+            return False
+        datatype, byte_offset, bit_offset, _size = symbol
+        if datatype != DataType.BOOL:
+            self.write(byte_offset, data)
+            return True
+        with self.lock:  # one read-modify-write, so a concurrent write to a neighbouring bit is not lost
+            mask = 1 << bit_offset
+            self.data[byte_offset] = self.data[byte_offset] | mask if data[0] else self.data[byte_offset] & ~mask
+        return True
+
 
 class S7CommPlusServer:
     """S7CommPlus PLC emulator for testing.
@@ -225,6 +261,7 @@ class S7CommPlusServer:
     ) -> None:
         self._data_blocks: dict[int, DataBlock] = {}
         self._program_objects: dict[int, tuple[int, Optional[str]]] = {}
+        self._type_info_reply: Optional[bytes] = None  # set by register_symbolic_db()
         self._cpu_state = CPUState.RUN
         self._protocol_version = protocol_version
         self._next_session_id = 1
@@ -347,6 +384,52 @@ class S7CommPlusServer:
         db = DataBlock(db_number, len(data))
         db.data = data
         self._data_blocks[db_number] = db
+        return db
+
+    def register_symbolic_db(
+        self,
+        db_number: int,
+        data: bytearray,
+        type_info_rid: int,
+        type_info_reply: bytes,
+        symbols: Mapping[tuple[int, ...], tuple[str, int, int]],
+    ) -> DataBlock:
+        """Register a data block that browse() and symbolic reads and writes can reach.
+
+        The emulator does not lay out the block itself: the caller supplies both the
+        type info and where each symbol lives, normally taken from one real PLC.
+
+        Args:
+            db_number: Data block number.
+            data: Initial data block content.
+            type_info_rid: The type-info RID a symbolic read of LID 1 returns.
+            type_info_reply: The body of the reply (after the response header) to an
+                EXPLORE of the OMS type-info container, sent as it is. A server has
+                one, so a second symbolic DB must bring the same reply.
+            symbols: Per LID path after the DB (``(0x28, 1)`` for access id ``28.1``),
+                the type name (``"Bool"``, ``"Int"``, ...), byte offset and bit offset.
+                A Bool reads and writes its one bit; any other type its whole bytes.
+
+        Returns:
+            The created DataBlock
+
+        Raises:
+            ValueError: An unknown type name, or a type-info reply other than the one
+                already registered.
+        """
+        if self._type_info_reply is not None and self._type_info_reply != type_info_reply:
+            raise ValueError("This server already serves a different type-info reply")
+        resolved: dict[tuple[int, ...], tuple[DataType, int, int, int]] = {}
+        for lids, (type_name, byte_offset, bit_offset) in symbols.items():
+            soft_type = _TYPE_NAME_MAP.get(type_name)
+            if soft_type is None:
+                raise ValueError(f"Unknown type name: {type_name!r}")
+            wire_type, size = _SOFT_TO_WIRE[soft_type]
+            resolved[tuple(lids)] = (DataType(wire_type), byte_offset, bit_offset, size)
+        db = self.register_raw_db(db_number, data)
+        db.type_info_rid = type_info_rid
+        db.symbols = resolved
+        self._type_info_reply = type_info_reply
         return db
 
     def register_program_object(self, rid: int, class_id: int, name: Optional[str] = None) -> None:
@@ -1058,6 +1141,9 @@ class S7CommPlusServer:
             response += struct.pack(">I", 0)
             return bytes(response)
 
+        if explore_id == Ids.OBJECT_OMS_TYPE_INFO_CONTAINER and self._type_info_reply is not None:
+            return bytes(response) + self._type_info_reply  # carries its own ReturnValue, objects and trailer
+
         response += encode_uint32_vlq(0)  # Return code: success
 
         if explore_id == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID:
@@ -1171,18 +1257,18 @@ class S7CommPlusServer:
         response += self._build_response_header(FunctionCode.GET_MULTI_VARIABLES, seq_num)
 
         # Parse request payload
-        items = _server_parse_read_request(request_data)
+        addresses, _ = _server_parse_item_addresses(request_data)
 
         # ReturnValue: success
         response += encode_uint64_vlq(0)
 
-        results = [self._read_item(item) for item in items]
+        results = [self._read_address(access_area, lids) for access_area, lids in addresses]
 
         # Value list: ItemNumber (1-based) + PValue, terminated by ItemNumber=0
         for i, data in enumerate(results, 1):
             if data is not None:
                 response += encode_uint32_vlq(i)  # ItemNumber
-                response += encode_pvalue_blob(data)  # Value as BLOB
+                response += data
             # Errors handled in error list below
 
         # Terminate value list
@@ -1237,12 +1323,12 @@ class S7CommPlusServer:
             return bytes(response)
 
         # Parse request payload for DB writes
-        items, values = _server_parse_write_request(request_data)
+        addresses, values = _server_parse_write_addresses(request_data)
 
         # Write data
         errors: list[tuple[int, int]] = []
-        for i, (item, data) in enumerate(zip(items, values), 1):
-            if not self._write_item(item, data):
+        for i, ((access_area, lids), data) in enumerate(zip(addresses, values), 1):
+            if not self._write_address(access_area, lids, data):
                 errors.append((i, _ITEM_ERROR))
 
         # ReturnValue: success
@@ -1260,6 +1346,29 @@ class S7CommPlusServer:
             response += encode_uint32_vlq(0)  # Legacy V1 IntegrityId
 
         return bytes(response)
+
+    def _symbolic_db(self, access_area: int) -> Optional[DataBlock]:
+        """The data block an AccessArea names, if it is registered."""
+        if access_area & 0xFFFF0000 != Ids.DB_ACCESS_AREA_BASE:
+            return None
+        return self._data_blocks.get(access_area & 0xFFFF)
+
+    def _read_address(self, access_area: int, lids: list[int]) -> Optional[bytes]:
+        """The PValue answering one read item: a ClassicBlob range as a BLOB, else a symbol; None if neither."""
+        item = _resolve_classic_blob(access_area, lids)
+        if item is not None:
+            data = self._read_item(item)
+            return encode_pvalue_blob(data) if data is not None else None
+        db = self._symbolic_db(access_area)
+        return db.read_symbol(tuple(lids)) if db is not None else None
+
+    def _write_address(self, access_area: int, lids: list[int], data: bytes) -> bool:
+        """Write one item, a ClassicBlob range or else a symbol; False, with nothing written, if neither."""
+        item = _resolve_classic_blob(access_area, lids)
+        if item is not None:
+            return self._write_item(item, data)
+        db = self._symbolic_db(access_area)
+        return db.write_symbol(tuple(lids), data) if db is not None else False
 
     def _read_item(self, item: Optional[tuple[int, int, int]]) -> Optional[bytes]:
         """The bytes one item addresses, or None when the emulator cannot serve it.
@@ -1617,25 +1726,21 @@ def _resolve_classic_blob(access_area: int, lids: list[int]) -> Optional[tuple[i
     return access_area & 0xFFFF, lids[1], lids[2]
 
 
-def _server_parse_read_request(request_data: bytes) -> list[Optional[tuple[int, int, int]]]:
-    """Parse a GetMultiVariables request payload on the server side.
+def _server_parse_item_addresses(request_data: bytes) -> tuple[list[tuple[int, list[int]]], int]:
+    """Parse the ItemAddresses of a GetMultiVariables or SetMultiVariables request payload.
 
-    Extracts (db_number, byte_offset, byte_size) for each item from the
-    S7CommPlus ItemAddress format.
+    Both start with a fixed UInt32 (LinkId / InObjectId), ItemCount and FieldCount.
 
     Returns:
-        One entry per item, in request order: (db_number, byte_offset, byte_size),
-        or None for an address the emulator cannot resolve
+        One (access_area, LIDs after the AccessSubArea) per item, in request order,
+        and the offset after the last address. A truncated address keeps the LIDs read.
     """
-    if not request_data:
-        return []
-
     offset = 0
-    items: list[Optional[tuple[int, int, int]]] = []
+    addresses: list[tuple[int, list[int]]] = []
 
-    # LinkId (UInt32 fixed)
+    # LinkId / InObjectId (UInt32 fixed)
     if offset + 4 > len(request_data):
-        return []
+        return [], offset
     offset += 4
 
     # ItemCount (VLQ)
@@ -1676,73 +1781,20 @@ def _server_parse_read_request(request_data: bytes) -> list[Optional[tuple[int, 
             offset += consumed
             lids.append(lid_val)
 
-        items.append(_resolve_classic_blob(access_area, lids))
+        addresses.append((access_area, lids))
 
-    return items
+    return addresses, offset
 
 
-def _server_parse_write_request(request_data: bytes) -> tuple[list[Optional[tuple[int, int, int]]], list[bytes]]:
-    """Parse a SetMultiVariables request payload on the server side.
-
-    Returns:
-        Tuple of (items, values) where items holds, per item in request order,
-        (db_number, byte_offset, byte_size) or None for an address the emulator
-        cannot resolve, and values is list of raw bytes to write
-    """
-    if not request_data:
+def _server_parse_write_addresses(request_data: bytes) -> tuple[list[tuple[int, list[int]]], list[bytes]]:
+    """Parse a SetMultiVariables request payload into its addresses (see above) and raw values."""
+    addresses, offset = _server_parse_item_addresses(request_data)
+    if not addresses:
         return [], []
-
-    offset = 0
-
-    # InObjectId (UInt32 fixed)
-    if offset + 4 > len(request_data):
-        return [], []
-    offset += 4
-
-    # ItemCount (VLQ)
-    item_count, consumed = decode_uint32_vlq(request_data, offset)
-    offset += consumed
-
-    # FieldCount (VLQ)
-    _field_count, consumed = decode_uint32_vlq(request_data, offset)
-    offset += consumed
-
-    # Parse each ItemAddress
-    items: list[Optional[tuple[int, int, int]]] = []
-    for _ in range(item_count):
-        if offset >= len(request_data):
-            break
-
-        # SymbolCrc
-        _symbol_crc, consumed = decode_uint32_vlq(request_data, offset)
-        offset += consumed
-
-        # AccessArea
-        access_area, consumed = decode_uint32_vlq(request_data, offset)
-        offset += consumed
-
-        # NumberOfLIDs
-        num_lids, consumed = decode_uint32_vlq(request_data, offset)
-        offset += consumed
-
-        # AccessSubArea
-        _access_sub_area, consumed = decode_uint32_vlq(request_data, offset)
-        offset += consumed
-
-        # Additional LIDs
-        lids: list[int] = []
-        for _ in range(num_lids - 1):
-            if offset >= len(request_data):
-                break
-            lid_val, consumed = decode_uint32_vlq(request_data, offset)
-            offset += consumed
-            lids.append(lid_val)
-
-        items.append(_resolve_classic_blob(access_area, lids))
 
     # Parse value list: ItemNumber (VLQ, 1-based) + PValue
     values: list[bytes] = []
-    for _ in range(item_count):
+    for _ in range(len(addresses)):
         if offset >= len(request_data):
             break
         item_nr, consumed = decode_uint32_vlq(request_data, offset)
@@ -1753,4 +1805,30 @@ def _server_parse_write_request(request_data: bytes) -> tuple[list[Optional[tupl
         offset += consumed
         values.append(raw_bytes)
 
-    return items, values
+    return addresses, values
+
+
+def _server_parse_read_request(request_data: bytes) -> list[Optional[tuple[int, int, int]]]:
+    """Parse a GetMultiVariables request payload on the server side.
+
+    Extracts (db_number, byte_offset, byte_size) for each item from the
+    S7CommPlus ItemAddress format.
+
+    Returns:
+        One entry per item, in request order: (db_number, byte_offset, byte_size),
+        or None for an address the emulator cannot resolve as a ClassicBlob range
+    """
+    addresses, _ = _server_parse_item_addresses(request_data)
+    return [_resolve_classic_blob(access_area, lids) for access_area, lids in addresses]
+
+
+def _server_parse_write_request(request_data: bytes) -> tuple[list[Optional[tuple[int, int, int]]], list[bytes]]:
+    """Parse a SetMultiVariables request payload on the server side.
+
+    Returns:
+        Tuple of (items, values) where items holds, per item in request order,
+        (db_number, byte_offset, byte_size) or None for an address the emulator
+        cannot resolve as a ClassicBlob range, and values is list of raw bytes to write
+    """
+    addresses, values = _server_parse_write_addresses(request_data)
+    return [_resolve_classic_blob(access_area, lids) for access_area, lids in addresses], values
