@@ -91,7 +91,7 @@ in issue #34; do not infer a universal framing/activation change from this map.
 
 The stable entry point is `S7CommPlusConnection.connect()` in
 `s7commplus/connection.py` (the asyncio client mirrors it in
-`async_client.py`). Its CreateObject parser saves the session challenge,
+`async_connection.py`). Its CreateObject parser saves the session challenge,
 public-key fingerprint, and ServerSessionVersion. `_setup_session()` calls
 `_try_session_key_auth()` only for non-TLS V1 sessions with both challenge and
 fingerprint; `keys.parse_fingerprint()` and `keys.get_public_key()` select the

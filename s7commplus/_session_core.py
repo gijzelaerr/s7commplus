@@ -1,15 +1,16 @@
 """The request path both clients share: session state and framing, without I/O.
 
-`S7CommPlusConnection` (synchronous) and `S7CommPlusAsyncClient` used to
+`S7CommPlusConnection` (synchronous) and `S7CommPlusAsyncConnection` used to
 carry their own copy of this code, and the copies drifted. Both now inherit
 `SessionCore`: it numbers requests, splices in the IntegrityId, frames and
-signs a request, and checks and unwraps its reply. Each client only does the
-I/O around it: sending the frame, receiving the reply (reassembling a reply
-split over several PDUs) and closing a session whose integrity check failed.
+signs a request, and checks and unwraps its reply. Each connection only does
+the I/O around it: sending the frame, receiving the reply (reassembling a
+reply split over several PDUs) and closing a session whose integrity check
+failed.
 
 `SessionCore` reads and writes the session state as attributes of the
-client, under the names both clients already used, so code and tests that
-set that state directly keep working.
+connection, under the names both connections already used, so code and tests
+that set that state directly keep working.
 """
 
 from __future__ import annotations
