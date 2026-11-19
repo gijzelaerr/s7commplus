@@ -71,9 +71,7 @@ class _Client:
         self.client: S7CommPlusClient | S7CommPlusAsyncClient
         if kind == "sync":
             sync_client = S7CommPlusClient()
-            connection = MagicMock(
-                object_qualifier_version=0, requires_substreamed=False, _with_integrity_id=True, _session_key=None
-            )
+            connection = MagicMock(object_qualifier_version=0, _with_integrity_id=True, _session_key=None)
             connection.send_request.side_effect = side_effect
             sync_client._connection = connection
             self.client, self.send = sync_client, connection.send_request

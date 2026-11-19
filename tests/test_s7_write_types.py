@@ -42,7 +42,6 @@ async def test_scalar_write_validates_type_but_raw_access_uses_blob_on_wire(
     else:
         sync_client = S7CommPlusClient()
         connection = MagicMock()
-        connection.requires_substreamed = False
         connection.protocol_version = ProtocolVersion.V2
         send = connection.send_request
         send.return_value = b"\x00\x00"
@@ -73,11 +72,9 @@ async def test_scalar_write_validates_type_but_raw_access_uses_blob_on_wire(
         assert payload[offset : offset + len(encode_pvalue_blob(data))] == encode_pvalue_blob(data)
 
 
-@pytest.mark.parametrize("substreamed", [False, True])
-def test_missing_multi_write_type_rejected_before_any_send(substreamed: bool) -> None:
+def test_missing_multi_write_type_rejected_before_any_send() -> None:
     client = S7CommPlusClient()
     connection = MagicMock()
-    connection.requires_substreamed = substreamed
     client._connection = connection
     with pytest.raises(ValueError, match="require.*datatype"):
         client.db_write_multi([(1, 0, b"\x00\x4d", DataType.INT), (1, 2, b"\x00\x01")])  # type: ignore[list-item]
@@ -94,27 +91,13 @@ async def test_async_missing_multi_write_type_rejected_before_send() -> None:
     send.assert_not_called()
 
 
-@pytest.mark.parametrize("substreamed", [False, True])
-def test_invalid_scalar_width_rejected_before_any_send(substreamed: bool) -> None:
+def test_invalid_scalar_width_rejected_before_any_send() -> None:
     client = S7CommPlusClient()
     connection = MagicMock()
-    connection.requires_substreamed = substreamed
     client._connection = connection
     with pytest.raises(ValueError):
         client.db_write_multi([(1, 0, b"\x00\x4d", DataType.INT), (1, 2, b"\x01", DataType.INT)])
     connection.send_request.assert_not_called()
-
-
-def test_substreamed_area_write_validates_type_but_uses_blob_on_wire() -> None:
-    client = S7CommPlusClient()
-    connection = MagicMock()
-    connection.requires_substreamed = True
-    connection.session_id = 0x70000001
-    client._connection = connection
-    client.write_area(82, 0, struct.pack(">I", 300), datatype=DataType.UDINT)
-    function, payload = connection.send_request.call_args.args
-    assert function == FunctionCode.SET_VAR_SUBSTREAMED
-    assert payload.endswith(encode_pvalue_blob(struct.pack(">I", 300)) + bytes((1, 0, 0, 0, 0)))
 
 
 # --- Named writes of the types sent in another form than SymbolicTag.datatype (catalog._WRITE_FORMS) ----

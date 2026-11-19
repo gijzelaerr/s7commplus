@@ -6,7 +6,7 @@ import hmac
 import importlib.util
 import struct
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -29,7 +29,6 @@ from s7commplus.client import (
     _build_area_write_payload,
     _build_symbolic_read_payload,
     _build_symbolic_write_payload,
-    _build_substreamed_write_payload,
 )
 from s7commplus.catalog import SymbolicTag, TagResult
 from s7commplus.typeinfo import Softdatatype
@@ -1055,32 +1054,6 @@ class TestClientErrorPaths:
         client = S7CommPlusClient()
         with pytest.raises(RuntimeError, match="Not connected"):
             client.write_multi([(1, 0, b"data", DataType.BLOB)])
-
-    def test_db_write_multi_uses_one_substreamed_request_per_item(self) -> None:
-        client = S7CommPlusClient()
-        connection = MagicMock()
-        connection.requires_substreamed = True
-        connection.session_id = 0x70000001
-        client._connection = connection
-        items = [(1, 0, b"first", DataType.BLOB), (2, 10, b"second", DataType.BLOB)]
-
-        client.db_write_multi(items)
-
-        connection.send_request.assert_has_calls(
-            [
-                call(
-                    FunctionCode.SET_VAR_SUBSTREAMED,
-                    _build_substreamed_write_payload(
-                        connection.session_id,
-                        Ids.DB_ACCESS_AREA_BASE + db_number,
-                        Ids.DB_VALUE_ACTUAL,
-                        [Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
-                        data,
-                    ),
-                )
-                for db_number, start, data, _ in items
-            ]
-        )
 
     def test_read_symbolic_multi_not_connected(self) -> None:
         client = S7CommPlusClient()

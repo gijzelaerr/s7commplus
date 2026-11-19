@@ -979,7 +979,7 @@ class S7CommPlusClient(_ClientMethods):
             legacy_session_key_refresh_interval=p["legacy_session_key_refresh_interval"],
             _session_key_fingerprint=fingerprint,
         )
-        if p["password"] is not None and self._connection.tls_active and not self._connection.requires_substreamed:
+        if p["password"] is not None and self._connection.tls_active:
             logger.info("Performing PLC legitimation (password authentication)")
             self._connection.authenticate(p["password"], p["username"])
 
@@ -1156,9 +1156,6 @@ class S7CommPlusClient(_ClientMethods):
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
 
-        if self._connection.requires_substreamed:
-            return self._db_read_substreamed(db_number, start, size)
-
         payload = _build_read_payload([(db_number, start, size)], self._connection.object_qualifier_version)
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
@@ -1167,18 +1164,6 @@ class S7CommPlusClient(_ClientMethods):
         if results[0] is None:
             raise S7RequestError("Read failed: PLC returned error for item")
         return results[0]
-
-    def _db_read_substreamed(self, db_number: int, start: int, size: int) -> bytes:
-        assert self._connection is not None
-        access_area = Ids.DB_ACCESS_AREA_BASE + (db_number & 0xFFFF)
-        payload = _build_substreamed_read_payload(
-            self._connection.session_id,
-            access_area,
-            Ids.DB_VALUE_ACTUAL,
-            [Ids.LID_OMS_STB_CLASSIC_BLOB, start, size],
-        )
-        response = self._connection.send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload)
-        return _parse_substreamed_read_response(response)
 
     def db_write(self, db_number: int, start: int, data: bytes, datatype: DataType = DataType.BLOB) -> None:
         """Write raw bytes to a data block.
@@ -1218,14 +1203,6 @@ class S7CommPlusClient(_ClientMethods):
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
 
-        if self._connection.requires_substreamed:
-            normalized = [_normalize_write_item(item) for item in items]
-            for _, _, data, datatype in normalized:
-                encode_pvalue_typed(datatype, data)
-            for db_number, start, data, datatype in normalized:
-                self._db_write_substreamed(db_number, start, data, datatype)
-            return
-
         def build_write(chunk: list[DBWriteItem]) -> bytes:
             assert self._connection is not None
             return _build_write_payload(chunk, self._connection.object_qualifier_version)
@@ -1249,19 +1226,6 @@ class S7CommPlusClient(_ClientMethods):
         """Alias for :meth:`db_write_multi`."""
         self.db_write_multi(items)
 
-    def _db_write_substreamed(self, db_number: int, start: int, data: bytes, datatype: DataType = DataType.BLOB) -> None:
-        assert self._connection is not None
-        access_area = Ids.DB_ACCESS_AREA_BASE + (db_number & 0xFFFF)
-        payload = _build_substreamed_write_payload(
-            self._connection.session_id,
-            access_area,
-            Ids.DB_VALUE_ACTUAL,
-            [Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
-            data,
-            datatype,
-        )
-        self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload)
-
     @_retry_on_dropped_connection
     def db_read_multi(self, items: list[tuple[int, int, int]]) -> list[bytes]:
         """Read multiple data block regions.
@@ -1283,9 +1247,6 @@ class S7CommPlusClient(_ClientMethods):
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
-
-        if self._connection.requires_substreamed:
-            return [self._db_read_substreamed(db, start, size) for db, start, size in items]
 
         def build_read(chunk: list[tuple[int, int, int]]) -> bytes:
             assert self._connection is not None
@@ -1313,16 +1274,6 @@ class S7CommPlusClient(_ClientMethods):
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
 
-        if self._connection.requires_substreamed:
-            payload = _build_substreamed_read_payload(
-                self._connection.session_id,
-                area_rid,
-                Ids.CONTROLLER_AREA_VALUE_ACTUAL,
-                [Ids.LID_OMS_STB_CLASSIC_BLOB, start, size],
-            )
-            response = self._connection.send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload)
-            return _parse_substreamed_read_response(response)
-
         payload = _build_area_read_payload(area_rid, start, size, self._connection.object_qualifier_version)
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
@@ -1342,18 +1293,6 @@ class S7CommPlusClient(_ClientMethods):
         """
         if self._connection is None:
             raise S7NotConnectedError("Not connected")
-
-        if self._connection.requires_substreamed:
-            payload = _build_substreamed_write_payload(
-                self._connection.session_id,
-                area_rid,
-                Ids.CONTROLLER_AREA_VALUE_ACTUAL,
-                [Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
-                data,
-                datatype,
-            )
-            self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload)
-            return
 
         payload = _build_area_write_payload(area_rid, start, data, self._connection.object_qualifier_version, datatype=datatype)
         response = self._connection.send_request(FunctionCode.SET_MULTI_VARIABLES, payload)
@@ -2722,76 +2661,6 @@ def _parse_write_error_list(response: bytes, offset: int, expected_count: Option
             raise S7RequestError(f"Symbolic multi-write failed: unexpected or duplicate item {err_item_nr}")
         errors[err_item_nr] = err_value
     return errors
-
-
-def _build_substreamed_read_payload(session_id: int, access_area: int, access_sub_area: int, lids: list[int]) -> bytes:
-    """Build a GET_VAR_SUBSTREAMED payload for data access on V1-initial PLCs."""
-    oq = encode_object_qualifier(protocol_version=ProtocolVersion.V1)
-    payload = bytearray()
-    payload += struct.pack(">I", session_id)
-    payload += bytes([0x20, 0x04])
-    num_fields = 4 + len(lids)
-    payload += encode_uint32_vlq(num_fields)
-    payload += encode_uint32_vlq(0)  # SymbolCRC
-    payload += encode_uint32_vlq(access_area)
-    payload += encode_uint32_vlq(len(lids) + 1)
-    payload += encode_uint32_vlq(access_sub_area)
-    for lid in lids:
-        payload += encode_uint32_vlq(lid)
-    payload += oq
-    payload += bytes([0x00])
-    payload += encode_uint32_vlq(1)
-    payload += encode_uint32_vlq(1)
-    payload += struct.pack(">I", 0)
-    return bytes(payload)
-
-
-def _build_substreamed_write_payload(
-    session_id: int,
-    access_area: int,
-    access_sub_area: int,
-    lids: list[int],
-    data: bytes,
-    datatype: DataType = DataType.BLOB,
-) -> bytes:
-    """Build a SET_VAR_SUBSTREAMED payload for data access on V1-initial PLCs."""
-    oq = encode_object_qualifier(protocol_version=ProtocolVersion.V1)
-    payload = bytearray()
-    payload += struct.pack(">I", session_id)
-    payload += bytes([0x20, 0x04])
-    num_fields = 4 + len(lids)
-    payload += encode_uint32_vlq(num_fields)
-    payload += encode_uint32_vlq(0)  # SymbolCRC
-    payload += encode_uint32_vlq(access_area)
-    payload += encode_uint32_vlq(len(lids) + 1)
-    payload += encode_uint32_vlq(access_sub_area)
-    for lid in lids:
-        payload += encode_uint32_vlq(lid)
-    payload += oq
-    payload += bytes([0x00])
-    payload += encode_uint32_vlq(1)
-    encode_pvalue_typed(datatype, data)  # validate size; classic-blob access is wire-untyped
-    payload += encode_pvalue_blob(data)
-    payload += encode_uint32_vlq(1)
-    payload += struct.pack(">I", 0)
-    return bytes(payload)
-
-
-def _parse_substreamed_read_response(response: bytes) -> bytes:
-    """Parse a GET_VAR_SUBSTREAMED response and extract the data bytes."""
-    offset = 0
-    return_value, consumed = decode_uint64_vlq(response, offset)
-    offset += consumed
-    if return_value != 0:
-        raise S7RequestError(
-            f"Substreamed read failed: PLC returned error 0x{return_value:X}. "
-            f"This may indicate the addressed object does not exist or the PLC "
-            f"does not support GET_VAR_SUBSTREAMED for data reads."
-        )
-    if offset >= len(response):
-        raise S7RequestError("Substreamed read response empty")
-    raw_bytes, consumed = decode_pvalue_to_bytes(response, offset)
-    return raw_bytes
 
 
 def _build_area_read_payload(area_rid: int, start: int, size: int, protocol_version: int = ProtocolVersion.V2) -> bytes:

@@ -565,17 +565,6 @@ class S7CommPlusConnection(SessionCore):
         return _alarm_texts_and_domain_filter(self._v1_session_key_family)
 
     @property
-    def requires_substreamed(self) -> bool:
-        """Whether data operations must use substreamed function codes.
-
-        V1+SessionKey PLCs use GET_VAR_SUBSTREAMED for session-level ops
-        (legitimation challenge/response) but accept GET_MULTI_VARIABLES
-        for DB data reads — same as the thomas-v2 S7CommPlusDriver.
-        V3+HMAC framing is controlled separately by session_key presence.
-        """
-        return False
-
-    @property
     def oms_secret(self) -> Optional[bytes]:
         """OMS exporter secret from TLS session (for legitimation)."""
         return self._oms_secret

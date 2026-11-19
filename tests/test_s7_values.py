@@ -646,9 +646,7 @@ async def test_values_of_a_large_array_are_split_like_any_batch(asynchronous: bo
         await async_client.write_value("T.a", [5, 4, 3, 2, 1])
     else:
         client = S7CommPlusClient()
-        client._connection = MagicMock(
-            object_qualifier_version=0, requires_substreamed=False, _with_integrity_id=True, _session_key=None
-        )
+        client._connection = MagicMock(object_qualifier_version=0, _with_integrity_id=True, _session_key=None)
         send = client._connection.send_request
         send.side_effect = answers
         client._symbol_catalog = SymbolCatalog.from_browse(browse)

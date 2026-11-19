@@ -20,7 +20,7 @@ def _connection_factory(connect_effects):  # type: ignore[no-untyped-def]
     instances: list[MagicMock] = []
 
     def factory(*_args, **_kwargs):  # type: ignore[no-untyped-def]
-        connection = MagicMock(tls_active=False, requires_substreamed=False)
+        connection = MagicMock(tls_active=False)
         connection.connect.side_effect = connect_effects
         instances.append(connection)
         return connection

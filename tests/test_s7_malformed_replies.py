@@ -23,7 +23,6 @@ from s7commplus.client import (
     _parse_cpu_state,
     _parse_explore_datablocks,
     _parse_read_response,
-    _parse_substreamed_read_response,
     _parse_write_response,
     _parse_write_response_errors,
 )
@@ -60,7 +59,6 @@ PARSERS: list[tuple[str, Callable[[bytes], Any], tuple[type[BaseException], ...]
     ("_parse_program_objects", _parse_program_objects, ()),
     # The read and write parsers report a PLC error code as RuntimeError.
     ("_parse_read_response", _parse_read_response, (RuntimeError,)),
-    ("_parse_substreamed_read_response", _parse_substreamed_read_response, (RuntimeError,)),
     ("_parse_write_response", _parse_write_response, (RuntimeError,)),
     ("_parse_write_response_errors", _parse_write_response_errors, (RuntimeError,)),
     ("_parse_get_var_substreamed_response", _parse_get_var_substreamed_response, ()),

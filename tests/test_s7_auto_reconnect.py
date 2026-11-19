@@ -69,7 +69,7 @@ def _sync_client(*answers: bytes | Exception) -> Any:
     """An auto-reconnecting client whose requests get ``answers`` in turn; reconnects are counted, not made."""
     client = S7CommPlusClient()
     client._connect_params = {"host": "127.0.0.1", "port": 102}
-    client._connection = MagicMock(requires_substreamed=False, object_qualifier_version=ProtocolVersion.V2)
+    client._connection = MagicMock(object_qualifier_version=ProtocolVersion.V2)
     client._connection.send_request.side_effect = list(answers)
     client._symbol_catalog = _catalog()
     client.auto_reconnect = True
