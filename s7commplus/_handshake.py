@@ -15,7 +15,17 @@ from typing import Callable, Optional
 from .codec import decode_header, encode_header, encode_object_qualifier
 from .error import S7AuthenticationError, S7ConnectionError
 from .legitimation import iter_struct_elements
-from .protocol import DataType, FunctionCode, Ids, LegitimationId, ObjectId, Opcode, ProtocolVersion, ServiceResult
+from .protocol import (
+    DataType,
+    FunctionCode,
+    Ids,
+    LegitimationId,
+    ObjectId,
+    Opcode,
+    ProtocolVersion,
+    ReturnValue,
+    ServiceResult,
+)
 from .v1_session_key.keys import KeyFamily
 from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq, encode_uint64_vlq
 
@@ -58,6 +68,23 @@ def _log_create_object_return_value(return_value: int, tls_active: bool) -> None
         "CreateObject returned non-zero 0x%X; continuing to parse the returned session data",
         return_value,
     )
+
+
+def _create_object_without_session_message(return_value: int) -> str:
+    """Say why a CreateObject reply carries no session ObjectId, naming the ReturnValue when there is one.
+
+    A PLC that refuses the session sends its reason as the ReturnValue and no
+    ObjectId. An S7-1500 (CPU 1512C-1 PN, FW V2.9) set to allow only secure
+    PG/PC and HMI communication answers a non-TLS CreateObject with
+    ``SERVICE_TLS_ONLY`` (#34).
+    """
+    if return_value == 0:
+        return "CreateObject response has no session ObjectId"
+    result = ReturnValue.from_int(return_value)
+    message = f"CreateObject response has no session ObjectId; the PLC returned {result} (0x{return_value:016X})"
+    if result.failed and not result.source and result.code == ServiceResult.SERVICE_TLS_ONLY:
+        message += ". The PLC accepts only TLS sessions; connect with use_tls=True"
+    return message
 
 
 def _strip_paom_string_in_session_version(struct_bytes: bytes) -> bytes:

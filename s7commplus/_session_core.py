@@ -39,6 +39,7 @@ from ._handshake import (
     _build_session_setup_frame,
     _encode_security_key_struct,
     _generate_session_key_blob,
+    _create_object_without_session_message,
     _log_create_object_return_value,
     _patch_plcsim_server_session_version,
     _session_setup_accepted,
@@ -683,7 +684,7 @@ class SessionCore:
             object_ids.append(obj_id)
 
         if not object_ids:
-            raise S7ConnectionError("CreateObject response has no session ObjectId")
+            raise S7ConnectionError(_create_object_without_session_message(return_value))
 
         # First ObjectId is the session; the second is its subscription container.
         self._session_id = object_ids[0]

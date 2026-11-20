@@ -49,9 +49,10 @@ from s7commplus.protocol import (
     ObjectId,
     Opcode,
     ProtocolVersion,
+    ServiceResult,
 )
 from s7commplus.server import S7CommPlusServer
-from s7commplus.vlq import decode_uint32_vlq, encode_uint32_vlq
+from s7commplus.vlq import decode_uint32_vlq, encode_uint32_vlq, encode_uint64_vlq
 from s7commplus.error import S7ConnectionError, S7ProtocolError
 
 
@@ -1409,6 +1410,46 @@ class TestCreateSessionRequest:
         expected = encode_header(ProtocolVersion.V1, len(frame) - 8) + request
         assert frame[: len(expected)] == expected
         assert frame[-4:] == struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
+
+    @staticmethod
+    def _refusal(return_value: int) -> bytes:
+        """A CreateObject reply with ``return_value`` and no ObjectId, as a PLC that refuses the session sends."""
+        body = bytes.fromhex("32000004ca0000000136") + encode_uint64_vlq(return_value) + b"\x00"
+        return encode_header(ProtocolVersion.V1, len(body)) + body + struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
+
+    # An S7-1500 (CPU 1512C-1 PN, FW V2.9) set to allow only secure PG/PC and HMI
+    # communication answers a non-TLS CreateObject with SERVICE_TLS_ONLY and no
+    # ObjectId (#34). The code is from that report; the bits above it are made up.
+    TLS_ONLY = (1 << 63) | (ServiceResult.SERVICE_TLS_ONLY & 0xFFFF)
+    TLS_ONLY_MESSAGE = (
+        r"no session ObjectId; the PLC returned SERVICE_TLS_ONLY \(-520\) \(0x800000000000FDF8\)\. "
+        r"The PLC accepts only TLS sessions; connect with use_tls=True"
+    )
+
+    def test_sync_names_the_tls_only_refusal(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._send_s7_data = MagicMock()
+        conn._recv_s7_data = MagicMock(return_value=self._refusal(self.TLS_ONLY))
+        with pytest.raises(S7ConnectionError, match=self.TLS_ONLY_MESSAGE):
+            conn._create_session()
+
+    @pytest.mark.asyncio
+    async def test_async_names_the_tls_only_refusal(self) -> None:
+        client = S7CommPlusAsyncClient()
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=self._refusal(self.TLS_ONLY))
+        with pytest.raises(S7ConnectionError, match=self.TLS_ONLY_MESSAGE):
+            await client._connection._create_session()
+
+    def test_other_refusals_name_their_return_value_without_the_tls_hint(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._send_s7_data = MagicMock()
+        conn._recv_s7_data = MagicMock(return_value=self._refusal((1 << 63) | (ServiceResult.SERVICE_NO_TLS & 0xFFFF)))
+        with pytest.raises(S7ConnectionError) as exc_info:
+            conn._create_session()
+        assert str(exc_info.value) == (
+            "CreateObject response has no session ObjectId; the PLC returned SERVICE_NO_TLS (-519) (0x800000000000FDF9)"
+        )
 
     @pytest.mark.asyncio
     async def test_async_detects_session_key_attributes(self) -> None:
