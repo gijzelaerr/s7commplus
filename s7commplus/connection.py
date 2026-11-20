@@ -816,11 +816,18 @@ class S7CommPlusConnection(SessionCore):
         self._check_legitimation_outcome(level_before)
 
     def _get_effective_protection_level(self) -> Optional[int]:
-        """Read the session's effective protection level (see `AccessLevel`), None if request failed."""
+        """Read the session's effective protection level (see `AccessLevel`), None if the PLC did not report one.
+
+        Raises:
+            S7ConnectionError: The connection was lost during the read. Until then the
+                session can look established, so this is the first request to find out.
+        """
         try:
             reply = self.send_request(FunctionCode.GET_VAR_SUBSTREAMED, self._protection_level_payload(), integrity_tail=4)
             return _parse_protection_level_response(reply)
         except S7ConnectionError as exc:
+            if not self._iso_conn.connected:
+                raise
             logger.warning(f"PLC did not report a protection level: {exc}")
             return None
 

@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import socket
 import struct
 import threading
 from typing import Optional
@@ -1564,6 +1565,58 @@ class TestProtectionLevel:
             _build_get_var_substreamed_payload(0x01020304, Ids.EFFECTIVE_PROTECTION_LEVEL),
             integrity_tail=4,
         )
+
+    # Seen on S7-1500 CPUs that refused the SessionKey (#34): the PLC resets the
+    # connection on the first request after SessionSetup, which can be this read.
+    def test_sync_read_raises_when_the_peer_closes_the_connection(self, caplog: pytest.LogCaptureFixture) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._session_id = 0x01020304
+        ours, plc = socket.socketpair()
+        conn._iso_conn.socket, conn._iso_conn.connected = ours, True
+        conn._session_ready = True  # as during connect(), before it sets _connected
+        plc.close()
+        try:
+            with pytest.raises(S7ConnectionError):
+                conn._get_effective_protection_level()
+        finally:
+            ours.close()
+        assert not conn._iso_conn.connected
+        assert "did not report a protection level" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_async_read_raises_when_the_peer_closes_the_connection(self, caplog: pytest.LogCaptureFixture) -> None:
+        conn = S7CommPlusAsyncClient()._connection
+        conn._session_id = 0x01020304
+        ours, plc = socket.socketpair()
+        conn._reader, writer = await asyncio.open_connection(sock=ours)
+        conn._writer = writer
+        conn._connected = conn._transport_connected = True
+        plc.close()
+        try:
+            with pytest.raises(S7ConnectionError):
+                await conn._get_effective_protection_level()
+        finally:
+            writer.close()
+        assert conn._writer is None
+        assert "did not report a protection level" not in caplog.text
+
+    def test_sync_read_reports_none_when_the_plc_refuses_it(self, caplog: pytest.LogCaptureFixture) -> None:
+        # a refused read leaves the connection usable, so connect() goes on without a level
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._iso_conn.connected = True
+        conn.send_request = MagicMock(side_effect=S7ConnectionError("GetVarSubStreamed failed"))
+        with caplog.at_level(logging.WARNING, logger="s7commplus.connection"):
+            assert conn._get_effective_protection_level() is None
+        assert "PLC did not report a protection level: GetVarSubStreamed failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_async_read_reports_none_when_the_plc_refuses_it(self, caplog: pytest.LogCaptureFixture) -> None:
+        conn = S7CommPlusAsyncClient()._connection
+        conn._writer = MagicMock()
+        conn.send_request = AsyncMock(side_effect=S7ConnectionError("GetVarSubStreamed failed"))
+        with caplog.at_level(logging.WARNING, logger="s7commplus.async_connection"):
+            assert await conn._get_effective_protection_level() is None
+        assert "PLC did not report a protection level: GetVarSubStreamed failed" in caplog.text
 
 
 class TestSessionKeyTransportFlags:

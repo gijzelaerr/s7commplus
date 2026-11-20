@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -148,6 +148,8 @@ def _solve(challenge: bytes, public_key: bytes, family: KeyFamily, session_key: 
 def _sync_conn(script: _Script) -> S7CommPlusConnection:
     conn = S7CommPlusConnection("127.0.0.1")
     conn.send_request = lambda fc, payload=b"", integrity_tail=4, reassemble=False: script.answer(fc, payload, integrity_tail)  # type: ignore[method-assign]
+    # The scripted replies come over a live connection, so an error among them is the PLC's answer, not a lost transport.
+    conn._iso_conn.connected = True
     return conn
 
 
@@ -159,6 +161,8 @@ def _async_client(script: _Script) -> S7CommPlusAsyncConnection:
 
     client.send_request = send  # type: ignore[method-assign]
     client._send_request_locked = send  # type: ignore[method-assign]
+    # As for the sync connection: the replies come over a live stream, which nothing here writes to.
+    client._writer = MagicMock()
     return client
 
 
