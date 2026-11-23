@@ -27,7 +27,7 @@ from .protocol import (
     ServiceResult,
 )
 from .v1_session_key.keys import KeyFamily
-from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq, encode_uint64_vlq
+from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_int32_vlq, encode_uint32_vlq, encode_uint64_vlq
 
 # Logged under the connection module's name, as before the move.
 logger = logging.getLogger("s7commplus.connection")
@@ -444,15 +444,12 @@ def _build_set_operating_state_payload(in_object_id: int, state: int) -> bytes:
 
     Reuses the plain SetVariable layout (:func:`_build_set_variable_payload`),
     targeting the CPUexecUnit object. The operating-state request value is
-    carried as a USINT PValue, the same ``[flags][USINT][VLQ value]`` shape TIA
-    Portal uses for the address-323 session activation.
+    carried as a DINT PValue, ``[flags][DINT][signed VLQ value]``.
 
-    .. warning::
-
-        The request layout, the USINT datatype of ``OperatingStateREQ`` and the
-        :class:`~s7commplus.protocol.OperatingStateRequest` values are **not
-        verified against a real PLC**; see
-        https://github.com/gijzelaerr/s7commplus/issues/8.
+    A CPU 1512C-1 PN (firmware V2.9, over TLS) accepted this request for STOP
+    and RUN and changed state. It refuses the value as a USINT with
+    ``INVALID_VALUE_TYPE``. Other CPUs, firmware versions and request values are
+    untested; see https://github.com/gijzelaerr/s7commplus/issues/8.
 
     Args:
         in_object_id: RID of the CPUexecUnit object (``Ids.NATIVE_THE_CPU_EXEC_UNIT_RID``).
@@ -461,7 +458,7 @@ def _build_set_operating_state_payload(in_object_id: int, state: int) -> bytes:
     Returns:
         Encoded SetVariable payload, ready for ``send_request(integrity_tail=4)``.
     """
-    value = bytes([0x00, DataType.USINT]) + encode_uint32_vlq(state)
+    value = bytes([0x00, DataType.DINT]) + encode_int32_vlq(state)
     return _build_set_variable_payload(in_object_id, Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ, value)
 
 

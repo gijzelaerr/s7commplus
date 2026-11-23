@@ -839,9 +839,10 @@ class S7CommPlusAsyncClient(_ClientMethods):
         Earlier versions sent a guessed INVOKE request, never checked the PLC's
         answer and numbered the states differently from the PLC's
         ``OperatingStateREQ`` values (`OperatingStateRequest`), so they could
-        report success when nothing changed. Until the request is derived from
-        a real RUN/STOP capture and validated on hardware (issue #8), this
-        refuses without sending anything.
+        report success when nothing changed. The request that
+        :meth:`request_operating_state` sends has been confirmed on one PLC
+        only (issue #8); until it is validated more widely, this refuses
+        without sending anything.
 
         Args:
             state: Target operating state.
@@ -850,8 +851,8 @@ class S7CommPlusAsyncClient(_ClientMethods):
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "Changing the PLC operating state is not implemented yet: the request has not been validated "
-            "on a real PLC (https://github.com/gijzelaerr/s7commplus/issues/8)"
+            "Changing the PLC operating state is not implemented yet: the request has been validated "
+            "on one PLC only (https://github.com/gijzelaerr/s7commplus/issues/8)"
         )
 
     @_retry_on_dropped_connection
@@ -874,11 +875,11 @@ class S7CommPlusAsyncClient(_ClientMethods):
 
         .. warning::
 
-            **Experimental and unverified.** The request layout, the datatype of
-            ``OperatingStateREQ`` (0x877) and the
-            :class:`~s7commplus.protocol.OperatingStateRequest` values it carries
-            have **not** been confirmed against a real PLC; the derivation and
-            validation of this write path is issue
+            **Experimental.** ``STOP`` and ``RUN`` have been confirmed on one
+            PLC only, a CPU 1512C-1 PN with firmware V2.9, over TLS. Other CPUs,
+            firmware versions and the other
+            :class:`~s7commplus.protocol.OperatingStateRequest` values are
+            untested; the validation of this write path is issue
             `#8 <https://github.com/gijzelaerr/s7commplus/issues/8>`_. Use only
             against a dedicated, non-production, non-safety-critical controller.
 

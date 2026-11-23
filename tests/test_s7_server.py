@@ -245,6 +245,21 @@ class TestClientServerIntegration:
             assert run.ok
             assert client.get_cpu_state() == "RUN"
 
+    def test_emulator_refuses_an_operating_state_request_that_is_not_a_dint(self, server: S7CommPlusServer) -> None:
+        """A real CPU answers a USINT value with INVALID_VALUE_TYPE (issue #8)."""
+        from s7commplus.connection import _build_set_variable_payload
+
+        server.cpu_state = CPUState.RUN
+        value_offset = 4 + 1 + 2  # InObjectId, AddressCount, attribute 0x877 as a two-byte VLQ
+        for datatype, accepted in ((DataType.USINT, False), (DataType.DINT, True)):
+            request = _build_set_variable_payload(
+                Ids.NATIVE_THE_CPU_EXEC_UNIT_RID,
+                Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ,
+                bytes([0x00, datatype, OperatingStateRequest.STOP]),
+            )
+            assert server._apply_operating_state_request(request, value_offset) is accepted
+            assert server.cpu_state == (CPUState.STOP if accepted else CPUState.RUN)
+
     def test_request_operating_state_requires_connection(self) -> None:
         with pytest.raises(RuntimeError, match="Not connected"):
             S7CommPlusClient().request_operating_state(OperatingStateRequest.STOP)

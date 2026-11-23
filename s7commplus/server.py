@@ -61,7 +61,7 @@ from .protocol import (
     ProtocolVersion,
     SoftDataType,
 )
-from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_int32_vlq, encode_uint32_vlq, encode_uint64_vlq
+from .vlq import decode_int32_vlq, decode_uint32_vlq, decode_uint64_vlq, encode_int32_vlq, encode_uint32_vlq, encode_uint64_vlq
 
 logger = logging.getLogger(__name__)
 
@@ -1609,14 +1609,16 @@ class S7CommPlusServer:
     def _apply_operating_state_request(self, request_data: bytes, offset: int) -> bool:
         """Apply a ``STOP``/``RUN`` OperatingStateREQ write to :attr:`cpu_state`; False if it is malformed.
 
-        This mirrors only the request/response shape produced by
-        ``_build_set_operating_state_payload``; it is not a verified model of a
-        real PLC's behaviour (see issue #8). Other values are accepted without
-        changing state.
+        The value must be a DINT: a CPU 1512C-1 PN (firmware V2.9) accepts that
+        and refuses a USINT (see issue #8). Beyond that this mirrors only the
+        request/response shape produced by ``_build_set_operating_state_payload``.
+        Other values are accepted without changing state.
         """
         try:
             # PValue: flags byte, datatype byte, then the VLQ-encoded value.
-            state_value, _ = decode_uint32_vlq(request_data, offset + 2)
+            if request_data[offset + 1] != DataType.DINT:
+                return False
+            state_value, _ = decode_int32_vlq(request_data, offset + 2)
         except (IndexError, ValueError):
             return False
         new_state = {

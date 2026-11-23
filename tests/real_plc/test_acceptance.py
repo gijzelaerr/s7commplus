@@ -277,7 +277,7 @@ def cpu_state_matches(scenario_state: dict[str, Any], plc_config: PLCConfig) -> 
         assert scenario_state["cpu_state"] == plc_config.expected_cpu_state
 
 
-# --- Operating-state control (administrative, unverified: issue #8) ---------
+# --- Operating-state control (administrative, experimental: issue #8) -------
 
 # A real CPU takes a moment to reach the requested state after acknowledging the
 # request; poll get_cpu_state() rather than assume the change is instantaneous.

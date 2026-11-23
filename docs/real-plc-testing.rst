@@ -24,9 +24,10 @@ in-service PLC.
    The one administrative scenario, ``Stop and restart the CPU and record the
    exchange`` (``tests/features/real_plc/administrative.feature``), **halts the
    CPU**: it sends a STOP operating-state request, waits until the controller
-   reports STOP, then sends RUN. The RUN/STOP request layout is **not verified
-   on hardware** (`issue #8 <https://github.com/gijzelaerr/s7commplus/issues/8>`_)
-   — running this scenario *is* the evidence that settles it. A stopped CPU
+   reports STOP, then sends RUN. The RUN/STOP request layout is **confirmed on
+   one CPU only**, a 1512C-1 PN with firmware V2.9
+   (`issue #8 <https://github.com/gijzelaerr/s7commplus/issues/8>`_) — running
+   this scenario on another CPU or firmware adds to that evidence. A stopped CPU
    drops its outputs: this can trip machinery, spoil a process, or create a
    hazard. Run it only on a **dedicated, bench-top, non-production,
    non-safety-critical** controller that is physically disconnected from any

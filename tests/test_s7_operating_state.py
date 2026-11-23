@@ -54,13 +54,14 @@ class TestOperatingStateRequestValues:
 
 
 class TestSetOperatingStateRequestLayout:
-    """Byte-exact layout of the (unverified, see #8) OperatingStateREQ write."""
+    """Byte-exact layout of the OperatingStateREQ write."""
 
-    # Captured from _build_set_operating_state_payload before the IntegrityId is
-    # spliced in; the derivation is unvalidated on hardware (issue #8). The only
-    # byte that changes between STOP and RUN is the USINT request value.
-    STOP = bytes.fromhex("00000034019077000201000004e88969001200000000896a001300896b000400000000000000")
-    RUN = bytes.fromhex("00000034019077000203000004e88969001200000000896a001300896b000400000000000000")
+    # The requests a CPU 1512C-1 PN (FW V2.9, over TLS) accepted for a
+    # RUN -> STOP -> RUN cycle (issue #8), before the IntegrityId is spliced in.
+    # The value is a DINT: the CPU refuses a USINT with INVALID_VALUE_TYPE. The
+    # only byte that changes between STOP and RUN is the request value.
+    STOP = bytes.fromhex("00000034019077000801000004e88969001200000000896a001300896b000400000000000000")
+    RUN = bytes.fromhex("00000034019077000803000004e88969001200000000896a001300896b000400000000000000")
 
     def test_stop_request_is_byte_exact(self) -> None:
         assert _build_set_operating_state_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, OperatingStateRequest.STOP) == self.STOP
@@ -71,7 +72,7 @@ class TestSetOperatingStateRequestLayout:
     def test_only_the_state_value_byte_differs(self) -> None:
         differing = [i for i, (a, b) in enumerate(zip(self.STOP, self.RUN)) if a != b]
         assert len(self.STOP) == len(self.RUN)
-        assert differing == [9]  # the USINT value, right after [InObjectId][count][0x877][flags][USINT]
+        assert differing == [9]  # the DINT value, right after [InObjectId][count][0x877][flags][DINT]
         assert self.STOP[9] == OperatingStateRequest.STOP
         assert self.RUN[9] == OperatingStateRequest.RUN
 
@@ -79,12 +80,12 @@ class TestSetOperatingStateRequestLayout:
         payload = _build_set_operating_state_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, OperatingStateRequest.STOP)
         assert payload[:4] == Ids.NATIVE_THE_CPU_EXEC_UNIT_RID.to_bytes(4, "big")
         assert payload[4] == 1  # AddressCount VLQ (single-byte)
-        # Attribute 0x877 as a two-byte VLQ, then the USINT PValue header.
+        # Attribute 0x877 as a two-byte VLQ, then the DINT PValue header.
         assert payload[5:7] == bytes([0x90, 0x77])
-        assert payload[7:9] == bytes([0x00, DataType.USINT])
+        assert payload[7:9] == bytes([0x00, DataType.DINT])
 
     def test_reuses_the_plain_set_variable_wrapper(self) -> None:
         # The builder must be the plain SetVariable layout, not a bespoke frame.
-        value = bytes([0x00, DataType.USINT]) + bytes([OperatingStateRequest.RUN])
+        value = bytes([0x00, DataType.DINT]) + bytes([OperatingStateRequest.RUN])
         expected = _build_set_variable_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, Ids.CPU_EXEC_UNIT_OPERATING_STATE_REQ, value)
         assert _build_set_operating_state_payload(Ids.NATIVE_THE_CPU_EXEC_UNIT_RID, OperatingStateRequest.RUN) == expected

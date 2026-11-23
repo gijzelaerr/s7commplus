@@ -300,7 +300,7 @@ class Ids(IntEnum):
     # id 0xD99. On hardware, a read-only probe of a CPU 1215C DC/DC/DC (FW V4.2)
     # read the same struct id with code 8 in RUN; STOP is unverified there. The
     # writable counterpart OperatingStateREQ (0x877) takes the
-    # OperatingStateRequest values. Names: thomas-v2/S7CommPlusDriver/Core/Ids.cs
+    # OperatingStateRequest values as a DINT. Names: thomas-v2/S7CommPlusDriver/Core/Ids.cs
     # (CPUexecUnit.*)
     CPU_EXEC_UNIT_OPERATING_STATE_STRUCT = 0x8BD
     CPU_EXEC_UNIT_OPERATING_STATE_STRUCT_ID = 0xD99
@@ -1046,9 +1046,9 @@ class ServiceResult(IntEnum):
 class OperatingStateRequest(IntEnum):
     """Values written to CPUexecUnit.OperatingStateREQ (attribute 0x877).
 
-    Source: TIA Portal captures of operating-state requests. Unverified
-    against a real PLC — see #8. Any future write path must be opt-in and
-    clearly named, per that issue.
+    The attribute is a DINT. Source: TIA Portal captures of operating-state
+    requests. ``STOP`` and ``RUN`` are confirmed on a CPU 1512C-1 PN, firmware
+    V2.9; the other values are unverified — see #8.
     """
 
     STOP = 1
