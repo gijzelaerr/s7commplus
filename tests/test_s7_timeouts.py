@@ -56,7 +56,10 @@ class _Pipe:
         self._passed: Optional[int] = None
         self._delay = 0.0
         self._lock = threading.Lock()
-        for src, dst, from_server in ((client, upstream, False), (upstream, client, True)):
+
+    def start(self) -> None:
+        """Start relaying in both directions."""
+        for src, dst, from_server in ((self.client, self.upstream, False), (self.upstream, self.client, True)):
             threading.Thread(target=self._forward, args=(src, dst, from_server), daemon=True).start()
 
     def withhold_replies(self, after: int = 0) -> None:
@@ -124,7 +127,11 @@ class _Proxy:
                 client, _ = self._listener.accept()
             except OSError:
                 return
-            self._pipes.append(_Pipe(client, socket.create_connection(("127.0.0.1", self._target_port))))
+            pipe = _Pipe(client, socket.create_connection(("127.0.0.1", self._target_port)))
+            # Register the pipe before it relays anything: once it does, the
+            # client can finish connecting and ask for ``pipe`` straight away.
+            self._pipes.append(pipe)
+            pipe.start()
 
     def close(self) -> None:
         self._listener.close()
