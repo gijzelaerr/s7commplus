@@ -573,6 +573,111 @@ def _session_version_with_device_string(device_string: str) -> bytes:
     )
 
 
+class TestLegitimationResponseCheck:
+    """The SetVariable reply to a TLS legitimation names a wrong password as such."""
+
+    @pytest.mark.parametrize(
+        "return_value",
+        [
+            int(ServiceResult.SERVICE_SESSION_DELEGITIMATED),  # 22
+            int(ServiceResult.SERVICE_SESSION_DELEGITIMATED_LEGACY) & 0xFFFFFFFFFFFFFFFF,  # -118
+            0x8318890001B30016,  # a composite whose low word is 22, as on the V1 path
+        ],
+    )
+    def test_delegitimated_code_raises_authentication_error(self, return_value: int) -> None:
+        from s7commplus.connection import _check_legitimation_response
+        from s7commplus.error import S7AuthenticationError
+
+        with pytest.raises(S7AuthenticationError, match="wrong password"):
+            _check_legitimation_response(encode_uint64_vlq(return_value) + bytes(4), FunctionCode.SET_VARIABLE)
+
+    def test_other_refusal_still_raises_connection_error(self) -> None:
+        from s7commplus.connection import _check_legitimation_response
+        from s7commplus.error import S7AuthenticationError
+
+        refused = encode_uint64_vlq(0x8318890001B3FFFE) + bytes(4)  # code -2, not a password answer
+        with pytest.raises(S7ConnectionError, match="rejected") as info:
+            _check_legitimation_response(refused, FunctionCode.SET_VARIABLE)
+        assert not isinstance(info.value, S7AuthenticationError)
+
+    def test_generic_error_frame_is_not_read_as_a_password_answer(self) -> None:
+        from s7commplus.connection import _check_legitimation_response
+        from s7commplus.error import S7AuthenticationError
+
+        frame = encode_uint32_vlq(22) + bytes(4)
+        with pytest.raises(S7ConnectionError, match="generic error") as info:
+            _check_legitimation_response(frame, FunctionCode.ERROR)
+        assert not isinstance(info.value, S7AuthenticationError)
+
+    @pytest.mark.parametrize("return_value", [0, int(ServiceResult.SERVICE_LEGITIMATED_FOR_LEVEL2)])
+    def test_acceptance_passes(self, return_value: int) -> None:
+        from s7commplus.connection import _check_legitimation_response
+
+        _check_legitimation_response(encode_uint64_vlq(return_value) + bytes(4), FunctionCode.SET_VARIABLE)
+
+
+class TestAuthenticateOutcome:
+    """A level that does not drop is a refused password; a missing level is not.
+
+    Nothing in the emulator or the captures shows how a real PLC answers a wrong
+    password on a TLS session, so both clients are checked with the exchange
+    mocked, after the reply checks have passed.
+    """
+
+    def _connection(self, level_after: Optional[int]) -> S7CommPlusConnection:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._connected = True
+        conn._tls_active = True
+        conn._protection_level = AccessLevel.NO_ACCESS
+        conn._oms_secret = bytes(32)
+        conn._server_session_version = PLCSIM_ADVANCED_V8_SESSION_VERSION
+        conn._get_legitimation_challenge = MagicMock(return_value=bytes(20))
+        conn._send_legitimation_new = MagicMock()
+        conn._get_effective_protection_level = MagicMock(return_value=level_after)
+        return conn
+
+    def _async_client(self, level_after: Optional[int]) -> S7CommPlusAsyncClient:
+        client = S7CommPlusAsyncClient()
+        conn = client._connection
+        conn._connected = True
+        conn._tls_active = True
+        conn._protection_level = AccessLevel.NO_ACCESS
+        conn._oms_secret = bytes(32)
+        conn._server_session_version = PLCSIM_ADVANCED_V8_SESSION_VERSION
+        conn._get_legitimation_challenge = AsyncMock(return_value=bytes(20))
+        conn._send_legitimation_new = AsyncMock()
+        conn._get_effective_protection_level = AsyncMock(return_value=level_after)
+        return client
+
+    def test_unchanged_level_raises_authentication_error(self) -> None:
+        from s7commplus.error import S7AuthenticationError
+
+        with pytest.raises(S7AuthenticationError, match="password was refused"):
+            self._connection(AccessLevel.NO_ACCESS).authenticate("wrong")
+
+    def test_missing_level_raises_connection_error(self) -> None:
+        from s7commplus.error import S7AuthenticationError
+
+        with pytest.raises(S7ConnectionError, match="unverifiable") as info:
+            self._connection(None).authenticate("wrong")
+        assert not isinstance(info.value, S7AuthenticationError)
+
+    @pytest.mark.asyncio
+    async def test_async_unchanged_level_raises_authentication_error(self) -> None:
+        from s7commplus.error import S7AuthenticationError
+
+        with pytest.raises(S7AuthenticationError, match="password was refused"):
+            await self._async_client(AccessLevel.NO_ACCESS).authenticate("wrong")
+
+    @pytest.mark.asyncio
+    async def test_async_missing_level_raises_connection_error(self) -> None:
+        from s7commplus.error import S7AuthenticationError
+
+        with pytest.raises(S7ConnectionError, match="unverifiable") as info:
+            await self._async_client(None).authenticate("wrong")
+        assert not isinstance(info.value, S7AuthenticationError)
+
+
 class TestAuthenticateOnOverlongFirmwareVersion:
     """A device string with thousands of minor-version digits is refused as unsupported.
 

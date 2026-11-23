@@ -45,7 +45,7 @@ from ._handshake import (
     _session_setup_accepted,
 )
 from .codec import SERVER_SESSION_ROLE_SECURED_BIT, decode_header, encode_header, parse_create_object_attributes
-from .error import S7ConnectionError, S7IntegrityError, S7ProtocolError
+from .error import S7AuthenticationError, S7ConnectionError, S7IntegrityError, S7ProtocolError
 from .legitimation import (
     build_legacy_response,
     build_new_response,
@@ -992,11 +992,16 @@ class SessionCore:
         return _build_get_var_substreamed_payload(self._session_id, Ids.EFFECTIVE_PROTECTION_LEVEL)
 
     def _check_legitimation_outcome(self, level_before: int) -> None:
-        """Raise unless the protection level read after legitimating dropped below ``level_before``."""
+        """Raise unless the protection level read after legitimating dropped below ``level_before``.
+
+        A level that did not drop means the PLC refused the password, which
+        raises :class:`S7AuthenticationError`. A level the PLC no longer
+        reports leaves the outcome unknown, which raises ``S7ConnectionError``.
+        """
         if self._protection_level is None:
             raise S7ConnectionError("Legitimation outcome is unverifiable: the PLC stopped reporting its protection level")
         if self._protection_level >= level_before:
-            raise S7ConnectionError(
+            raise S7AuthenticationError(
                 f"Legitimation failed, protection level unchanged at {self._protection_level}: the password was refused"
             )
         logger.info(f"PLC legitimation completed, protection level {level_before} -> {self._protection_level}")

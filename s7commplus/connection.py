@@ -73,6 +73,7 @@ from ._handshake import (
     _build_set_variable_payload as _build_set_variable_payload,
     _build_v1_get_var_substreamed_payload as _build_v1_get_var_substreamed_payload,
     _build_v1_legitimation_payload as _build_v1_legitimation_payload,
+    _check_legitimation_response as _check_legitimation_response,
     _check_set_variable_response as _check_set_variable_response,
     _check_v1_legitimation_response as _check_v1_legitimation_response,
     _parse_get_var_substreamed_response as _parse_get_var_substreamed_response,
@@ -796,8 +797,10 @@ class S7CommPlusConnection(SessionCore):
             username: Username for the new-mode exchange (leave empty for legacy)
 
         Raises:
+            S7AuthenticationError: If the PLC refused the password.
             S7ConnectionError: If not connected, TLS is not active, the firmware
-                does not support legitimation, or the password was refused
+                does not support legitimation, or the PLC refused the
+                legitimation for another reason.
         """
         if not self._connected:
             raise S7ConnectionError("Not connected")
@@ -848,7 +851,7 @@ class S7CommPlusConnection(SessionCore):
         Uses SetVariable with address Legitimate (1846).
         """
         reply = self.send_request(FunctionCode.SET_VARIABLE, self._new_legitimation_payload(encrypted_response), integrity_tail=4)
-        _check_set_variable_response(reply, self._last_response_function)
+        _check_legitimation_response(reply, self._last_response_function)
 
     def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR).
@@ -856,7 +859,7 @@ class S7CommPlusConnection(SessionCore):
         Uses SetVariable with address ServerSessionResponse (304).
         """
         reply = self.send_request(FunctionCode.SET_VARIABLE, self._legacy_legitimation_payload(response), integrity_tail=4)
-        _check_set_variable_response(reply, self._last_response_function)
+        _check_legitimation_response(reply, self._last_response_function)
 
     def collect_explore_frames(self, first_payload: bytes) -> bytes:
         """Collect unauthenticated multi-fragment EXPLORE continuation frames.

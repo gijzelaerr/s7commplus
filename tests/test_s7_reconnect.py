@@ -16,7 +16,7 @@ import pytest
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
 from s7commplus.connection import S7CommPlusConnection
-from s7commplus.error import S7ConnectionError, S7NotConnectedError
+from s7commplus.error import S7AuthenticationError, S7ConnectionError, S7NotConnectedError
 from s7commplus.protocol import DataType, Ids, LegitimationType, ProtocolVersion
 from s7commplus.server import S7CommPlusServer
 from tests.test_s7_tls import _generate_self_signed_cert
@@ -142,7 +142,7 @@ async def test_async_refused_authenticate_keeps_the_stored_credentials() -> None
     client._connection._connected = True
     client._connection._tls_active = True
     client._connection._protection_level = 3
-    with _legitimation(client, level_after=3), pytest.raises(S7ConnectionError, match="refused"):
+    with _legitimation(client, level_after=3), pytest.raises(S7AuthenticationError, match="refused"):
         await client.authenticate("wrong", "intruder")  # the PLC refuses the password
     assert client._connect_params == {"password": "known", "username": ""}
 

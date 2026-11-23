@@ -485,6 +485,24 @@ def _check_set_variable_response(payload: bytes, function: Optional[int] = None)
         raise S7ConnectionError(f"Legitimation rejected by PLC: return_value=0x{return_value:X}")
 
 
+def _check_legitimation_response(payload: bytes, function: Optional[int] = None) -> None:
+    """Raise when the PLC refuses the legitimation response of a TLS session.
+
+    A return value whose code is one of the delegitimated codes means the
+    password was wrong and raises :class:`S7AuthenticationError`, as
+    :func:`_check_v1_legitimation_response` does on the V1 path. Every other
+    refusal is left to :func:`_check_set_variable_response`.
+    """
+    if function != FunctionCode.ERROR and payload:
+        try:
+            return_value, _ = decode_uint64_vlq(payload, 0)
+        except ValueError:
+            return_value = None
+        if return_value is not None and ReturnValue.from_int(return_value).code in _LEGITIMATION_REJECTED:
+            raise S7AuthenticationError(f"Legitimation rejected by PLC (wrong password): return_value=0x{return_value:X}")
+    _check_set_variable_response(payload, function)
+
+
 def _v1_integrity_tail(family: KeyFamily) -> int:
     """Trailing fill bytes of V1 SessionKey substreamed requests: 3 on the S7-1200, 4 on the S7-1500."""
     return 3 if family == KeyFamily.S7_1200 else 4

@@ -40,7 +40,7 @@ from .connection import (
     SessionKeyAuthenticationDependencyError,
     SessionKeyCandidateRejectedError,
     _alarm_texts_and_domain_filter,
-    _check_set_variable_response,
+    _check_legitimation_response,
     _check_v1_legitimation_response,
     _build_subscription_credit_frame,
     _check_certificate_pin,
@@ -504,12 +504,12 @@ class S7CommPlusAsyncConnection(SessionCore):
         reply = await self.send_request(
             FunctionCode.SET_VARIABLE, self._new_legitimation_payload(encrypted_response), integrity_tail=4
         )
-        _check_set_variable_response(reply, self._last_response_function)
+        _check_legitimation_response(reply, self._last_response_function)
 
     async def _send_legitimation_legacy(self, response: bytes) -> None:
         """Send legacy legitimation response (SHA-1 XOR)."""
         reply = await self.send_request(FunctionCode.SET_VARIABLE, self._legacy_legitimation_payload(response), integrity_tail=4)
-        _check_set_variable_response(reply, self._last_response_function)
+        _check_legitimation_response(reply, self._last_response_function)
 
     async def _close(self) -> None:
         """Tear down the session and transport, keeping the connect parameters and any renewal failure."""

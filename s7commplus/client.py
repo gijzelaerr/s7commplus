@@ -996,8 +996,10 @@ class S7CommPlusClient(_ClientMethods):
 
         Raises:
             S7NotConnectedError: If not connected.
+            S7AuthenticationError: If the PLC refused the password.
             S7ConnectionError: If TLS is not active, the firmware does not
-                support legitimation, or the password was refused.
+                support legitimation, or the PLC refused the legitimation
+                for another reason.
         """
         connection = self._require_connected()
         level_before = connection.protection_level
