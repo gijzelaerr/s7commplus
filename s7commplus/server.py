@@ -28,6 +28,7 @@ Usage::
 import hashlib
 import hmac
 import logging
+import select
 import socket
 import ssl
 import struct
@@ -246,6 +247,9 @@ class S7CommPlusServer:
     - Multi-client support (threaded)
     - CPU state management
     """
+
+    #: Seconds a client socket waits for data before the request loop gives up on it.
+    _client_timeout: float = 5.0
 
     def __init__(
         self,
@@ -569,7 +573,7 @@ class S7CommPlusServer:
     def _handle_client(self, client_sock: socket.socket, address: tuple[str, int]) -> None:
         """Handle a single client connection."""
         try:
-            client_sock.settimeout(5.0)
+            client_sock.settimeout(self._client_timeout)
 
             # Step 1: COTP handshake
             if not self._handle_cotp_connect(client_sock):
@@ -785,7 +789,13 @@ class S7CommPlusServer:
         return bytes(application_data)
 
     def _server_tls_handshake(self, sock: socket.socket) -> tuple[Any, Any, Any]:
-        """Perform the server-side TLS handshake, tunneling records through COTP DT frames."""
+        """Perform the server-side TLS handshake, tunneling records through COTP DT frames.
+
+        Between records it waits for as long as the server runs, not just the
+        socket timeout: closing the socket while the client still owes its
+        Finished makes that Finished draw a reset, and the client then fails
+        on its first request after the handshake (CI runners can stall that long).
+        """
         assert self._ssl_context is not None
         in_bio = ssl.MemoryBIO()
         out_bio = ssl.MemoryBIO()
@@ -798,6 +808,8 @@ class S7CommPlusServer:
                 out = out_bio.read()
                 if out:
                     self._send_cotp_dt_raw(sock, out)
+                while self._running and not select.select([sock], [], [], 0.5)[0]:
+                    pass
                 rec = self._recv_s7commplus_frame(sock)
                 if rec is None:
                     raise ConnectionError("client closed during TLS handshake")

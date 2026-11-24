@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from s7commplus import transport
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
 from s7commplus.connection import _resolve_use_tls
@@ -178,6 +179,39 @@ def test_auto_uses_tls_when_offered(tls_server: tuple[int, str]) -> None:
             assert client.peer_certificate_fingerprint() == bytes.fromhex(_certificate_sha256_hex(cert_path))
         finally:
             client.disconnect()
+
+
+@pytest.mark.skipif(not _has_cryptography, reason="requires cryptography package")
+def test_emulator_waits_out_a_client_that_stalls_before_its_finished(
+    cert_pair: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runner stalling past the socket timeout mid-handshake must not reset the session.
+
+    The emulator used to close the socket when the client's Finished took longer
+    than the socket timeout; the Finished then drew a reset and the first request
+    failed with "Send failed: [WinError 10053]" (seen once on a Windows runner).
+    """
+    cert_path, key_path = cert_pair
+    srv = S7CommPlusServer(protocol_version=ProtocolVersion.V2)
+    srv._client_timeout = 0.2
+    srv.register_raw_db(1, bytearray(b"\x56\x78" + bytes(14)))
+    srv.start(port=0, use_tls=True, tls_cert=cert_path, tls_key=key_path)
+    send_data = transport.ISOTCPConnection.send_data
+
+    def stall_before_the_finished(self: transport.ISOTCPConnection, data: bytes) -> None:
+        if data[:3] == b"\x14\x03\x03":  # the client's ChangeCipherSpec, then its Finished
+            time.sleep(0.5)
+        send_data(self, data)
+
+    monkeypatch.setattr(transport.ISOTCPConnection, "send_data", stall_before_the_finished)
+    client = S7CommPlusClient()
+    try:
+        client.connect("127.0.0.1", port=srv.port, use_tls="auto")
+        assert client.peer_certificate_fingerprint() == bytes.fromhex(_certificate_sha256_hex(cert_path))
+        assert client.db_read(1, 0, 2) == b"\x56\x78"
+    finally:
+        client.disconnect()
+        srv.stop()
 
 
 @pytest.mark.skipif(not _has_cryptography, reason="requires cryptography package")
