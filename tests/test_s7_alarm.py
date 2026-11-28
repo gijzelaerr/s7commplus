@@ -323,7 +323,7 @@ def test_sync_alarm_client_apis() -> None:
     client.delete_alarm_subscription(0x55667788)
     delete_call = connection.send_request.call_args_list[-1]
     assert delete_call.args[0] == FunctionCode.DELETE_OBJECT
-    assert delete_call.args[1].startswith(struct.pack(">I", 0x1235))
+    assert delete_call.args[1].startswith(struct.pack(">I", 0x55667788))
 
 
 @pytest.mark.asyncio

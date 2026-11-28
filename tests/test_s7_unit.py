@@ -1876,13 +1876,13 @@ class TestWriteDeleteQualifierVersion:
     def _expected_delete(version: int) -> bytes:
         from s7commplus.subscription import build_delete_subscription_request
 
-        return build_delete_subscription_request(0x70000F90, version)
+        return build_delete_subscription_request(0x70000F91, version)  # the subscription, not the container
 
     @staticmethod
     def _expected_alarm_delete(version: int) -> bytes:
         from s7commplus.alarm import build_delete_alarm_subscription_request
 
-        return build_delete_alarm_subscription_request(0x70000F90, version)
+        return build_delete_alarm_subscription_request(0x70000F92, version)
 
     @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_sync_client(self, family: str, version: int) -> None:

@@ -201,7 +201,7 @@ class TestSubscriptionClient:
         client.delete_subscription(subscription_id)
         delete_call = connection.send_request.call_args_list[1]
         assert delete_call.args[0] == FunctionCode.DELETE_OBJECT
-        assert delete_call.args[1].startswith(struct.pack(">I", connection.subscription_container_id))
+        assert delete_call.args[1].startswith(struct.pack(">I", subscription_id))
 
     def test_catalog_tag_notification_is_decoded_and_raw_value_is_retained(self) -> None:
         connection = MagicMock(subscription_container_id=0x3C2, protocol_version=ProtocolVersion.V2)
@@ -267,11 +267,13 @@ class TestSubscriptionClient:
         assert client.receive_subscription_notification(second).subscription_id == second
         assert connection.receive_notification.call_count == 2
 
-    def test_deleting_container_retires_all_child_subscriptions(self) -> None:
+    def test_deleting_one_subscription_keeps_the_others(self) -> None:
+        # Deleting the session's subscription container made every later create fail with
+        # OBJECT_NOT_FOUND on real PLCs; the client now deletes only the subscription object.
         connection = MagicMock(subscription_container_id=0x3C2, protocol_version=ProtocolVersion.V2)
         connection.send_request.side_effect = [
-            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400025),
-            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400026),
+            encode_uint64_vlq(0) + b"" + encode_uint32_vlq(0x70400025),
+            encode_uint64_vlq(0) + b"" + encode_uint32_vlq(0x70400026),
             b"",
         ]
         client = S7CommPlusClient()
@@ -281,14 +283,18 @@ class TestSubscriptionClient:
 
         client.delete_subscription(first)
 
-        for subscription_id in (first, second):
-            with pytest.raises(KeyError, match="Unknown subscription"):
-                client.subscription_diagnostics(subscription_id)
-        assert client._subscriptions.route(parse_subscription_notification(_notification_frame(subscription_id=second))) == (
+        assert connection.send_request.call_args_list[-1].args[1].startswith(struct.pack(">I", first))
+        with pytest.raises(KeyError, match="Unknown subscription"):
+            client.subscription_diagnostics(first)
+        assert client.subscription_diagnostics(second).subscription_id == second
+        assert client._subscriptions.route(parse_subscription_notification(_notification_frame(subscription_id=first))) == (
             False,
             None,
         )
-        connection._notification_frames.clear.assert_called_once()
+        counter = client._subscriptions._states[second].change_counter
+        frame = _notification_frame(subscription_id=second, change_counter=counter)
+        assert client._subscriptions.route(parse_subscription_notification(frame))[0]
+        connection._notification_frames.clear.assert_not_called()
 
 
 class TestSubscriptionRegistry:

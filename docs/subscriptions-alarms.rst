@@ -58,9 +58,9 @@ delivered it:
 If creating a subscription after the first fails, ``create_subscriptions``
 raises :class:`~s7commplus.error.S7SubscriptionError` from that failure; its
 ``created`` lists the subscriptions already created, which stay active.
-``delete_subscription`` and ``delete_alarm_subscription`` delete the session's
-whole subscription container, so either removes every data and alarm
-subscription of the session, not only the one named.
+``delete_subscription`` and ``delete_alarm_subscription`` delete only the
+subscription named; the session's other data and alarm subscriptions keep
+delivering, and new ones can be created on the same session.
 
 The synchronous client also provides ``iter_subscription_notifications`` and
 callbacks. The async client provides an async iterator and a queue-like view:
@@ -101,10 +101,6 @@ notification arrives or its timeout runs out (see :doc:`connections`).
    result = client.resubscribe()
    for old_id, new_id in result.restored.items():
        print(f"{old_id:#x} is now {new_id:#x}")
-
-The PLC's DeleteObject operation targets the session subscription container.
-Deleting one data or alarm subscription therefore clears every subscription
-created by that client; recreate the others if they are still needed.
 
 Active alarms
 -------------

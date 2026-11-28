@@ -2239,33 +2239,24 @@ class S7CommPlusClient(_ClientMethods):
         )
 
     def delete_subscription(self, subscription_id: int) -> None:
-        """Delete the session's data change subscriptions.
+        """Delete one data change subscription.
 
         .. warning:: This method is **experimental** and may change.
 
-        Like the reference driver, this deletes the session's subscription
-        container rather than the one subscription, so every data and alarm
-        subscription of the session goes, not only ``subscription_id``.
+        Only ``subscription_id`` goes; the session's other data and alarm
+        subscriptions keep delivering, and new ones can be created.
 
         Args:
-            subscription_id: ID returned by :meth:`create_subscription`, used
-                for logging.
+            subscription_id: ID returned by :meth:`create_subscription`.
         """
         connection = self._require_connected()
-        if connection.subscription_container_id == 0:
-            raise S7RequestError("PLC did not provide a subscription container object")
-
-        # Subscription children are owned by the session's second CreateObject
-        # result. The reference driver deletes that container, not the child ID.
-        payload = build_delete_subscription_request(
-            connection.subscription_container_id, connection.write_delete_qualifier_version
-        )
+        # Delete the subscription object itself, not the session's subscription
+        # container: new subscriptions are created in that container, so after
+        # deleting it every create fails with OBJECT_NOT_FOUND until the client
+        # reconnects (S7-1200 FW V4.7, S7-1500 FW V2.9 and V4.1).
+        payload = build_delete_subscription_request(subscription_id, connection.write_delete_qualifier_version)
         connection.send_request(FunctionCode.DELETE_OBJECT, payload)
-        for active_id in self._subscriptions.subscription_ids:
-            self._subscriptions.unregister(active_id)
-        self._alarm_subscription_ids.clear()
-        self._alarm_notification_frames.clear()
-        connection._notification_frames.clear()
+        self._subscriptions.unregister(subscription_id)
         logger.info(f"Subscription {subscription_id:#x} deleted")
 
     def create_alarm_subscription(
@@ -2318,23 +2309,17 @@ class S7CommPlusClient(_ClientMethods):
         return subscription_id
 
     def delete_alarm_subscription(self, subscription_id: int) -> None:
-        """Delete an alarm subscription created by this client.
+        """Delete one alarm subscription created by this client.
 
-        Like :meth:`delete_subscription`, this deletes the session's whole
-        subscription container, data subscriptions included.
+        Like :meth:`delete_subscription`, only ``subscription_id`` goes; data
+        subscriptions keep delivering.
         """
         connection = self._require_connected()
-        if connection.subscription_container_id == 0:
-            raise S7RequestError("PLC did not provide a subscription container object")
-        payload = build_delete_alarm_subscription_request(
-            connection.subscription_container_id, connection.write_delete_qualifier_version
-        )
+        payload = build_delete_alarm_subscription_request(subscription_id, connection.write_delete_qualifier_version)
         connection.send_request(FunctionCode.DELETE_OBJECT, payload)
-        for active_id in self._subscriptions.subscription_ids:
-            self._subscriptions.unregister(active_id)
-        self._alarm_subscription_ids.clear()
-        self._alarm_notification_frames.clear()
-        connection._notification_frames.clear()
+        self._alarm_subscription_ids.discard(subscription_id)
+        if not self._alarm_subscription_ids:
+            self._alarm_notification_frames.clear()
         logger.info(f"Alarm subscription {subscription_id:#x} deleted")
 
     def receive_alarm_notification(
