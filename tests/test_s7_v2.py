@@ -1568,7 +1568,7 @@ class TestCreateSessionRequest:
     @staticmethod
     def _refusal_with_ids(return_value: int) -> bytes:
         """A CreateObject reply with ``return_value``, two ObjectIds and no attributes, as on the 1511-1 PN."""
-        body = bytes.fromhex("32000004ca0000000136") + encode_uint64_vlq(return_value) + b""
+        body = bytes.fromhex("32000004ca0000000136") + encode_uint64_vlq(return_value) + b"\x02"
         body += encode_uint32_vlq(0x70000C92) + encode_uint32_vlq(0x70000C93) + bytes(4)
         return encode_header(ProtocolVersion.V1, len(body)) + body + struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
 
@@ -1586,6 +1586,15 @@ class TestCreateSessionRequest:
         client._connection._recv_cotp_dt = AsyncMock(return_value=self._refusal_with_ids(self.TOO_MANY))
         with pytest.raises(S7ConnectionError, match=self.TOO_MANY_MESSAGE):
             await client._connection._create_session()
+
+    def test_other_refusals_with_object_ids_are_named_without_the_hint(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._send_s7_data = MagicMock()
+        refused = (1 << 63) | (ServiceResult.SERVICE_NO_TLS & 0xFFFF)
+        conn._recv_s7_data = MagicMock(return_value=self._refusal_with_ids(refused))
+        with pytest.raises(S7ConnectionError) as exc_info:
+            conn._create_session()
+        assert str(exc_info.value) == ("The PLC refused the session: it returned SERVICE_NO_TLS (-519) (0x800000000000FDF9)")
 
     def test_a_non_failed_return_value_without_session_version_is_not_a_refusal(self) -> None:
         # SESSION_PRE_LEGITIMIZED (17), as a 1511-1 PN sends on a usable TLS session, is not a failure:
