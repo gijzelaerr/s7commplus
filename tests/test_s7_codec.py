@@ -1187,7 +1187,8 @@ class TestParseOrRaiseForReturnValue:
         assert str(excinfo.value) == (
             "Program object list failed: PLC returned 0xAFF4830002ECFF9C "
             "(SERVICE_ACCESS_DENIED (-100), generic ACCESS_DENIED (3)). "
-            "The session's access level does not allow it; log in with connect(password=...) or authenticate()"
+            "The session's access level does not allow it; log in with a password that grants this access "
+            "(connect(password=...), or authenticate() on a TLS session)"
         )
 
     # 0x20278000009A0013: code 19 with bit 63 clear, from a CPU 1512SP-1 PN V2.9 (#129)

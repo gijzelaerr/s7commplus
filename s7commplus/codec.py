@@ -179,7 +179,7 @@ def parse_or_raise_for_return_value(response: bytes, operation: str) -> int:
         message = f"{operation} failed: PLC returned 0x{result.raw:016X} ({result})"
         if result.failed and not result.source and result.code == ServiceResult.SERVICE_ACCESS_DENIED:
             # A protected PLC answers this before a login, e.g. to the browse a named read starts with.
-            message += ". The session's access level does not allow it; log in with connect(password=...) or authenticate()"
+            message += ". The session's access level does not allow it; log in with a password that grants this access (connect(password=...), or authenticate() on a TLS session)"
         raise S7ReturnValueError(message, return_value, response)
     return offset
 
