@@ -1179,6 +1179,18 @@ class TestParseOrRaiseForReturnValue:
             "EXPLORE failed: PLC returned 0x8020AB001992FFF4 (OBJECT_NOT_FOUND (-12), generic INVALID_ARGUMENT_VALUE (43))"
         )
 
+    def test_access_denied_says_to_log_in(self) -> None:
+        # What an S7-1200 (CPU 1211C FW V4.7, TLS, protection level 4) answers before a login
+        response = encode_uint64_vlq(0xAFF4830002ECFF9C) + bytes(4)
+        with pytest.raises(S7ReturnValueError) as excinfo:
+            parse_or_raise_for_return_value(response, "Program object list")
+        assert str(excinfo.value) == (
+            "Program object list failed: PLC returned 0xAFF4830002ECFF9C "
+            "(SERVICE_ACCESS_DENIED (-100), generic ACCESS_DENIED (3)). "
+            "The session's access level does not allow it; log in with a password that grants this access "
+            "(connect(password=...), or authenticate() on a TLS session)"
+        )
+
     # 0x20278000009A0013: code 19 with bit 63 clear, from a CPU 1512SP-1 PN V2.9 (#129)
     @pytest.mark.parametrize("return_value", [17, 19, 0x20278000009A0013, 0x4000000000000000])
     def test_positive_value_raises(self, return_value: int) -> None:

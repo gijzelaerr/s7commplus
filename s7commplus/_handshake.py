@@ -17,7 +17,9 @@ from .error import S7AuthenticationError, S7ConnectionError
 from .legitimation import iter_struct_elements
 from .protocol import (
     DataType,
+    ErrorSource,
     FunctionCode,
+    GenericError,
     Ids,
     LegitimationId,
     ObjectId,
@@ -84,6 +86,20 @@ def _create_object_without_session_message(return_value: int) -> str:
     message = f"CreateObject response has no session ObjectId; the PLC returned {result} (0x{return_value:016X})"
     if result.failed and not result.source and result.code == ServiceResult.SERVICE_TLS_ONLY:
         message += ". The PLC accepts only TLS sessions; connect with use_tls=True"
+    return message
+
+
+def _refused_session_message(return_value: int) -> str:
+    """Say why a CreateObject reply without a ServerSessionVersion refused the session.
+
+    When its connection resources are used up, an S7-1200 (CPU 1211C FW V4.7)
+    and S7-1500s (FW V2.9 and V4.1) still send session ObjectIds but no
+    ServerSessionVersion, and the ReturnValue ``SERVICE_TOO_MANY_SESSIONS``.
+    """
+    result = ReturnValue.from_int(return_value)
+    message = f"The PLC refused the session: it returned {result} (0x{return_value:016X})"
+    if not result.source and result.code == ServiceResult.SERVICE_TOO_MANY_SESSIONS:
+        message += ". It has no free connection resources; close other sessions (TIA Portal, HMIs, other clients) and retry"
     return message
 
 
@@ -490,16 +506,25 @@ def _check_legitimation_response(payload: bytes, function: Optional[int] = None)
 
     A return value whose code is one of the delegitimated codes means the
     password was wrong and raises :class:`S7AuthenticationError`, as
-    :func:`_check_v1_legitimation_response` does on the V1 path. Every other
-    refusal is left to :func:`_check_set_variable_response`.
+    :func:`_check_v1_legitimation_response` does on the V1 path. So does an
+    access-denied answer from the security subsystem (``0x80008318FFFFFF9C``),
+    which is how a CPU 1211C FW V4.7 refuses a wrong access-level password and a
+    CPU 1512SP F-1 PN FW V4.1 a wrong UMAC password. The rule also applies when a
+    UMAC login is refused for another reason, so a wrong user name refused the
+    same way reads as a wrong password too. Every other refusal is left to
+    :func:`_check_set_variable_response`.
     """
     if function != FunctionCode.ERROR and payload:
         try:
             return_value, _ = decode_uint64_vlq(payload, 0)
         except ValueError:
             return_value = None
-        if return_value is not None and ReturnValue.from_int(return_value).code in _LEGITIMATION_REJECTED:
-            raise S7AuthenticationError(f"Legitimation rejected by PLC (wrong password): return_value=0x{return_value:X}")
+        decoded = ReturnValue.from_int(return_value) if return_value is not None else None
+        if decoded is not None and (
+            decoded.code in _LEGITIMATION_REJECTED
+            or (decoded.source == ErrorSource.SECU and decoded.generic == GenericError.ACCESS_DENIED)
+        ):
+            raise S7AuthenticationError(f"Legitimation rejected by PLC (wrong password): return_value=0x{decoded.raw:X}")
     _check_set_variable_response(payload, function)
 
 

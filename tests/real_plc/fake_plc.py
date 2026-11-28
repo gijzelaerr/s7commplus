@@ -94,6 +94,7 @@ class FakeClient:
         self.protocol_version = 0
         self.protection_level: Optional[int] = None
         self._subscriptions: dict[int, str] = {}
+        self._notified: dict[int, int] = {}
         self._sequence = 0
         self._last_connect: dict[str, Any] = {}
         self._cpu_state = "RUN"
@@ -205,12 +206,15 @@ class FakeClient:
         assert subscription_id is not None
         number, member = _PLC.locate(self._subscriptions[subscription_id], "access_sequence")
         self._sequence += 1
+        count = self._notified[subscription_id] = self._notified.get(subscription_id, 0) + 1
+        # Like a CPU 1511-1 PN (FW V2.9), send a cycle with no values after the initial one.
+        values = {} if count == 2 else {1: member.raw(bytes(_PLC.images[number]))}
         return SubscriptionNotification(
             subscription_id=subscription_id,
             credit_tick=0,
             sequence_number=self._sequence,
             change_counter=0,
-            values={1: member.raw(bytes(_PLC.images[number]))},
+            values=values,
             errors={},
         )
 

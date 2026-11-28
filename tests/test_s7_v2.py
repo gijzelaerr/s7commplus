@@ -582,6 +582,7 @@ class TestLegitimationResponseCheck:
             int(ServiceResult.SERVICE_SESSION_DELEGITIMATED),  # 22
             int(ServiceResult.SERVICE_SESSION_DELEGITIMATED_LEGACY) & 0xFFFFFFFFFFFFFFFF,  # -118
             0x8318890001B30016,  # a composite whose low word is 22, as on the V1 path
+            0x80008318FFFFFF9C,  # ACCESS_DENIED from SECU: a wrong access-level password, CPU 1211C FW V4.7
         ],
     )
     def test_delegitimated_code_raises_authentication_error(self, return_value: int) -> None:
@@ -598,6 +599,21 @@ class TestLegitimationResponseCheck:
         refused = encode_uint64_vlq(0x8318890001B3FFFE) + bytes(4)  # code -2, not a password answer
         with pytest.raises(S7ConnectionError, match="rejected") as info:
             _check_legitimation_response(refused, FunctionCode.SET_VARIABLE)
+        assert not isinstance(info.value, S7AuthenticationError)
+
+    @pytest.mark.parametrize(
+        "return_value",
+        [
+            0x80008218FFFFFF9C,  # the security subsystem, but generic APPLICATION_ERROR
+            0x80008317FFFFFF9C,  # generic ACCESS_DENIED, but from SPS7 rather than SECU
+        ],
+    )
+    def test_access_denied_needs_the_security_subsystem(self, return_value: int) -> None:
+        from s7commplus.connection import _check_legitimation_response
+        from s7commplus.error import S7AuthenticationError
+
+        with pytest.raises(S7ConnectionError, match="rejected") as info:
+            _check_legitimation_response(encode_uint64_vlq(return_value) + bytes(4), FunctionCode.SET_VARIABLE)
         assert not isinstance(info.value, S7AuthenticationError)
 
     def test_generic_error_frame_is_not_read_as_a_password_answer(self) -> None:
@@ -1556,6 +1572,54 @@ class TestCreateSessionRequest:
         assert str(exc_info.value) == (
             "CreateObject response has no session ObjectId; the PLC returned SERVICE_NO_TLS (-519) (0x800000000000FDF9)"
         )
+
+    # A CPU 1511-1 PN FW V2.9 whose connection resources are used up: it sends the session
+    # and container ObjectIds but no ServerSessionVersion, and this ReturnValue.
+    TOO_MANY = 0xE022980001C9FF8F
+    TOO_MANY_MESSAGE = (
+        r"The PLC refused the session: it returned SERVICE_TOO_MANY_SESSIONS \(-113\).*\(0xE022980001C9FF8F\)\. "
+        r"It has no free connection resources"
+    )
+
+    @staticmethod
+    def _refusal_with_ids(return_value: int) -> bytes:
+        """A CreateObject reply with ``return_value``, two ObjectIds and no attributes, as on the 1511-1 PN."""
+        body = bytes.fromhex("32000004ca0000000136") + encode_uint64_vlq(return_value) + b"\x02"
+        body += encode_uint32_vlq(0x70000C92) + encode_uint32_vlq(0x70000C93) + bytes(4)
+        return encode_header(ProtocolVersion.V1, len(body)) + body + struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
+
+    def test_sync_names_the_too_many_sessions_refusal(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._send_s7_data = MagicMock()
+        conn._recv_s7_data = MagicMock(return_value=self._refusal_with_ids(self.TOO_MANY))
+        with pytest.raises(S7ConnectionError, match=self.TOO_MANY_MESSAGE):
+            conn._create_session()
+
+    @pytest.mark.asyncio
+    async def test_async_names_the_too_many_sessions_refusal(self) -> None:
+        client = S7CommPlusAsyncClient()
+        client._connection._send_cotp_dt = AsyncMock()
+        client._connection._recv_cotp_dt = AsyncMock(return_value=self._refusal_with_ids(self.TOO_MANY))
+        with pytest.raises(S7ConnectionError, match=self.TOO_MANY_MESSAGE):
+            await client._connection._create_session()
+
+    def test_other_refusals_with_object_ids_are_named_without_the_hint(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._send_s7_data = MagicMock()
+        refused = (1 << 63) | (ServiceResult.SERVICE_NO_TLS & 0xFFFF)
+        conn._recv_s7_data = MagicMock(return_value=self._refusal_with_ids(refused))
+        with pytest.raises(S7ConnectionError) as exc_info:
+            conn._create_session()
+        assert str(exc_info.value) == ("The PLC refused the session: it returned SERVICE_NO_TLS (-519) (0x800000000000FDF9)")
+
+    def test_a_non_failed_return_value_without_session_version_is_not_a_refusal(self) -> None:
+        # SESSION_PRE_LEGITIMIZED (17), as a 1511-1 PN sends on a usable TLS session, is not a failure:
+        # session setup goes on and reports the missing ServerSessionVersion itself.
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._send_s7_data = MagicMock()
+        conn._recv_s7_data = MagicMock(return_value=self._refusal_with_ids(0x4000800000000011))
+        conn._create_session()
+        assert conn._server_session_version is None
 
     @pytest.mark.asyncio
     async def test_async_detects_session_key_attributes(self) -> None:
