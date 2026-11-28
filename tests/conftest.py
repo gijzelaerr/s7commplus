@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from tests.real_plc.reporting import RealPLCReport, report_metadata
-from tests.real_plc.support import PASSWORD_ENV
+from tests.real_plc.support import PASSWORD_ENV, USERNAME_ENV
 
 _REAL_PLC_REPORT = RealPLCReport()
 
@@ -163,6 +163,7 @@ def pytest_configure(config: pytest.Config) -> None:
                 config.getoption("--plc-tls-key"),
                 config.getoption("--plc-tls-ca"),
                 os.environ.get(PASSWORD_ENV, ""),
+                os.environ.get(USERNAME_ENV, ""),
             )
             if value
         )

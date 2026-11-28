@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.real_plc.reporting import RealPLCReport, sanitize_diagnostic
-from tests.real_plc.support import ScratchRestoreGuard, assert_canonical_fixture, canonical_fixture_bytes
+from tests.real_plc.support import PLCConfig, ScratchRestoreGuard, assert_canonical_fixture, canonical_fixture_bytes
 
 
 def test_canonical_fixture_validates_all_documented_types() -> None:
@@ -72,3 +72,55 @@ def test_report_sanitizes_network_credentials_and_certificate_paths(tmp_path: Pa
 
 def test_sanitize_diagnostic_caps_size() -> None:
     assert len(sanitize_diagnostic("x" * 20, limit=5)) == 5
+
+
+def _plc_config(**overrides: object) -> PLCConfig:
+    values: dict[str, object] = dict(
+        host="192.0.2.1",
+        port=102,
+        rack=0,
+        slot=1,
+        read_db=1,
+        write_db=2,
+        use_tls=True,
+        tls_cert=None,
+        tls_key=None,
+        tls_ca=None,
+    )
+    values.update(overrides)
+    return PLCConfig(**values)  # type: ignore[arg-type]
+
+
+def test_umac_user_connects_without_the_password_then_authenticates() -> None:
+    from tests.real_plc.support import S7CommPlusAdapter
+
+    adapter = S7CommPlusAdapter(_plc_config(password="pw", username="tester"))
+    adapter.client = MagicMock()
+    adapter.connect()
+    assert adapter.client.connect.call_args.kwargs["password"] is None
+    adapter.client.authenticate.assert_called_once_with("pw", "tester")
+
+
+def test_access_level_password_still_goes_to_connect() -> None:
+    from tests.real_plc.support import S7CommPlusAdapter
+
+    adapter = S7CommPlusAdapter(_plc_config(password="pw"))
+    adapter.client = MagicMock()
+    adapter.connect()
+    assert adapter.client.connect.call_args.kwargs["password"] == "pw"
+    adapter.client.authenticate.assert_not_called()
+
+
+def test_async_umac_user_authenticates_after_connecting() -> None:
+    from unittest.mock import AsyncMock
+
+    from tests.real_plc.support import AsyncS7CommPlusAdapter
+
+    adapter = AsyncS7CommPlusAdapter(_plc_config(password="pw", username="tester", client_kind="async"))
+    adapter.client = AsyncMock()
+    try:
+        adapter.connect()
+    finally:
+        adapter.loop.close()
+    assert adapter.client.connect.await_args.kwargs["password"] is None
+    adapter.client.authenticate.assert_awaited_once_with("pw", "tester")
