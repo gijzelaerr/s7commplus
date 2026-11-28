@@ -233,6 +233,7 @@ class S7CommPlusAsyncClient(_ClientMethods):
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
         self._alarm_subscription_ids: set[int] = set()
+        self._retired_alarm_subscription_ids: set[int] = set()
         self._alarm_notification_frames: deque[bytes] = deque(maxlen=100)
 
     @property
@@ -345,6 +346,7 @@ class S7CommPlusAsyncClient(_ClientMethods):
         """Forget the data and alarm subscriptions; the connection calls this when it closes a session."""
         self._subscriptions.clear()
         self._alarm_subscription_ids.clear()
+        self._retired_alarm_subscription_ids.clear()
         self._alarm_notification_frames.clear()
 
     def _frame_overhead(self) -> int:
@@ -1081,6 +1083,8 @@ class S7CommPlusAsyncClient(_ClientMethods):
             if frame_subscription_id in self._alarm_subscription_ids:
                 self._alarm_notification_frames.append(frame)
                 continue
+            if frame_subscription_id in self._retired_alarm_subscription_ids:
+                continue  # a late frame of a deleted alarm subscription
             notification = parse_subscription_notification(frame)
             matched, credit_update = self._subscriptions.route(notification)
             if not matched:
@@ -1157,6 +1161,8 @@ class S7CommPlusAsyncClient(_ClientMethods):
         .. warning:: This method is **experimental** and may change.
         """
         connection = self._require_connected()
+        if not self._subscriptions.contains(subscription_id):
+            raise KeyError(f"Unknown subscription {subscription_id:#x}")
         payload = build_delete_subscription_request(subscription_id, connection.write_delete_qualifier_version)
         await connection.send_request(FunctionCode.DELETE_OBJECT, payload)
         self._subscriptions.unregister(subscription_id)
@@ -1190,16 +1196,22 @@ class S7CommPlusAsyncClient(_ClientMethods):
             raise S7RequestError(f"Alarm subscription failed: PLC returned {return_value:#x}")
         subscription_id = object_ids[0]
         self._alarm_subscription_ids.add(subscription_id)
+        self._retired_alarm_subscription_ids.discard(subscription_id)
         return subscription_id
 
     async def delete_alarm_subscription(self, subscription_id: int) -> None:
         """Delete one alarm subscription; see :meth:`S7CommPlusClient.delete_alarm_subscription`."""
         connection = self._require_connected()
+        if subscription_id not in self._alarm_subscription_ids:
+            raise KeyError(f"Unknown alarm subscription {subscription_id:#x}")
         payload = build_delete_alarm_subscription_request(subscription_id, connection.write_delete_qualifier_version)
         await connection.send_request(FunctionCode.DELETE_OBJECT, payload)
         self._alarm_subscription_ids.discard(subscription_id)
-        if not self._alarm_subscription_ids:
-            self._alarm_notification_frames.clear()
+        self._retired_alarm_subscription_ids.add(subscription_id)
+        self._alarm_notification_frames = deque(
+            (frame for frame in self._alarm_notification_frames if notification_subscription_id(frame) != subscription_id),
+            maxlen=self._alarm_notification_frames.maxlen,
+        )
         logger.info(f"Alarm subscription {subscription_id:#x} deleted")
 
     async def receive_alarm_notification(
@@ -1239,6 +1251,8 @@ class S7CommPlusAsyncClient(_ClientMethods):
                 if matched and credit_update is not None:
                     await self._connection._send_subscription_credit(frame_subscription_id, credit_update)
                 continue
+            if frame_subscription_id in self._retired_alarm_subscription_ids:
+                continue  # sent before the PLC deleted that alarm subscription
             return parse_alarm_notification(frame, language_ids)
 
     async def read_alarms(self, language_ids: Optional[list[LanguageId | int]] = None) -> list[Alarm]:

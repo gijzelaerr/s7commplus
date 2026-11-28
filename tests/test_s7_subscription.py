@@ -19,6 +19,7 @@ from s7commplus.subscription import (
     SubscriptionRegistry,
     build_delete_subscription_request,
     build_subscription_request,
+    notification_subscription_id,
     parse_subscription_notification,
 )
 from s7commplus.typeinfo import Softdatatype
@@ -272,8 +273,8 @@ class TestSubscriptionClient:
         # OBJECT_NOT_FOUND on real PLCs; the client now deletes only the subscription object.
         connection = MagicMock(subscription_container_id=0x3C2, protocol_version=ProtocolVersion.V2)
         connection.send_request.side_effect = [
-            encode_uint64_vlq(0) + b"" + encode_uint32_vlq(0x70400025),
-            encode_uint64_vlq(0) + b"" + encode_uint32_vlq(0x70400026),
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400025),
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400026),
             b"",
         ]
         client = S7CommPlusClient()
@@ -295,6 +296,36 @@ class TestSubscriptionClient:
         frame = _notification_frame(subscription_id=second, change_counter=counter)
         assert client._subscriptions.route(parse_subscription_notification(frame))[0]
         connection._notification_frames.clear.assert_not_called()
+
+    def test_deleting_an_unknown_subscription_sends_nothing(self) -> None:
+        # A typo or an ID from before a reconnect must not delete an arbitrary PLC object.
+        connection = MagicMock(subscription_container_id=0x3C2, protocol_version=ProtocolVersion.V2)
+        client = S7CommPlusClient()
+        client._connection = connection
+        with pytest.raises(KeyError, match="Unknown subscription 0x70400099"):
+            client.delete_subscription(0x70400099)
+        with pytest.raises(KeyError, match="Unknown alarm subscription 0x70400099"):
+            client.delete_alarm_subscription(0x70400099)
+        connection.send_request.assert_not_called()
+
+    def test_a_deleted_alarm_subscription_delivers_nothing_more(self) -> None:
+        connection = MagicMock(subscription_container_id=0x3C2, protocol_version=ProtocolVersion.V2)
+        connection.send_request.side_effect = [
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400031),
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400032),
+            b"",
+        ]
+        client = S7CommPlusClient()
+        client._connection = connection
+        first = client.create_alarm_subscription()
+        second = client.create_alarm_subscription()
+        client._alarm_notification_frames.append(_notification_frame(subscription_id=first))
+        client._alarm_notification_frames.append(_notification_frame(subscription_id=second))
+
+        client.delete_alarm_subscription(first)
+
+        assert [notification_subscription_id(f) for f in client._alarm_notification_frames] == [second]
+        assert first in client._retired_alarm_subscription_ids and second in client._alarm_subscription_ids
 
 
 class TestSubscriptionRegistry:
