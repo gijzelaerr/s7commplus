@@ -1083,8 +1083,10 @@ class S7CommPlusAsyncClient(_ClientMethods):
             if frame_subscription_id in self._alarm_subscription_ids:
                 self._alarm_notification_frames.append(frame)
                 continue
-            if frame_subscription_id in self._retired_alarm_subscription_ids:
-                continue  # a late frame of a deleted alarm subscription
+            if frame_subscription_id in self._retired_alarm_subscription_ids and not self._subscriptions.contains(
+                frame_subscription_id
+            ):
+                continue  # a late frame of a deleted alarm subscription (the PLC reuses freed IDs)
             notification = parse_subscription_notification(frame)
             matched, credit_update = self._subscriptions.route(notification)
             if not matched:

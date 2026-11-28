@@ -327,6 +327,24 @@ class TestSubscriptionClient:
         assert [notification_subscription_id(f) for f in client._alarm_notification_frames] == [second]
         assert first in client._retired_alarm_subscription_ids and second in client._alarm_subscription_ids
 
+    def test_a_data_subscription_reusing_a_deleted_alarm_id_still_delivers(self) -> None:
+        # The PLC hands out a freed ID again (seen on a CPU 1511-1 PN FW V2.9).
+        reused = 0x70400031
+        connection = MagicMock(subscription_container_id=0x3C2, protocol_version=ProtocolVersion.V2)
+        connection.send_request.side_effect = [
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(reused),
+            b"",
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(reused),
+        ]
+        client = S7CommPlusClient()
+        client._connection = connection
+        client.delete_alarm_subscription(client.create_alarm_subscription())
+        assert client.create_subscription(["8A0E0007.A"]) == reused
+        counter = client._subscriptions._states[reused].change_counter
+        connection.receive_notification.return_value = _notification_frame(subscription_id=reused, change_counter=counter)
+
+        assert client.receive_subscription_notification(reused).values[7] == b"\x12\x34"
+
 
 class TestSubscriptionRegistry:
     def test_buffers_pre_registration_notification(self) -> None:
@@ -574,3 +592,41 @@ class TestNotificationQueue:
             connection.send_request(FunctionCode.GET_VARIABLE, bytes(4))
         assert not connection.connected
         assert not connection._notification_frames
+
+
+@pytest.mark.asyncio
+async def test_async_deleting_an_unknown_subscription_sends_nothing() -> None:
+    client = S7CommPlusAsyncClient()
+    client._connection._connected = True
+    client._connection._subscription_container_id = 0x3C2
+    client._connection._protocol_version = ProtocolVersion.V2
+    client._connection.send_request = AsyncMock()
+    with pytest.raises(KeyError, match="Unknown subscription 0x70400099"):
+        await client.delete_subscription(0x70400099)
+    with pytest.raises(KeyError, match="Unknown alarm subscription 0x70400099"):
+        await client.delete_alarm_subscription(0x70400099)
+    client._connection.send_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_a_deleted_alarm_subscription_delivers_nothing_more() -> None:
+    client = S7CommPlusAsyncClient()
+    client._connection._connected = True
+    client._connection._subscription_container_id = 0x3C2
+    client._connection._protocol_version = ProtocolVersion.V2
+    client._connection.send_request = AsyncMock(
+        side_effect=[
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400031),
+            encode_uint64_vlq(0) + b"\x01" + encode_uint32_vlq(0x70400032),
+            b"",
+        ]
+    )
+    first = await client.create_alarm_subscription()
+    second = await client.create_alarm_subscription()
+    client._alarm_notification_frames.append(_notification_frame(subscription_id=first))
+    client._alarm_notification_frames.append(_notification_frame(subscription_id=second))
+
+    await client.delete_alarm_subscription(first)
+
+    assert [notification_subscription_id(f) for f in client._alarm_notification_frames] == [second]
+    assert first in client._retired_alarm_subscription_ids and second in client._alarm_subscription_ids
