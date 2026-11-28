@@ -601,6 +601,21 @@ class TestLegitimationResponseCheck:
             _check_legitimation_response(refused, FunctionCode.SET_VARIABLE)
         assert not isinstance(info.value, S7AuthenticationError)
 
+    @pytest.mark.parametrize(
+        "return_value",
+        [
+            0x80008218FFFFFF9C,  # the security subsystem, but generic APPLICATION_ERROR
+            0x80008317FFFFFF9C,  # generic ACCESS_DENIED, but from SPS7 rather than SECU
+        ],
+    )
+    def test_access_denied_needs_the_security_subsystem(self, return_value: int) -> None:
+        from s7commplus.connection import _check_legitimation_response
+        from s7commplus.error import S7AuthenticationError
+
+        with pytest.raises(S7ConnectionError, match="rejected") as info:
+            _check_legitimation_response(encode_uint64_vlq(return_value) + bytes(4), FunctionCode.SET_VARIABLE)
+        assert not isinstance(info.value, S7AuthenticationError)
+
     def test_generic_error_frame_is_not_read_as_a_password_answer(self) -> None:
         from s7commplus.connection import _check_legitimation_response
         from s7commplus.error import S7AuthenticationError

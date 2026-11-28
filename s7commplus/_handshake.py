@@ -494,8 +494,11 @@ def _check_legitimation_response(payload: bytes, function: Optional[int] = None)
     password was wrong and raises :class:`S7AuthenticationError`, as
     :func:`_check_v1_legitimation_response` does on the V1 path. So does an
     access-denied answer from the security subsystem, which is how a CPU 1211C
-    FW V4.7 refuses a wrong access-level password (``0x80008318FFFFFF9C``).
-    Every other refusal is left to :func:`_check_set_variable_response`.
+    FW V4.7 refuses a wrong access-level password (``0x80008318FFFFFF9C``). That
+    answer is seen on this one PLC and firmware only. The rule also applies to a
+    UMAC login, so a wrong user name refused the same way reads as a wrong
+    password too. Every other refusal is left to
+    :func:`_check_set_variable_response`.
     """
     if function != FunctionCode.ERROR and payload:
         try:
