@@ -1847,20 +1847,21 @@ class TestPlcsimResponseLayout:
         assert conn.legacy_s7_1500
         assert conn._response_payload(FunctionCode.SET_MULTI_VARIABLES, payload) == payload
 
-    def test_other_family_set_response_strips_the_leading_id(self) -> None:
+    def test_s7_1500_set_response_keeps_its_return_value_first(self) -> None:
         from s7commplus.v1_session_key.keys import KeyFamily
 
-        payload = bytes.fromhex("05 00 00 00 00")  # leading IntegrityId 5, return_value 0, fill
+        # A CPU 1512SP F-1 PN FW V2.6 answered a write with ReturnValue 0, then IntegrityId 0x14, then fill.
+        payload = bytes.fromhex("00 14 00 00 00 00")
         conn = self._connection(KeyFamily.S7_1500)
-        assert conn._response_payload(FunctionCode.SET_MULTI_VARIABLES, payload) == payload[1:]
+        assert conn._response_payload(FunctionCode.SET_MULTI_VARIABLES, payload) == payload
 
 
 class TestWriteDeleteQualifierVersion:
-    """write_symbolic and the subscription deletes use the V2 ObjectQualifier on PLCSIM and the S7-1200.
+    """write_symbolic and the subscription deletes use the V2 ObjectQualifier on PLCSIM, the S7-1200 and the S7-1500.
 
-    An S7-1500 V1 SessionKey session keeps the negotiated V1 layout of these
-    requests, as before #66; every other data path already sends V2. The alarm
-    subscription delete follows the data one: a CPU 1214C refused it with V1 (#136).
+    An S7-1500 V1 SessionKey session uses V2 here too: a CPU 1512SP F-1 PN FW V2.6
+    refused the V1 layout with a fatal SystemEvent. The alarm subscription delete
+    follows the data one: a CPU 1214C refused it with V1 (#136).
     """
 
     _WRITE_ARGS = (0x8A0E0001, [1], b"\x00\x2a", 0)
@@ -1895,7 +1896,7 @@ class TestWriteDeleteQualifierVersion:
         )
         client._alarm_subscription_ids.add(0x70000F92)  # type: ignore[attr-defined]
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 2)])
     def test_sync_client(self, family: str, version: int) -> None:
         from s7commplus.client import S7CommPlusClient
         from s7commplus.v1_session_key.keys import KeyFamily
@@ -1919,7 +1920,7 @@ class TestWriteDeleteQualifierVersion:
         assert delete_payload == self._expected_delete(version) != self._expected_delete(3 - version)
         assert alarm_delete_payload == self._expected_alarm_delete(version) != self._expected_alarm_delete(3 - version)
 
-    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
+    @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 2)])
     def test_async_client(self, family: str, version: int) -> None:
         from s7commplus.async_client import S7CommPlusAsyncClient
         from s7commplus.v1_session_key.keys import KeyFamily
@@ -1976,9 +1977,12 @@ class TestS71200Subscriptions:
         [
             ("S7_1200", FunctionCode.CREATE_OBJECT, True),
             ("S7_1200", FunctionCode.SET_MULTI_VARIABLES, True),
-            ("S7_1500", FunctionCode.SET_MULTI_VARIABLES, False),
+            ("S7_1500", FunctionCode.SET_MULTI_VARIABLES, True),
             ("S7_1200", FunctionCode.DELETE_OBJECT, False),
-            ("S7_1500", FunctionCode.CREATE_OBJECT, False),
+            ("S7_1500", FunctionCode.CREATE_OBJECT, True),
+            ("S7_1500", FunctionCode.DELETE_OBJECT, True),
+            ("S7_1500", FunctionCode.SET_VARIABLE, True),
+            ("S7_1500", FunctionCode.GET_VAR_SUBSTREAMED, False),
             ("PLCSIM", FunctionCode.CREATE_OBJECT, True),
             ("PLCSIM", FunctionCode.SET_MULTI_VARIABLES, True),
         ],
@@ -2022,12 +2026,13 @@ class TestS71200Subscriptions:
         payload = client._connection._response_payload(FunctionCode.SET_MULTI_VARIABLES, bytes.fromhex(reply))
         assert _write_item_errors(payload, 1) == {}
 
-    def test_s7_1500_create_object_response_still_strips_the_leading_id(self) -> None:
+    def test_s7_1500_create_object_response_keeps_its_return_value(self) -> None:
+        from s7commplus.codec import parse_create_object_session_id
         from s7commplus.v1_session_key.keys import KeyFamily
 
-        payload = bytes([0x05]) + self._CREATE_RESPONSE[:-5]  # leading IntegrityId 5
         conn = TestPlcsimResponseLayout._connection(KeyFamily.S7_1500)
-        assert conn._response_payload(FunctionCode.CREATE_OBJECT, payload) == payload[1:]
+        payload = conn._response_payload(FunctionCode.CREATE_OBJECT, self._CREATE_RESPONSE)
+        assert parse_create_object_session_id(payload)[0] == [0x70000F91]
 
     def test_async_create_object_response_keeps_its_return_value(self) -> None:
         from s7commplus.async_client import S7CommPlusAsyncClient
@@ -2042,5 +2047,5 @@ class TestS71200Subscriptions:
         payload = client._connection._response_payload(FunctionCode.CREATE_OBJECT, self._CREATE_RESPONSE)
         assert parse_create_object_session_id(payload)[0] == [0x70000F91]
         client._connection._v1_session_key_family = KeyFamily.S7_1500
-        leading = bytes([0x05]) + self._CREATE_RESPONSE[:-5]
-        assert client._connection._response_payload(FunctionCode.CREATE_OBJECT, leading) == leading[1:]
+        payload = client._connection._response_payload(FunctionCode.CREATE_OBJECT, self._CREATE_RESPONSE)
+        assert parse_create_object_session_id(payload)[0] == [0x70000F91]

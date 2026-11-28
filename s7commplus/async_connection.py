@@ -123,6 +123,7 @@ class S7CommPlusAsyncConnection(SessionCore):
         # V2+ IntegrityId tracking
         self._integrity_id_read: int = 0
         self._integrity_id_write: int = 0
+        self._activation_key_qualifier: int = 0
         self._with_integrity_id: bool = False
 
         # TLS state — TLS records are tunneled inside COTP DT frames via MemoryBIO
