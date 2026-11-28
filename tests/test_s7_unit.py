@@ -1876,13 +1876,24 @@ class TestWriteDeleteQualifierVersion:
     def _expected_delete(version: int) -> bytes:
         from s7commplus.subscription import build_delete_subscription_request
 
-        return build_delete_subscription_request(0x70000F90, version)
+        return build_delete_subscription_request(0x70000F91, version)  # the subscription, not the container
 
     @staticmethod
     def _expected_alarm_delete(version: int) -> bytes:
         from s7commplus.alarm import build_delete_alarm_subscription_request
 
-        return build_delete_alarm_subscription_request(0x70000F90, version)
+        return build_delete_alarm_subscription_request(0x70000F92, version)
+
+    @staticmethod
+    def _register(client: object) -> None:
+        """Make 0x70000F91 a live data and 0x70000F92 a live alarm subscription, as deletes require."""
+        from s7commplus.subscription import SubscriptionItem
+
+        item = SubscriptionItem(access_area=0x8A0E0001, lids=(1,))
+        client._subscriptions.register(  # type: ignore[attr-defined]
+            0x70000F91, [item], change_counter=1, credit_limit=0, credit_step=0, queue_size=1
+        )
+        client._alarm_subscription_ids.add(0x70000F92)  # type: ignore[attr-defined]
 
     @pytest.mark.parametrize(("family", "version"), [("PLCSIM", 2), ("S7_1200", 2), ("S7_1500", 1)])
     def test_sync_client(self, family: str, version: int) -> None:
@@ -1898,6 +1909,7 @@ class TestWriteDeleteQualifierVersion:
 
         area, lids, data, crc = self._WRITE_ARGS
         client.write_symbolic(area, lids, data, crc, datatype=DataType.INT)
+        self._register(client)
         client.delete_subscription(0x70000F91)
         client.delete_alarm_subscription(0x70000F92)
         (_, write_payload), _ = conn.send_request.call_args_list[0]
@@ -1925,6 +1937,7 @@ class TestWriteDeleteQualifierVersion:
 
         async def run() -> None:
             await client.write_symbolic(area, lids, data, crc, datatype=DataType.INT)
+            self._register(client)
             await client.delete_subscription(0x70000F91)
             await client.delete_alarm_subscription(0x70000F92)
 

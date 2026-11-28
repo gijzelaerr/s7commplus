@@ -678,6 +678,8 @@ class S7CommPlusClient(_ClientMethods):
         self._subscription_relation_id = 0x7FFFC001
         self._subscriptions = SubscriptionRegistry()
         self._alarm_subscription_ids: set[int] = set()
+        # Deleted alarm subscriptions whose late frames are dropped, not returned.
+        self._retired_alarm_subscription_ids: set[int] = set()
         self._alarm_notification_frames: deque[bytes] = deque(maxlen=100)
         self._symbol_catalog: Optional[SymbolCatalog] = None
         # Most items one multi-item read or write request carries; a larger batch
@@ -1053,6 +1055,7 @@ class S7CommPlusClient(_ClientMethods):
         """
         self._subscriptions.clear()
         self._alarm_subscription_ids.clear()
+        self._retired_alarm_subscription_ids.clear()
         self._alarm_notification_frames.clear()
         if self._connection is not None:
             try:
@@ -1134,6 +1137,7 @@ class S7CommPlusClient(_ClientMethods):
         """Disconnect from PLC."""
         self._subscriptions.clear()
         self._alarm_subscription_ids.clear()
+        self._retired_alarm_subscription_ids.clear()
         self._alarm_notification_frames.clear()
         if self._connection:
             self._connection.disconnect()
@@ -2200,6 +2204,10 @@ class S7CommPlusClient(_ClientMethods):
             if frame_subscription_id in self._alarm_subscription_ids:
                 self._alarm_notification_frames.append(frame)
                 continue
+            if frame_subscription_id in self._retired_alarm_subscription_ids and not self._subscriptions.contains(
+                frame_subscription_id
+            ):
+                continue  # a late frame of a deleted alarm subscription (the PLC reuses freed IDs)
             notification = parse_subscription_notification(frame)
             matched, credit_update = self._subscriptions.route(notification)
             if not matched:
@@ -2239,33 +2247,30 @@ class S7CommPlusClient(_ClientMethods):
         )
 
     def delete_subscription(self, subscription_id: int) -> None:
-        """Delete the session's data change subscriptions.
+        """Delete one data change subscription.
 
         .. warning:: This method is **experimental** and may change.
 
-        Like the reference driver, this deletes the session's subscription
-        container rather than the one subscription, so every data and alarm
-        subscription of the session goes, not only ``subscription_id``.
+        Only ``subscription_id`` goes; the session's other data and alarm
+        subscriptions keep delivering, and new ones can be created.
 
         Args:
-            subscription_id: ID returned by :meth:`create_subscription`, used
-                for logging.
+            subscription_id: ID returned by :meth:`create_subscription`.
+
+        Raises:
+            KeyError: ``subscription_id`` is not a live data subscription of
+                this session; nothing is sent.
         """
         connection = self._require_connected()
-        if connection.subscription_container_id == 0:
-            raise S7RequestError("PLC did not provide a subscription container object")
-
-        # Subscription children are owned by the session's second CreateObject
-        # result. The reference driver deletes that container, not the child ID.
-        payload = build_delete_subscription_request(
-            connection.subscription_container_id, connection.write_delete_qualifier_version
-        )
+        if not self._subscriptions.contains(subscription_id):
+            raise KeyError(f"Unknown subscription {subscription_id:#x}")
+        # Delete the subscription object itself, not the session's subscription
+        # container: new subscriptions are created in that container, so after
+        # deleting it every create fails with OBJECT_NOT_FOUND until the client
+        # reconnects (S7-1200 FW V4.7, S7-1500 FW V2.9 and V4.1).
+        payload = build_delete_subscription_request(subscription_id, connection.write_delete_qualifier_version)
         connection.send_request(FunctionCode.DELETE_OBJECT, payload)
-        for active_id in self._subscriptions.subscription_ids:
-            self._subscriptions.unregister(active_id)
-        self._alarm_subscription_ids.clear()
-        self._alarm_notification_frames.clear()
-        connection._notification_frames.clear()
+        self._subscriptions.unregister(subscription_id)
         logger.info(f"Subscription {subscription_id:#x} deleted")
 
     def create_alarm_subscription(
@@ -2315,26 +2320,31 @@ class S7CommPlusClient(_ClientMethods):
             raise S7RequestError(f"Alarm subscription failed: PLC returned {return_value:#x}")
         subscription_id = object_ids[0]
         self._alarm_subscription_ids.add(subscription_id)
+        self._retired_alarm_subscription_ids.discard(subscription_id)  # the PLC reuses freed IDs
         return subscription_id
 
     def delete_alarm_subscription(self, subscription_id: int) -> None:
-        """Delete an alarm subscription created by this client.
+        """Delete one alarm subscription created by this client.
 
-        Like :meth:`delete_subscription`, this deletes the session's whole
-        subscription container, data subscriptions included.
+        Like :meth:`delete_subscription`, only ``subscription_id`` goes; data
+        subscriptions keep delivering. Its queued and late notifications are
+        dropped.
+
+        Raises:
+            KeyError: ``subscription_id`` is not a live alarm subscription of
+                this session; nothing is sent.
         """
         connection = self._require_connected()
-        if connection.subscription_container_id == 0:
-            raise S7RequestError("PLC did not provide a subscription container object")
-        payload = build_delete_alarm_subscription_request(
-            connection.subscription_container_id, connection.write_delete_qualifier_version
-        )
+        if subscription_id not in self._alarm_subscription_ids:
+            raise KeyError(f"Unknown alarm subscription {subscription_id:#x}")
+        payload = build_delete_alarm_subscription_request(subscription_id, connection.write_delete_qualifier_version)
         connection.send_request(FunctionCode.DELETE_OBJECT, payload)
-        for active_id in self._subscriptions.subscription_ids:
-            self._subscriptions.unregister(active_id)
-        self._alarm_subscription_ids.clear()
-        self._alarm_notification_frames.clear()
-        connection._notification_frames.clear()
+        self._alarm_subscription_ids.discard(subscription_id)
+        self._retired_alarm_subscription_ids.add(subscription_id)
+        self._alarm_notification_frames = deque(
+            (frame for frame in self._alarm_notification_frames if notification_subscription_id(frame) != subscription_id),
+            maxlen=self._alarm_notification_frames.maxlen,
+        )
         logger.info(f"Alarm subscription {subscription_id:#x} deleted")
 
     def receive_alarm_notification(
@@ -2366,6 +2376,8 @@ class S7CommPlusClient(_ClientMethods):
                 if matched and credit_update is not None:
                     self._connection.send_subscription_credit(frame_subscription_id, credit_update)
                 continue
+            if frame_subscription_id in self._retired_alarm_subscription_ids:
+                continue  # sent before the PLC deleted that alarm subscription
             return parse_alarm_notification(frame, language_ids)
 
     def _notification_wait(self, timeout: Optional[float]) -> float:
