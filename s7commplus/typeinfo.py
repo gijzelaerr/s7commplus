@@ -808,6 +808,8 @@ def _add_subnodes(node: Node, obj: PObject, objects: list[PObject]) -> None:
                     if struct_type is not None:
                         _add_subnodes(arr_node, struct_type, objects)
                 else:
+                    # TODO: for an Array of String inside a struct or UDT (offset-info type 3),
+                    # the two u16 fields may be swapped as they are for type 2; no capture shows it yet.
                     stride = datatype_size(vte.softdatatype, string_len=oi.unspecified1)
                     nonopt_off, nonopt_bit = _nonopt_element_offset(vte, elem, elem * stride)  # elem is the access id
                     arr_node = Node(
