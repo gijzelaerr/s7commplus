@@ -415,6 +415,8 @@ def test_sync_program_objects_not_supported_on_v1_initial_session(
     try:
         with pytest.raises(NotImplementedError, match="V1 SessionKey"):
             client.program_objects()
+        with pytest.raises(NotImplementedError, match=r"get_comments\(\) is not supported on V1 SessionKey"):
+            client.get_comments()
         assert [db.number for db in client.list_datablocks()] == [1]
     finally:
         client.disconnect()
@@ -430,6 +432,8 @@ async def test_async_program_objects_not_supported_on_v1_initial_session(
     try:
         with pytest.raises(NotImplementedError, match="V1 SessionKey"):
             await client.program_objects()
+        with pytest.raises(NotImplementedError, match=r"get_comments\(\) is not supported on V1 SessionKey"):
+            await client.get_comments()
         assert [db.number for db in await client.list_datablocks()] == [1]
     finally:
         await client.disconnect()

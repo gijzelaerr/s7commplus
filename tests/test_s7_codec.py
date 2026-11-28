@@ -41,6 +41,7 @@ from s7commplus.codec import (
     encode_item_address,
     encode_object_qualifier,
     encode_pvalue_blob,
+    encode_pvalue_sparse_blobs,
     encode_pvalue_typed,
     encode_request_header,
     encode_typed_value,
@@ -646,7 +647,8 @@ class TestDecodePValue:
             ([b"\xaa", b"\xcc"], bytes([0x40, DataType.BLOB, 0x01, 0x00, 0x01, 0xAA, 0x02, 0x00, 0x01, 0xCC, 0x00])),
         ],
     )
-    def test_sparse_blob_array_decodes(self, blobs: list[bytes], encoded: bytes) -> None:
+    def test_sparse_blob_array_encodes_and_round_trips(self, blobs: list[bytes], encoded: bytes) -> None:
+        assert encode_pvalue_sparse_blobs(blobs) == encoded
         assert decode_pvalue_sparse_array(encoded + b"\xff", 0) == (list(enumerate(blobs, 1)), len(encoded))
         assert decode_pvalue_to_bytes(encoded + b"\xff", 0) == (b"".join(blobs), len(encoded))
 

@@ -1186,6 +1186,24 @@ def test_member_element_type(data_type: str, expected: str):
     assert Member("m", data_type, 0, 0, 0).element_type == expected
 
 
+@pytest.mark.parametrize(
+    ("data_type", "referenced_type", "expected"),
+    [
+        ("Int", None, None),
+        ("Struct", None, None),
+        ("Array[0..1] of Struct", None, None),
+        ('"Struct"', None, "Struct"),
+        ('Array[0..1] of "Struct"', None, "Struct"),
+        ('Array[1.."c_max"] of "Motor"', None, "Motor"),
+        ("TOF_TIME", "IEC_TIMER", "IEC_TIMER"),
+        ('"Alias"', "Lib", "Lib"),
+    ],
+)
+def test_member_typed_block_needs_a_quoted_type_or_a_reference(data_type: str, referenced_type: str | None, expected: str | None):
+    # an inline Struct is unquoted and names no block, even with a UDT named "Struct" in the program
+    assert Member("m", data_type, 0, 0, 0, referenced_type=referenced_type).typed_block == expected
+
+
 def test_resolve_id_path_follows_types_into_array_element_udt():
     members = BlockInterface.from_xml(_ARRAY_OF_UDT).members
     motor = [Member("speed", "Int", 1, 0, 0x02000005, id=51)]

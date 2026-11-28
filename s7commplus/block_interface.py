@@ -17,18 +17,17 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, get_args
 
-from .blob_decompressor import find_preset_stream, decompress_blob
+from .blob_decompressor import PresetStream, find_preset_stream, decompress_blob
 
 logger = logging.getLogger(__name__)
 
 # The Part kinds seen embedding the FB or UDT a DB is declared with, so far only on an S7-1500 with FW V2.9
 # (the instance DB and DB-of-UDT fixtures in tests/test_block_interface.py). A kind added here is recognized
 # by BlockInterface.from_xml as well; a part of any other kind is not taken as a source.
-SourceKind = Literal["BlockSource", "DataTypeSource"]
+_SOURCE_KINDS = ("BlockSource", "DataTypeSource")
 
 # Interface-description preset-dict kinds, most preferred first. ``DebugInfo IntfDesc``
 # carries the optimized (symbolic-access) block interface; ``IntfDesc`` the standard one.
@@ -156,7 +155,7 @@ _ID_PATH_SEGMENT = re.compile(r"(\d{1,10})(\[-?\d{1,10}(?:,-?\d{1,10})*])?")
 
 # ParseError first: on Python 3.10 SyntaxError's __str__ shows msg, which only SyntaxError's __init__ sets
 class BlockInterfaceError(ET.ParseError, ValueError):
-    """Malformed block-interface XML.
+    """Malformed XML in the documents of a block: its interface or its comments.
 
     It is a `ValueError` and, for callers written against earlier versions, an
     `xml.etree.ElementTree.ParseError`.
@@ -188,6 +187,19 @@ class Member:
         # only a leading prefix makes an array: elsewhere it is part of a quoted name
         prefix = _ARRAY_PREFIX.match(self.data_type)
         return self.data_type[prefix.end() if prefix else 0 :].strip('"')
+
+    @property
+    def typed_block(self) -> str | None:
+        """The type this member, or each element of this array member, is declared with when it is a block or library type.
+
+        It is :attr:`referenced_type` when the interface does not embed the type, and otherwise the
+        UDT or FB the type quotes. An elementary type or an inline ``Struct`` is unquoted, so it gives
+        None even when a UDT is named like it.
+        """
+        if self.referenced_type:
+            return self.referenced_type
+        matched = _TYPE_BLOCK.fullmatch(self.data_type)
+        return matched.group(1) if matched else None
 
 
 @dataclass
@@ -227,7 +239,7 @@ class BlockInterface:
     members: list[Member]
     source: str | None
     references: frozenset[str]
-    kind: SourceKind | None = None
+    kind: str | None = None
 
     @classmethod
     def from_xml(cls, xml_text: str, max_members: int = 250_000, max_depth: int = 64) -> BlockInterface:
@@ -259,18 +271,18 @@ class BlockInterface:
         references.discard("")
 
         source: str | None = None
-        kind: SourceKind | None = None
+        kind: str | None = None
         if primary is not None and primary.get("Kind") == "Values":
             # A DB declared of another type embeds that type below its Values part, in a part of one of the
-            # SourceKind kinds, such as the FB of an instance DB or the UDT of a DB of a UDT. A part of any
+            # _SOURCE_KINDS, such as the FB of an instance DB or the UDT of a DB of a UDT. A part of any
             # other kind is not taken as a source: the instance DB of a system type only references it, in a
             # part without a Kind. ``VersionElement`` also names the type, but truncated or with its library
             # path; ``Block`` is the reliable one.
             primary = primary.find("SubParts/Part")
             if primary is not None and (source := primary.get("Block") or None):
                 part_kind = primary.get("Kind")
-                kind = next((known for known in get_args(SourceKind) if known == part_kind), None)
-                if kind:
+                if part_kind in _SOURCE_KINDS:
+                    kind = part_kind
                     references.discard(source)
                 else:
                     # A part without a Kind is the expected reference to a system type
@@ -300,6 +312,55 @@ class BlockInterface:
         # a ParseError arrives as a ValueError from from_xml
         except zlib.error as exc:
             raise ValueError(f"Block interface EXPLORE payload is corrupt: {exc}") from exc
+
+    @classmethod
+    def from_streams(cls, streams: Iterable[PresetStream], max_members: int = 250_000, max_depth: int = 64) -> BlockInterface:
+        """Parse the interface among the decompressed documents of a block.
+
+        The interface is the first of :meth:`from_explore`'s dictionaries present, parsed like
+        :meth:`from_xml`. Without one the result has no members, no source and no references.
+
+        Raises:
+            BlockInterfaceError: A document is not well-formed XML.
+            ValueError: The interface exceeds the limits of :func:`parse_block_interface`.
+        """
+        texts: dict[str, list[str]] = {}
+        for stream in streams:
+            texts.setdefault(stream.preset.kind, []).append(stream.text)
+        kind = next((kind for kind in _INTFDESC_KINDS if kind in texts), None)
+        if kind is None:
+            return cls(members=[], source=None, references=frozenset())
+        return cls.from_xml(texts[kind][0], max_members, max_depth)
+
+    @classmethod
+    def from_tag_xml(cls, xml_texts: Iterable[str]) -> BlockInterface:
+        """Parse the ``IntfDescTag`` documents of a process area into an interface with its tags as members.
+
+        Each tag is a member with its LID as id, the key its ``TagLineComm`` comment has.
+        A tag typed with a UDT quotes it, as an interface member does, and the UDT is in `references`.
+
+        Raises:
+            BlockInterfaceError: A document is not well-formed XML.
+        """
+        tags: list[Member] = []
+        for xml_text in xml_texts:
+            try:
+                root = ET.fromstring(xml_text)
+            except ET.ParseError as exc:
+                raise BlockInterfaceError(f"Tag interface XML is not well-formed: {exc}") from exc
+            tags += [
+                Member(
+                    name=name,
+                    data_type=f'"{udt}"' if (udt := ident.findtext("UserDataType")) else "",
+                    lid=int(lid),
+                    offset=0,
+                    rid=0,
+                    id=int(lid),
+                )
+                for ident in root.iter("Ident")
+                if (name := ident.get("Name")) and (lid := ident.get("LID", "")).isdecimal()
+            ]
+        return cls(members=tags, source=None, references=frozenset(tag.element_type for tag in tags if tag.data_type))
 
 
 @dataclass

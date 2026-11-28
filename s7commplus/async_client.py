@@ -24,6 +24,7 @@ from . import typeinfo
 from .vlq import decode_uint64_vlq
 from .async_connection import S7CommPlusAsyncConnection
 from .blob_decompressor import find_and_decompress
+from .comments import CommentCollector, Comments
 from .client import (
     _ClientMethods,
     _AUTO_REFRESH_MIN_INTERVAL,
@@ -1652,6 +1653,27 @@ class S7CommPlusAsyncClient(_ClientMethods):
         parse_or_raise_for_return_value(response, "Program object list")
         return _parse_program_objects(response)
 
+    async def get_comments(self, max_comments: int = 1_000_000, max_depth: int = 64) -> Comments:
+        """Read the comments typed in TIA Portal for every data block and process area.
+
+        .. warning:: This method is **experimental** and may change. Verified on S7-1500 V2 TLS sessions only.
+
+        See `S7CommPlusClient.get_comments`.
+
+        Raises:
+            NotImplementedError: On a V1 SessionKey session, which does not explore the program.
+            S7ReturnValueError: If the PLC answers an EXPLORE of the program with a non-zero ReturnValue.
+            ValueError: If the reply is truncated or malformed, or the comments exceed the limits
+                of `CommentCollector.resolve`.
+        """
+        connection = self._require_connected()
+        # explore() drops the attribute list on every SessionKey session, legacy_s7_1500 included
+        if connection._session_key is not None:
+            raise NotImplementedError("get_comments() is not supported on V1 SessionKey sessions")
+        # names and documents from one snapshot of the program
+        payload = await self.explore(Ids.NATIVE_THE_PLC_PROGRAM_RID, CommentCollector.ATTRIBUTES)
+        return CommentCollector(payload).resolve(max_comments, max_depth)
+
     @_retry_on_dropped_connection
     async def browse(self) -> list[dict[str, Any]]:
         """Browse the full per-tag symbol tree via EXPLORE + the type-info container.
@@ -1689,13 +1711,7 @@ class S7CommPlusAsyncClient(_ClientMethods):
             )
 
         # Add the native process areas with their known synthetic type-info ids.
-        for name, access_rid, ti_rid in (
-            ("IArea", Ids.NATIVE_THE_I_AREA_RID, 0x90010000),
-            ("QArea", Ids.NATIVE_THE_Q_AREA_RID, 0x90020000),
-            ("MArea", Ids.NATIVE_THE_M_AREA_RID, 0x90030000),
-            ("S7Timers", Ids.NATIVE_THE_S7_TIMERS_RID, 0x90050000),
-            ("S7Counters", Ids.NATIVE_THE_S7_COUNTERS_RID, 0x90060000),
-        ):
+        for name, access_rid, ti_rid in typeinfo.PROCESS_AREAS:
             root_nodes.append(
                 typeinfo.Node(node_type=typeinfo.NodeType.ROOT, name=name, access_id=access_rid, relation_id=ti_rid)
             )

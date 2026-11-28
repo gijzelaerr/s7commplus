@@ -13,7 +13,7 @@ Reference: thomas-v2/S7CommPlusDriver/Core/S7p.cs
 """
 
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -423,6 +423,19 @@ def encode_pvalue_blob(data: bytes) -> bytes:
     result += encode_uint32_vlq(0)  # BlobRootId (unused for plain byte blobs)
     result += encode_uint32_vlq(len(data))
     result += data
+    return bytes(result)
+
+
+def encode_pvalue_sparse_blobs(blobs: Sequence[bytes]) -> bytes:
+    """Encode BLOBs as a sparse array PValue, the inverse of the sparse branch of `decode_pvalue_to_bytes`.
+
+    PValue format: [flags=0x40][datatype], then [key:VLQ][blob_root_id:VLQ][length:VLQ][data] per
+    element with keys counting from 1, then a closing key of 0.
+    """
+    result = bytearray([0x40, DataType.BLOB])
+    for key, blob in enumerate(blobs, 1):
+        result += encode_uint32_vlq(key) + encode_uint32_vlq(0) + encode_uint32_vlq(len(blob)) + blob
+    result += encode_uint32_vlq(0)
     return bytes(result)
 
 

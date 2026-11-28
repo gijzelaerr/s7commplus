@@ -52,6 +52,15 @@ Block interfaces
 
 .. autofunction:: s7commplus.find_preset_stream
 
+Comments
+--------
+
+.. autoclass:: s7commplus.Comments
+   :members: find, languages
+
+.. autoclass:: s7commplus.CommentCollector
+   :members:
+
 Subscriptions and alarms
 ------------------------
 

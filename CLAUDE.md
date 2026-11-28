@@ -59,6 +59,8 @@ tested against an isolated, non-safety-critical controller.
   type-information, and compressed metadata parsing
 - `s7commplus/block_interface.py`: block interface members and `LineComm` id-path
   resolution; `tag_browser` re-exports its names
+- `s7commplus/comments.py`: sans-IO collection and resolution of TIA comments
+  (`LineComm`, `TagLineComm`) onto `browse()` names, used by `get_comments()`
 - `s7commplus/subscription.py` and `alarm.py`: cyclic subscriptions and alarms
 - `s7commplus/legitimation.py`: client-side password legitimation for TLS
   (V2/V3) sessions

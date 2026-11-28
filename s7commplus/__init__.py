@@ -28,6 +28,7 @@ from .block_interface import BlockInterface, BlockInterfaceError, Member, block_
 from .catalog import ArrayDimension, SymbolCatalog, SymbolicTag, TagResult
 from .client import DBWriteItem, OperatingStateChange, ProgramObject, SymbolicReadItem
 from .client import S7CommPlusClient as Client
+from .comments import CommentCollector, Comments
 from .connection import S7CommPlusConnection
 from .devices import DEVICE_NAMES, device_family, device_name
 from .error import (
@@ -71,6 +72,8 @@ __all__ = [
     "BlockInterfaceError",
     "CPUState",
     "Client",
+    "CommentCollector",
+    "Comments",
     "DBWriteItem",
     "DataBlock",
     "DEVICE_NAMES",

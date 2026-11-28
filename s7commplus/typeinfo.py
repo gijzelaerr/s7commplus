@@ -18,6 +18,7 @@ from enum import IntEnum
 
 from .codec import decode_pvalue_to_bytes
 from .protocol import DataType  # noqa: F401  (re-exported convenience for callers)
+from .protocol import Ids
 from .vlq import decode_uint32_vlq
 
 # -- Element ID tags in the PObject stream --
@@ -33,6 +34,15 @@ CLASS_OMS_TYPE_INFO_CONTAINER = 534
 
 # Attribute id carrying a struct/UDT byte size (TI_TComSize), stored as big-endian u32.
 TI_TCOM_SIZE = 1502
+
+# The native process areas: the name `browse()` gives their tags, their access RID and their synthetic type-info id.
+PROCESS_AREAS = (
+    ("IArea", Ids.NATIVE_THE_I_AREA_RID, 0x90010000),
+    ("QArea", Ids.NATIVE_THE_Q_AREA_RID, 0x90020000),
+    ("MArea", Ids.NATIVE_THE_M_AREA_RID, 0x90030000),
+    ("S7Timers", Ids.NATIVE_THE_S7_TIMERS_RID, 0x90050000),
+    ("S7Counters", Ids.NATIVE_THE_S7_COUNTERS_RID, 0x90060000),
+)
 
 
 # ---------------------------------------------------------------------------

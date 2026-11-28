@@ -37,12 +37,14 @@ from collections.abc import Mapping, Sequence
 from enum import IntEnum
 from typing import Any, Callable, Optional
 
+from .blob_decompressor import _compress_blob
 from .codec import (
     decode_header,
     decode_pvalue_to_bytes,
     encode_header,
     encode_pvalue_blob,
     encode_pvalue_typed,
+    encode_pvalue_sparse_blobs,
     encode_typed_value,
     skip_typed_value,
 )
@@ -62,7 +64,9 @@ from .protocol import (
     ProtocolVersion,
     SoftDataType,
 )
+from .typeinfo import PROCESS_AREAS
 from .vlq import decode_int32_vlq, decode_uint32_vlq, decode_uint64_vlq, encode_int32_vlq, encode_uint32_vlq, encode_uint64_vlq
+from .zlib_dicts import ZLIB_DICT_IDENTITIES
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +270,7 @@ class S7CommPlusServer:
         self._data_blocks: dict[int, DataBlock] = {}
         self._program_objects: dict[int, tuple[int, Optional[str]]] = {}
         self._type_info_reply: Optional[bytes] = None  # set by register_symbolic_db()
+        self._explore_documents: dict[int, list[tuple[int, bytes]]] = {}
         self._cpu_state = CPUState.RUN
         self._protocol_version = protocol_version
         self._next_session_id = 1
@@ -458,6 +463,35 @@ class S7CommPlusServer:
         if class_id == Ids.DB_CLASS_RID:
             raise ValueError("Data blocks must be registered with register_db() instead")
         self._program_objects[rid] = (class_id, name)
+
+    def add_explore_document(self, rid: int, attribute: int, dictionary: int, xml: str) -> None:
+        """Attach an XML document, compressed against a preset dictionary, to an object in the EXPLORE reply of the program.
+
+        An EXPLORE of the program then lists `rid` with its documents as attributes, whatever
+        attributes the request asked for: the line comments as a sparse BLOB array, the others
+        as BLOBs. The object must be a registered data block or program object, or a process
+        area, which the program then lists too: the EXPLORE of another object, such as the
+        program, which lists every other object, cannot carry documents.
+
+        Example::
+
+            server.add_explore_document(0x8A0E0001, Ids.DATA_INTERFACE_LINE_COMMENTS, 0x3C55436A, line_comments_xml)
+
+        Args:
+            rid: Relation ID of the object, e.g. ``0x8A0E0001`` for DB 1 or `Ids.NATIVE_THE_I_AREA_RID`.
+            attribute: Attribute ID to send the document as, e.g. `Ids.DATA_INTERFACE_LINE_COMMENTS`.
+            dictionary: Adler-32 of the preset dictionary, a key of `s7commplus.zlib_dicts.ZLIB_DICTIONARIES`.
+            xml: The document.
+
+        Raises:
+            ValueError: If `rid` is none of these objects, or `dictionary` is not a preset dictionary.
+        """
+        is_db = rid & 0xFFFF0000 == Ids.DB_ACCESS_AREA_BASE and rid & 0xFFFF in self._data_blocks
+        if not (is_db or rid in self._program_objects or any(rid == area for _, area, _ in PROCESS_AREAS)):
+            raise ValueError(f"Object 0x{rid:08X} is not a registered data block or program object, nor a process area")
+        if dictionary not in ZLIB_DICT_IDENTITIES:
+            raise ValueError(f"0x{dictionary:08X} is not a preset dictionary")
+        self._explore_documents.setdefault(rid, []).append((attribute, _compress_blob(xml, ZLIB_DICT_IDENTITIES[dictionary])))
 
     def get_db(self, db_number: int) -> Optional[DataBlock]:
         """Get a registered data block."""
@@ -1191,12 +1225,19 @@ class S7CommPlusServer:
             response += bytes([0x00, DataType.UDINT])
             response += encode_uint32_vlq(len(db.data))
 
+            if explore_id == Ids.NATIVE_THE_PLC_PROGRAM_RID:
+                response += self._document_attributes(Ids.DB_ACCESS_AREA_BASE | (db_num & 0xFFFF))
             response += bytes([ElementID.TERMINATING_OBJECT])
 
-        # Only the program lists the other blocks; the type-info, alarm and area explores never contained them
+        # Only the program lists the other blocks and the process areas; the type-info, alarm and area explores never contained them
         if explore_id == Ids.NATIVE_THE_PLC_PROGRAM_RID:
             for rid in self._program_objects:
                 response += self._program_object(rid)
+            for _, rid, _ in PROCESS_AREAS:
+                if rid in self._explore_documents:
+                    response += _start_of_object(rid, 0)  # a native object; the clients never read its class
+                    response += self._document_attributes(rid)
+                    response += bytes([ElementID.TERMINATING_OBJECT])
 
         response += bytes([ElementID.TERMINATING_OBJECT])  # PLCProgram
 
@@ -1205,12 +1246,26 @@ class S7CommPlusServer:
         return bytes(response)
 
     def _program_object(self, rid: int) -> bytes:
-        """A registered program object, with its name as the only attribute."""
+        """A registered program object, with its name and its documents as attributes."""
         class_id, name = self._program_objects[rid]
         obj = _start_of_object(rid, class_id)
         if name is not None:
             obj += _name_attribute(name)
-        return obj + bytes([ElementID.TERMINATING_OBJECT])
+        return obj + self._document_attributes(rid) + bytes([ElementID.TERMINATING_OBJECT])
+
+    def _document_attributes(self, rid: int) -> bytes:
+        """The documents of an object as an S7-1500 sends them: the line comments as a sparse BLOB array, the others as BLOBs."""
+        attributes = bytearray()
+        line_comments: list[bytes] = []
+        for attribute, stream in self._explore_documents.get(rid, ()):
+            if attribute == Ids.DATA_INTERFACE_LINE_COMMENTS:
+                line_comments.append(stream)
+            else:
+                attributes += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(attribute) + encode_pvalue_blob(stream)
+        if line_comments:
+            attributes += bytes([ElementID.ATTRIBUTE]) + encode_uint32_vlq(Ids.DATA_INTERFACE_LINE_COMMENTS)
+            attributes += encode_pvalue_sparse_blobs(line_comments)
+        return bytes(attributes)
 
     def _cpu_exec_unit_object(self) -> bytes:
         """theCPUexecUnit as PLCSIM Advanced reports it, reduced to its operating state.

@@ -291,6 +291,34 @@ Symbolic browsing and access remain experimental because observable behavior
 varies across firmware versions. In particular, physical I/Q/M reads and
 symbolic BOOL values can behave differently on some S7-1200 firmware.
 
+Comments
+--------
+
+``get_comments`` reads the comments typed in TIA Portal for every data block
+and process area, keyed by the names ``browse`` returns. It sends one EXPLORE
+of the program and resolves the comments a block takes from elsewhere: a member
+typed with a UDT or an FB gets that block's comments, and a DB declared of a UDT
+gets the UDT's, with the DB's own comments taking precedence per language.
+
+.. code-block:: python
+
+   comments = client.get_comments()
+   for variable in client.browse():
+       print(variable["name"], comments.find(variable["name"]))
+
+   comments.find("Motors.speed", "de-DE")   # one language
+   comments.languages("Motors.speed")       # {"en-US": ..., "de-DE": ...}
+
+``find`` falls back to the comment written on an array for each of its
+elements (``"DB.values[3]"`` to ``"DB.values"``) and to the comment on a field
+of a Struct or UDT array for that field in every element
+(``"DB.motors[1].speed"`` to ``"DB.motors.speed"``). It returns ``None`` when
+there is no comment, and a structure's members do not inherit its comment.
+
+The method is experimental and verified on S7-1500 V2 TLS sessions only.
+Comments on the fields of a system type such as ``CREF`` are not resolved, and
+V1 SessionKey sessions raise ``NotImplementedError``.
+
 CPU state and blocks
 --------------------
 
