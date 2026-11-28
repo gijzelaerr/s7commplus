@@ -1186,9 +1186,9 @@ class S7CommPlusAsyncClient(_ClientMethods):
     ) -> int:
         """Subscribe to PLC alarm events and return the subscription ID.
 
-        See :meth:`S7CommPlusClient.create_alarm_subscription`: on an S7-1200
-        without TLS (key family 01), ``language_ids`` and ``domains`` must be
-        ``None`` (#173).
+        See :meth:`S7CommPlusClient.create_alarm_subscription`: on an S7-1200,
+        with or without TLS, ``language_ids`` and ``domains`` must be ``None``
+        (#173).
         """
         connection = self._require_connected()
         if connection.subscription_container_id == 0:
