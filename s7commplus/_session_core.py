@@ -41,6 +41,7 @@ from ._handshake import (
     _encode_security_key_struct,
     _generate_session_key_blob,
     _create_object_without_session_message,
+    _refused_session_message,
     _log_create_object_return_value,
     _patch_plcsim_server_session_version,
     _session_setup_accepted,
@@ -67,6 +68,7 @@ from .protocol import (
     ObjectId,
     Opcode,
     ProtocolVersion,
+    ReturnValue,
 )
 from .v1_session_key.keys import KeyFamily
 from .vlq import decode_uint32_vlq, decode_uint64_vlq, encode_uint32_vlq
@@ -734,6 +736,10 @@ class SessionCore:
             logger.info(f"ServerSessionVersion captured ({len(self._server_session_version)} bytes)")
         else:
             logger.debug("ServerSessionVersion not found in CreateObject response")
+            if ReturnValue.from_int(return_value).failed:
+                # The PLC answered with object ids but refused the session, e.g. with
+                # SERVICE_TOO_MANY_SESSIONS when its connection resources are used up.
+                raise S7ConnectionError(_refused_session_message(return_value))
         if attrs.public_key_fingerprint is not None:
             self._public_key_fingerprint = attrs.public_key_fingerprint
             self._public_key_checksum = bytes.fromhex(attrs.public_key_fingerprint[3:])

@@ -89,6 +89,20 @@ def _create_object_without_session_message(return_value: int) -> str:
     return message
 
 
+def _refused_session_message(return_value: int) -> str:
+    """Say why a CreateObject reply without a ServerSessionVersion refused the session.
+
+    When its connection resources are used up, an S7-1200 (CPU 1211C FW V4.7)
+    and S7-1500s (FW V2.9 and V4.1) still send session ObjectIds but no
+    ServerSessionVersion, and the ReturnValue ``SERVICE_TOO_MANY_SESSIONS``.
+    """
+    result = ReturnValue.from_int(return_value)
+    message = f"The PLC refused the session: it returned {result} (0x{return_value:016X})"
+    if not result.source and result.code == ServiceResult.SERVICE_TOO_MANY_SESSIONS:
+        message += ". It has no free connection resources; close other sessions (TIA Portal, HMIs, other clients) and retry"
+    return message
+
+
 def _strip_paom_string_in_session_version(struct_bytes: bytes) -> bytes:
     """Replace element 319 in a captured ServerSessionVersion struct with an empty WString.
 
