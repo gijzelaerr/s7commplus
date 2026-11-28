@@ -352,7 +352,11 @@ def parse_offset_info(data: bytes, offset: int, offsetinfotype: int) -> tuple[Of
         return oi, offset + 4
 
     if offsetinfotype in (2, 9):  # String
-        oi.unspecified1, oi.unspecified2, oi.opt_addr, oi.nonopt_addr = struct.unpack_from("<HHII", data, offset)
+        a, b, oi.opt_addr, oi.nonopt_addr = struct.unpack_from("<HHII", data, offset)
+        # unspecified1 is the declared length. The struct-member form (2) sends the two
+        # u16 fields swapped, like Std (1): a String[32] in a struct or UDT comes as
+        # 34, 32 where a top-level one comes as 32, 34 (S7-1200 FW V4.7, S7-1500 FW V2.9).
+        oi.unspecified1, oi.unspecified2 = (b, a) if offsetinfotype == 2 else (a, b)
         return oi, offset + 12
 
     if offsetinfotype in (3, 10):  # Array1Dim
