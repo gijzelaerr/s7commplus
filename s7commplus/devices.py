@@ -8,7 +8,8 @@ family classification.
 Source: Siemens SIMATIC order-number scheme, transcribed from TIA Portal's
 device catalog. Hand-copied and not independently checkable; the
 check_devices_table script validates its shape. Not verified against a live
-PLC.
+PLC, except ``6ES7 512-1SM03-0AB0``, which a CPU 1512SP F-1 PN (FW V4.1)
+reported as ``1;6ES7 512-1SM03-0AB0;V4.1``.
 """
 
 from __future__ import annotations
