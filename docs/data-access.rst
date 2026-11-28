@@ -264,10 +264,13 @@ No PLC date or time type stores a time zone. Values are read as naive
 ``datetime`` and ``time`` objects, and writing an aware one raises
 ``ValueError`` instead of silently shifting or dropping its offset; convert it
 first, for example with ``value.astimezone(datetime.timezone.utc).replace(tzinfo=None)``.
-The accepted ranges follow the TIA Portal data type documentation (not verified
-on hardware): DATE 1990-01-01 to 2168-12-31, DATE_AND_TIME 1990 to 2089, LDT
-and DTL 1970-01-01 to 2262-04-11 23:47:16.854775807, STRING up to 254 and
-WSTRING up to 16382 characters. REAL and LREAL also take infinities and NaN.
+The accepted ranges follow the TIA Portal data type documentation: DATE
+1990-01-01 to 2168-12-31, DATE_AND_TIME 1990 to 2089, LDT and DTL 1970-01-01
+to 2262-04-11 23:47:16.854775807, STRING up to 254 and WSTRING up to 16382
+characters. REAL and LREAL also take infinities and NaN. DATE, DATE_AND_TIME
+and LDT were written and read back at both ends of their ranges, and REAL and
+LREAL with infinities and NaN, on an S7-1200 (FW V4.7) and two S7-1500s (FW
+V2.9 and V4.1); the STRING and WSTRING maximums were not.
 
 A value the PLC type cannot hold (the wrong type, out of range, carrying a time
 zone, or a string longer than its declared length) raises ``TypeError`` or
@@ -277,6 +280,14 @@ declared length the catalog does not give also raises ``ValueError`` before
 anything is sent, since its header and padding follow that length. Writes are
 never retried, and a write batch split over several requests is not atomic, as
 for ``write_tags``.
+
+TIA Portal's "Accessible from HMI/OPC UA/Web API" and "Writable from
+HMI/OPC UA/Web API" settings (``ExternalAccessible`` and ``ExternalWritable``
+in an exported block) do not restrict this client. On an S7-1200 (FW V4.7) and
+two S7-1500s (FW V2.9 and V4.1), variables with either setting cleared were
+browsed, read and written like any other, a whole struct marked not writable
+included. Do not rely on them to protect a variable; use the CPU's protection
+level or user management instead.
 With ``auto_refresh_tags`` set, a name not in the catalog runs the program-change
 check described above once (with the same 10-second limit) and is looked up
 again before anything is encoded or sent; a failed read item does too, through
