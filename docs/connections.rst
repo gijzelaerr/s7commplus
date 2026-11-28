@@ -116,16 +116,17 @@ determine it. The following combinations have been reported on real hardware:
      - Working
    * - S7-1200 CPU 1211C DC/DC/DC (6ES7 211-1AE40-0XB0)
      - V4.7.4
-     - TLS, UMAC user
+     - TLS; access-level password, or a user login (``authenticate(password, username)``)
      - Validated (sync and async: browse, reads and writes of every elementary type, batches of 50). A STRING in a
        struct or UDT needs #238 to be written
    * - S7-1500F CPU 1512SP F-1 PN (6ES7 512-1SK01-0AB0)
      - V2.6.1
      - V1, legacy SessionKey (key family 00)
      - Validated read-only (sync and async: browse and reads of every elementary type). The session stayed
-       up for 75 minutes without a SessionKey renewal. Writes, subscriptions and alarm subscriptions fail: the
-       PLC answers SetMultiVariables and CreateObject with a fatal SystemEvent (SERVICE_REQUEST_PARSING_ERROR)
-       and resets the connection
+       up for 75 minutes without a SessionKey renewal. On this F-CPU and firmware (the 1512SP-1 PN on V2.6
+       above is validated), writes, subscriptions and alarm subscriptions fail: the PLC answers
+       SetMultiVariables and CreateObject with a fatal SystemEvent (SERVICE_REQUEST_PARSING_ERROR) and resets
+       the connection
    * - S7-1500 CPU 1511-1 PN (6ES7 511-1AK01-0AB0)
      - V2.9.9
      - TLS
@@ -133,7 +134,7 @@ determine it. The following combinations have been reported on real hardware:
        struct or UDT needs #238 to be written
    * - S7-1500F CPU 1512SP F-1 PN (6ES7 512-1SM03-0AB0)
      - V4.1.6
-     - TLS, UMAC user
+     - TLS, user login (``authenticate(password, username)``)
      - Validated (sync and async: browse, reads and writes of every elementary type, batches of 50). A STRING in a
        struct or UDT needs #238 to be written
 
