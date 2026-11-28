@@ -155,6 +155,16 @@ class TestOffsetInfo:
         assert oi.opt_addr == 8 and oi.nonopt_addr == 100
         assert off == 12
 
+    def test_string_struct_member_code2_swaps_the_lengths(self) -> None:
+        # A String[32] inside a struct or UDT (2), as an S7-1200 FW V4.7 and an S7-1500
+        # FW V2.9 send it: 34, then 32. A top-level one (9) sends 32, then 34.
+        data = struct.pack("<HHII", 34, 32, 227, 120)
+        oi, off = ti.parse_offset_info(data, 0, 2)
+        assert oi.unspecified1 == 32
+        assert oi.unspecified2 == 34
+        assert oi.opt_addr == 227 and oi.nonopt_addr == 120
+        assert off == 12
+
     def test_array1dim(self) -> None:
         # Array1Dim (10): u16,u16,u32 opt,u32 nonopt,i32 lower,u32 count.
         data = struct.pack("<HHIIiI", 0, 0, 16, 50, -3, 10)
