@@ -493,11 +493,11 @@ def _check_legitimation_response(payload: bytes, function: Optional[int] = None)
     A return value whose code is one of the delegitimated codes means the
     password was wrong and raises :class:`S7AuthenticationError`, as
     :func:`_check_v1_legitimation_response` does on the V1 path. So does an
-    access-denied answer from the security subsystem, which is how a CPU 1211C
-    FW V4.7 refuses a wrong access-level password (``0x80008318FFFFFF9C``). That
-    answer is seen on this one PLC and firmware only. The rule also applies to a
-    UMAC login, so a wrong user name refused the same way reads as a wrong
-    password too. Every other refusal is left to
+    access-denied answer from the security subsystem (``0x80008318FFFFFF9C``),
+    which is how a CPU 1211C FW V4.7 refuses a wrong access-level password and a
+    CPU 1512SP F-1 PN FW V4.1 a wrong UMAC password. The rule also applies when a
+    UMAC login is refused for another reason, so a wrong user name refused the
+    same way reads as a wrong password too. Every other refusal is left to
     :func:`_check_set_variable_response`.
     """
     if function != FunctionCode.ERROR and payload:
