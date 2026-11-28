@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 import ssl
 import struct
 from collections import deque
@@ -356,6 +357,32 @@ class _ReplyWait:
     def __init__(self) -> None:
         self.system_events = 0
         self.stale_responses = 0
+
+
+# An S7-1200 order number: 6ES7 21x-... or the SIPLUS 6AG1 21x-...
+_S7_1200_ORDER_NUMBER = re.compile(r"(?:^|;)\s*(?:6ES7|6AG1) 21\d-")
+
+
+def _alarm_texts_and_domain_filter(family: Optional[KeyFamily], server_session_version: Optional[bytes] = None) -> bool:
+    """Whether an alarm subscription may send the domain filter and the text attributes.
+
+    An S7-1200 refuses an alarm subscription carrying ``AlarmDomainFilter``
+    (7731) and ``SendTexts``/``TextLanguages`` (8173/8181) with ``INVALID_AID``,
+    and accepts it without them: a CPU 1214C FW V4.2 without TLS (key family 01,
+    #173) and a CPU 1211C FW V4.7 over TLS, whose session keeps the default key
+    family. So the S7-1200 is also recognised by the order-number prefix in the
+    device string of its ServerSessionVersion, whether or not the device table
+    lists it. The PLCSIM S7-1200 (``6ES7 SIM-01200-VPLC``) does not match and
+    keeps the reference layout, which is not verified. Every other PLC keeps the
+    S7-1500 reference layout.
+    """
+    if family == KeyFamily.S7_1200:
+        return False
+    if server_session_version is not None:
+        device = extract_session_version_string(server_session_version)
+        if device is not None and _S7_1200_ORDER_NUMBER.search(device):
+            return False
+    return True
 
 
 class SessionCore:
@@ -1170,6 +1197,11 @@ class SessionCore:
     # session drives an ``ssl.SSLObject`` over memory BIOs; the clients run the
     # handshake loop, which needs I/O, between `_start_tls_session` and
     # `_tls_session_established`.
+
+    @property
+    def alarm_texts_and_domain_filter(self) -> bool:
+        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family, self._server_session_version)
 
     def peer_certificate_fingerprint(self) -> Optional[bytes]:
         """SHA-256 of the TLS certificate the PLC presented, or None without TLS.

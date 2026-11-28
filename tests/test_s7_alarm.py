@@ -447,7 +447,10 @@ def _server_session_version(paom: str) -> bytes:
         ("1;6ES7 211-1AE40-0XB0 ;V4.7", False),  # CPU 1211C over TLS, trailing space as the PLC sends it
         ("1;6ES7 214-1AG40-0XB0 ;V4.5", False),  # CPU 1214C
         ("1;6ES7 511-1AK01-0AB0;V2.9", True),  # CPU 1511-1 PN
-        ("1;6ES7 512-1SM03-0AB0;V4.1", True),  # not in the device table: keeps the reference layout
+        ("1;6ES7 512-1SM03-0AB0;V4.1", True),  # CPU 1512SP F-1 PN
+        ("1;6ES7 217-1AG90-0XB0 ;V4.9", False),  # an S7-1200-shaped order number the device table lacks
+        ("1;6AG1 214-1AG40-2XB0 ;V4.5", False),  # SIPLUS CPU 1214C
+        ("1;6ES7 SIM-01200-VPLC;V4.7", True),  # PLCSIM S7-1200: reference layout, not verified
     ],
 )
 def test_alarm_subscription_layout_by_order_number_on_tls(paom: str, sends_texts: bool) -> None:

@@ -127,10 +127,8 @@ from .error import (
     S7TimeoutError,
     S7TlsHandshakeError,
 )
-from .devices import device_family
 from .legitimation import (
     extract_session_oms_version,
-    extract_session_version_string,
     oms_session_version_name,
 )
 from .protocol import (
@@ -254,27 +252,6 @@ def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_versio
     if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200):
         return object_qualifier_version
     return protocol_version
-
-
-def _alarm_texts_and_domain_filter(family: Optional[KeyFamily], server_session_version: Optional[bytes] = None) -> bool:
-    """Whether an alarm subscription may send the domain filter and the text attributes.
-
-    An S7-1200 refuses an alarm subscription carrying ``AlarmDomainFilter``
-    (7731) and ``SendTexts``/``TextLanguages`` (8173/8181) with ``INVALID_AID``,
-    and accepts it without them: a CPU 1214C FW V4.2 without TLS (key family 01,
-    #173) and a CPU 1211C FW V4.7 over TLS, whose session keeps the default
-    key family. So the S7-1200 is also recognised by the order number in its
-    ServerSessionVersion.
-    Every other PLC keeps the S7-1500 reference layout.
-    """
-    if family == KeyFamily.S7_1200:
-        return False
-    if server_session_version is not None:
-        device = extract_session_version_string(server_session_version)
-        parts = device.split(";") if device else []
-        if len(parts) > 1 and device_family(parts[1].strip()) == "s7-1200":
-            return False
-    return True
 
 
 def _request_frame_overhead(with_integrity_id: bool, session_key_active: bool) -> int:
@@ -571,11 +548,6 @@ class S7CommPlusConnection(SessionCore):
         :attr:`object_qualifier_version`, the S7-1500 the negotiated protocol version.
         """
         return _write_delete_qualifier_version(self._v1_session_key_family, self._protocol_version, self.object_qualifier_version)
-
-    @property
-    def alarm_texts_and_domain_filter(self) -> bool:
-        """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
-        return _alarm_texts_and_domain_filter(self._v1_session_key_family, self._server_session_version)
 
     @property
     def oms_secret(self) -> Optional[bytes]:
