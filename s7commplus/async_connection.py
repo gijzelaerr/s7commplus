@@ -263,7 +263,7 @@ class S7CommPlusAsyncConnection(SessionCore):
     @property
     def alarm_texts_and_domain_filter(self) -> bool:
         """Whether an alarm subscription may send the domain filter and texts; see ``_alarm_texts_and_domain_filter``."""
-        return _alarm_texts_and_domain_filter(self._v1_session_key_family)
+        return _alarm_texts_and_domain_filter(self._v1_session_key_family, self._server_session_version)
 
     async def connect(self, p: dict[str, Any], fingerprint: Optional[str] = None) -> None:
         """Open one transport and session with the client's ``connect()`` arguments ``p``.

@@ -2283,10 +2283,10 @@ class S7CommPlusClient(_ClientMethods):
             credit_limit: Notification credit limit. The default of 10 matches
                 the working S7-1500 reference trace.
 
-        On an S7-1200 without TLS (key family 01) the request leaves out the
-        domain filter and the text attributes, which a CPU 1214C FW V4.2 refuses
-        (#173): ``language_ids`` and ``domains`` must be ``None`` there, and the
-        PLC is not asked to send alarm texts.
+        On an S7-1200, with or without TLS, the request leaves out the domain
+        filter and the text attributes, which a CPU 1214C FW V4.2 (#173) and a
+        CPU 1211C FW V4.7 refuse: ``language_ids`` and ``domains`` must be
+        ``None`` there, and the PLC is not asked to send alarm texts.
 
         Returns:
             Subscription object ID assigned by the PLC.

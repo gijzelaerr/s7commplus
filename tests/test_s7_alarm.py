@@ -429,3 +429,32 @@ def test_sync_alarm_methods_require_connection(method: str, args: tuple[object, 
     client = S7CommPlusClient()
     with pytest.raises(RuntimeError, match="Not connected"):
         getattr(client, method)(*args)
+
+
+def _server_session_version(paom: str) -> bytes:
+    """A ServerSessionVersion value carrying only the device string, as a TLS session reports it."""
+    from s7commplus.protocol import ObjectId
+
+    text = paom.encode("utf-8")
+    value = bytes([0x00, DataType.STRUCT]) + struct.pack(">I", ObjectId.SERVER_SESSION_VERSION)
+    value += encode_uint32_vlq(Ids.SESSION_VERSION_SYSTEM_PAOM_STRING)
+    return value + bytes([0x00, DataType.WSTRING]) + encode_uint32_vlq(len(text)) + text
+
+
+@pytest.mark.parametrize(
+    ("paom", "sends_texts"),
+    [
+        ("1;6ES7 211-1AE40-0XB0 ;V4.7", False),  # CPU 1211C over TLS, trailing space as the PLC sends it
+        ("1;6ES7 214-1AG40-0XB0 ;V4.5", False),  # CPU 1214C
+        ("1;6ES7 511-1AK01-0AB0;V2.9", True),  # CPU 1511-1 PN
+        ("1;6ES7 512-1SM03-0AB0;V4.1", True),  # not in the device table: keeps the reference layout
+    ],
+)
+def test_alarm_subscription_layout_by_order_number_on_tls(paom: str, sends_texts: bool) -> None:
+    """A TLS session keeps the default key family (S7-1500), so the S7-1200 is recognised by its order number."""
+    from s7commplus.async_connection import S7CommPlusAsyncConnection
+    from s7commplus.connection import S7CommPlusConnection
+
+    for conn in (S7CommPlusConnection("127.0.0.1"), S7CommPlusAsyncConnection()):
+        conn._server_session_version = _server_session_version(paom)
+        assert conn.alarm_texts_and_domain_filter is sends_texts
