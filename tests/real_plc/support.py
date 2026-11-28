@@ -58,6 +58,11 @@ EXPECTED_BOOLS = (True, False, False, False, False, False, False, False)
 # history, the process list and the pytest invocation recorded in reports.
 PASSWORD_ENV = "S7COMMPLUS_TEST_PASSWORD"
 
+# Optional user name for a PLC that uses local user management (UMAC) rather
+# than an access-level password. With it, the client connects without the
+# password and then calls authenticate(password, username).
+USERNAME_ENV = "S7COMMPLUS_TEST_USERNAME"
+
 # Seconds a scenario waits for one subscription notification.
 NOTIFICATION_TIMEOUT = 10.0
 
@@ -119,6 +124,7 @@ class PLCConfig:
     tls_ca: str | None
     client_kind: str = "sync"
     password: str | None = field(default=None, repr=False)
+    username: str | None = field(default=None, repr=False)
     expected_cpu_state: str | None = None
 
 
@@ -212,6 +218,14 @@ def _connect_arguments(config: PLCConfig, overrides: dict[str, Any]) -> dict[str
     return arguments
 
 
+def _split_login(config: PLCConfig, arguments: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """With a UMAC user name, take the password out of the connect arguments to authenticate after connecting."""
+    if config.username and arguments.get("password"):
+        password = arguments["password"]
+        return {**arguments, "password": None}, password
+    return arguments, None
+
+
 def _metadata(client: Any, config: PLCConfig, kind: str) -> dict[str, MetadataValue]:
     return {
         "protocol_path": "s7commplus",
@@ -233,7 +247,10 @@ class S7CommPlusAdapter:
         self.client = Client()
 
     def connect(self, **overrides: Any) -> None:
-        self.client.connect(self.config.host, **_connect_arguments(self.config, overrides))
+        arguments, password = _split_login(self.config, _connect_arguments(self.config, overrides))
+        self.client.connect(self.config.host, **arguments)
+        if password is not None:
+            self.client.authenticate(password, self.config.username or "")
 
     def disconnect(self) -> None:
         self.client.disconnect()
@@ -332,7 +349,10 @@ class AsyncS7CommPlusAdapter:
         return self.loop.run_until_complete(call())
 
     def connect(self, **overrides: Any) -> None:
-        self._run(lambda: self.client.connect(self.config.host, **_connect_arguments(self.config, overrides)))
+        arguments, password = _split_login(self.config, _connect_arguments(self.config, overrides))
+        self._run(lambda: self.client.connect(self.config.host, **arguments))
+        if password is not None:
+            self._run(lambda: self.client.authenticate(password, self.config.username or ""))
 
     def disconnect(self) -> None:
         self._run(self.client.disconnect)

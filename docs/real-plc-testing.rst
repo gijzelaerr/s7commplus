@@ -109,7 +109,10 @@ without it the state is only recorded.
 For a password-protected PLC, put the password in the
 ``S7COMMPLUS_TEST_PASSWORD`` environment variable. There is deliberately no
 command-line option for it, so it stays out of the shell history and the
-process list. The value is redacted from both artifacts. The runner selects the
+process list. The value is redacted from both artifacts. For a PLC with local
+user management (UMAC), also put the user name in
+``S7COMMPLUS_TEST_USERNAME``: the client then connects without the password
+and calls ``authenticate(password, username)``. The user name is redacted too. The runner selects the
 ``@password`` scenarios only when the variable is set, and the ``@tls``
 scenarios only with ``--plc-use-tls``, so a run never reports ``partial``
 merely because it was not configured for them. The wrong-password scenario is

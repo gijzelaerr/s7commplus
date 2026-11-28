@@ -35,11 +35,20 @@ _SENSITIVE_ASSIGNMENT = re.compile(
 )
 
 
-def sanitize_diagnostic(value: object, sensitive_values: tuple[str, ...] = (), limit: int = 12_000) -> str:
-    """Remove connection and credential material and cap report size."""
+def sanitize_diagnostic(
+    value: object, sensitive_values: tuple[str, ...] = (), limit: int = 12_000, sensitive_words: tuple[str, ...] = ()
+) -> str:
+    """Remove connection and credential material and cap report size.
+
+    ``sensitive_values`` are removed wherever they occur. ``sensitive_words`` are
+    removed only as whole words: a user name can be two characters long, and
+    removing it inside other words would mangle the report.
+    """
     text = str(value)
     for sensitive in sorted((item for item in sensitive_values if item), key=len, reverse=True):
         text = text.replace(sensitive, "<redacted>")
+    for word in sorted((item for item in sensitive_words if item), key=len, reverse=True):
+        text = re.sub(rf"(?<!\w){re.escape(word)}(?!\w)", "<redacted>", text)
     text = _IPV4.sub("<redacted-ip>", text)
     text = _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=<redacted>", text)
     return text[:limit]
@@ -71,6 +80,7 @@ class RealPLCReport:
     scenarios: dict[str, ScenarioResult] = field(default_factory=dict)
     runtime_metadata: dict[str, MetadataValue] = field(default_factory=dict)
     sensitive_values: tuple[str, ...] = ()
+    sensitive_words: tuple[str, ...] = ()
 
     def record(self, report: Any) -> None:
         nodeid = str(report.nodeid).replace("\\", "/")
@@ -86,7 +96,11 @@ class RealPLCReport:
         # The client a scenario ran with is one of its parameter ids (see --plc-client).
         parameters = nodeid.rsplit("[", 1)[1].rstrip("]").split("-") if nodeid.endswith("]") else []
         tags += sorted(kind for kind in ("sync", "async") if kind in parameters)
-        diagnostic = None if report.passed else sanitize_diagnostic(report.longrepr, self.sensitive_values)
+        diagnostic = (
+            None
+            if report.passed
+            else sanitize_diagnostic(report.longrepr, self.sensitive_values, sensitive_words=self.sensitive_words)
+        )
         self.scenarios[nodeid] = ScenarioResult(nodeid, status, tags, report.duration, diagnostic)
 
     def payload(self, supplied_metadata: dict[str, MetadataValue]) -> dict[str, object]:

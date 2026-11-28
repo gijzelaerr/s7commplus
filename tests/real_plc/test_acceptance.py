@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import ssl
 import tempfile
 import time
@@ -22,6 +23,7 @@ from tests.real_plc.support import (
     NAMED_WRITE_VALUES,
     NOTIFICATION_TIMEOUT,
     PASSWORD_ENV,
+    USERNAME_ENV,
     PENDING_FEATURES,
     WRITE_VALUES,
     PLCAdapter,
@@ -66,6 +68,7 @@ def plc_config(request: pytest.FixtureRequest, plc_client_kind: str) -> PLCConfi
         tls_ca=request.config.getoption("--plc-tls-ca") or None,
         client_kind=plc_client_kind,
         password=os.environ.get(PASSWORD_ENV) or None,
+        username=os.environ.get(USERNAME_ENV) or None,
         expected_cpu_state=expected_state or None,
     )
 
@@ -95,6 +98,12 @@ def reportable_fields_are_safe(request: pytest.FixtureRequest) -> None:
     password = os.environ.get(PASSWORD_ENV)
     if password:
         assert not any(password in value for value in values), "a reportable field contains the test password"
+    username = os.environ.get(USERNAME_ENV)
+    if username:
+        # As a whole word: a user name can be as short as two characters, which
+        # ordinary model or security-mode text may contain.
+        word = re.compile(rf"(?<!\w){re.escape(username)}(?!\w)")
+        assert not any(word.search(value) for value in values), "a reportable field contains the test user name"
 
 
 @given("the client uses the configured S7CommPlus security mode", target_fixture="plc_adapter")
