@@ -124,3 +124,10 @@ def test_async_umac_user_authenticates_after_connecting() -> None:
         adapter.loop.close()
     assert adapter.client.connect.await_args.kwargs["password"] is None
     adapter.client.authenticate.assert_awaited_once_with("pw", "tester")
+
+
+def test_a_short_user_name_is_redacted_only_as_a_whole_word() -> None:
+    text = "login as ab failed; security mode: TLS, user tab, absent"
+    assert sanitize_diagnostic(text, sensitive_words=("ab",)) == (
+        "login as <redacted> failed; security mode: TLS, user tab, absent"
+    )

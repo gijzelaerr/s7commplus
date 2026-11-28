@@ -153,6 +153,9 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "e2e: mark test as end-to-end test requiring real PLC connection",
     )
+    if os.environ.get(USERNAME_ENV) and not os.environ.get(PASSWORD_ENV):
+        # Without a password the user name is never used, and every scenario would run unauthenticated.
+        raise pytest.UsageError(f"{USERNAME_ENV} is set but {PASSWORD_ENV} is not; set both for a UMAC login")
     global _REAL_PLC_REPORT
     _REAL_PLC_REPORT = RealPLCReport(
         sensitive_values=tuple(
@@ -163,10 +166,10 @@ def pytest_configure(config: pytest.Config) -> None:
                 config.getoption("--plc-tls-key"),
                 config.getoption("--plc-tls-ca"),
                 os.environ.get(PASSWORD_ENV, ""),
-                os.environ.get(USERNAME_ENV, ""),
             )
             if value
-        )
+        ),
+        sensitive_words=tuple(value for value in (os.environ.get(USERNAME_ENV, ""),) if value),
     )
     config._real_plc_report = _REAL_PLC_REPORT
 
