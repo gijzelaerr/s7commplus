@@ -469,7 +469,12 @@ def notification_has_written_value(plc_adapter: PLCAdapter, scenario_state: dict
     deadline = time.monotonic() + NOTIFICATION_TIMEOUT
     seen: list[str] = []
     while time.monotonic() < deadline:
-        value = _notified_value(plc_adapter.receive_notification(scenario_state["subscription_id"]))
+        notification = plc_adapter.receive_notification(scenario_state["subscription_id"])
+        if not notification.values and not notification.errors:
+            # A cycle with no change: a CPU 1511-1 PN (FW V2.9) sends these between the
+            # initial value and the written one.
+            continue
+        value = _notified_value(notification)
         if value == expected:
             return
         seen.append(value.hex())
