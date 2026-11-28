@@ -15,6 +15,7 @@ class TestDeviceName:
         assert device_name("6ES7 212-1AE40-0XB0") == "CPU 1212C DC/DC/DC"  # issue #10
         assert device_name("6ES7 515-2AM00-0AB0") == "CPU 1515-2 PN"  # issue #34 family
         assert device_name("6ES7 841-0CC05-0YA5") == "CPU 841 (PLCSIM)"
+        assert device_name("6ES7 512-1SM03-0AB0") == "CPU 1512SP F-1 PN"  # FW V4.1, reported by a live PLC
 
     def test_accepts_a_full_paom_string(self) -> None:
         # The middle field of a ServerSessionVersion PAOM string resolves.
@@ -46,6 +47,7 @@ class TestDeviceFamily:
             ("6ES7 511-1AK00-0AB0", "s7-1500"),
             ("6ES7 515-2AM00-0AB0", "s7-1500"),
             ("6ES7 512-1DK01-0AB0", "s7-1500-sp"),
+            ("6ES7 512-1SM03-0AB0", "s7-1500-sp"),
             ("6ES7 672-7AC00-0YA0", "s7-1500-sp"),
             ("6ES7 841-0CC05-0YA5", "plcsim"),
             ("6ES7 SIM-01500-VPLC", "plcsim"),

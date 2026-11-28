@@ -8,7 +8,8 @@ family classification.
 Source: Siemens SIMATIC order-number scheme, transcribed from TIA Portal's
 device catalog. Hand-copied and not independently checkable; the
 check_devices_table script validates its shape. Not verified against a live
-PLC.
+PLC, except ``6ES7 512-1SM03-0AB0``, which a CPU 1512SP F-1 PN (FW V4.1)
+reported as ``1;6ES7 512-1SM03-0AB0;V4.1``.
 """
 
 from __future__ import annotations
@@ -103,6 +104,7 @@ DEVICE_NAMES: dict[str, str] = {
     "6ES7 512-1DK01-0AB0": "CPU 1512SP-1 PN",
     "6ES7 512-1SK00-0AB0": "CPU 1512SP F-1 PN",
     "6ES7 512-1SK01-0AB0": "CPU 1512SP F-1 PN",
+    "6ES7 512-1SM03-0AB0": "CPU 1512SP F-1 PN",
     "6ES7 513-1AL00-0AB0": "CPU 1513-1 PN",
     "6ES7 513-1AL01-0AB0": "CPU 1513-1 PN",
     "6ES7 513-1FL00-0AB0": "CPU 1513F-1 PN",
