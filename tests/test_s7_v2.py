@@ -582,6 +582,7 @@ class TestLegitimationResponseCheck:
             int(ServiceResult.SERVICE_SESSION_DELEGITIMATED),  # 22
             int(ServiceResult.SERVICE_SESSION_DELEGITIMATED_LEGACY) & 0xFFFFFFFFFFFFFFFF,  # -118
             0x8318890001B30016,  # a composite whose low word is 22, as on the V1 path
+            0x80008318FFFFFF9C,  # ACCESS_DENIED from SECU: a wrong access-level password, CPU 1211C FW V4.7
         ],
     )
     def test_delegitimated_code_raises_authentication_error(self, return_value: int) -> None:
