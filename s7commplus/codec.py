@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from .error import S7ReturnValueError
-from .protocol import PROTOCOL_ID, ArrayKind, DataType, ElementID, Ids, ObjectId, ProtocolVersion, ReturnValue
+from .protocol import PROTOCOL_ID, ArrayKind, DataType, ElementID, Ids, ObjectId, ProtocolVersion, ReturnValue, ServiceResult
 from .vlq import (
     decode_int32_vlq,
     decode_int64_vlq,
@@ -176,7 +176,11 @@ def parse_or_raise_for_return_value(response: bytes, operation: str) -> int:
         raise ValueError(f"{operation}: truncated ReturnValue") from error
     if return_value != 0:
         result = ReturnValue.from_int(return_value)
-        raise S7ReturnValueError(f"{operation} failed: PLC returned 0x{result.raw:016X} ({result})", return_value, response)
+        message = f"{operation} failed: PLC returned 0x{result.raw:016X} ({result})"
+        if result.failed and not result.source and result.code == ServiceResult.SERVICE_ACCESS_DENIED:
+            # A protected PLC answers this before a login, e.g. to the browse a named read starts with.
+            message += ". The session's access level does not allow it; log in with connect(password=...) or authenticate()"
+        raise S7ReturnValueError(message, return_value, response)
     return offset
 
 
