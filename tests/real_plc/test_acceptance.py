@@ -468,9 +468,11 @@ def notification_has_written_value(plc_adapter: PLCAdapter, scenario_state: dict
     _, expected, _, _ = WRITE_VALUES[scenario_state["value_type"]]
     deadline = time.monotonic() + NOTIFICATION_TIMEOUT
     seen: list[str] = []
+    empty = 0
     while time.monotonic() < deadline:
         notification = plc_adapter.receive_notification(scenario_state["subscription_id"])
         if not notification.values and not notification.errors:
+            empty += 1
             # A cycle with no change: a CPU 1511-1 PN (FW V2.9) sends these between the
             # initial value and the written one.
             continue
@@ -478,7 +480,7 @@ def notification_has_written_value(plc_adapter: PLCAdapter, scenario_state: dict
         if value == expected:
             return
         seen.append(value.hex())
-    pytest.fail(f"no notification carried {expected.hex()} within {NOTIFICATION_TIMEOUT}s; saw {seen}")
+    pytest.fail(f"no notification carried {expected.hex()} within {NOTIFICATION_TIMEOUT}s; saw {seen} and {empty} empty")
 
 
 @then("the subscription is deleted cleanly")
