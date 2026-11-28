@@ -245,11 +245,12 @@ def _write_delete_qualifier_version(family: Optional[KeyFamily], protocol_versio
     delete are the same DeleteObject of the session's subscription container, and
     the CPU refused the V1 alarm delete with a fatal SystemEvent as well (#136);
     ``write_symbolic`` is the same SetMultiVariables request as ``write_tags``,
-    which that CPU accepts with V2. The S7-1500 keeps the negotiated protocol
-    version, which these requests have always used and which hasn't been checked
-    on hardware.
+    which that CPU accepts with V2. The S7-1500 (key family 00) needs V2 as
+    well: a CPU 1512SP F-1 PN FW V2.6 answers a V1-layout write or subscription
+    delete with a fatal SERVICE_REQUEST_PARSING_ERROR, and a WinCC panel sends
+    both with the V2 layout to that CPU.
     """
-    if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200):
+    if family in (KeyFamily.PLCSIM, KeyFamily.S7_1200, KeyFamily.S7_1500):
         return object_qualifier_version
     return protocol_version
 
@@ -439,6 +440,7 @@ class S7CommPlusConnection(SessionCore):
         # V2+ IntegrityId tracking
         self._integrity_id_read: int = 0
         self._integrity_id_write: int = 0
+        self._activation_key_qualifier: int = 0
         self._with_integrity_id: bool = False
 
         # TLS OMS exporter secret (for legitimation key derivation)
@@ -1102,6 +1104,8 @@ class S7CommPlusConnection(SessionCore):
                 elif left > 0 and self._incoming_frame_ready():
                     frame = self._recv_s7_data(left, idle_ok=True)
                 else:
+                    frame = None
+                if frame is not None and self._skippable_system_event(frame):
                     frame = None
                 if frame is not None:
                     data = self._verified_incoming_data(frame)

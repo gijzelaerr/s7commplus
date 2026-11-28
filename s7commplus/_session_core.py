@@ -179,6 +179,13 @@ def _v1_session_key_profile(override: Optional[bool], session_key: Optional[byte
     return override is not False
 
 
+# Requests whose IntegrityId comes from the write counter and whose replies,
+# on a V1 S7-1500, carry the IntegrityId after the body.
+_WRITE_CLASS_FUNCTIONS = frozenset(
+    {FunctionCode.SET_MULTI_VARIABLES, FunctionCode.SET_VARIABLE, FunctionCode.CREATE_OBJECT, FunctionCode.DELETE_OBJECT}
+)
+
+
 def _integrity_id_follows_body(family: Optional[KeyFamily], function_code: int) -> bool:
     """Whether a V1 SessionKey response carries its IntegrityId after the body, not before it.
 
@@ -186,10 +193,15 @@ def _integrity_id_follows_body(family: Optional[KeyFamily], function_code: int) 
     A CPU 1215C FW V4.2 starts its CreateObject response with the return value
     as well, and a CPU 1214C FW V4.2 its SetMultiVariables response (#136); other
     responses keep the existing handling, which is all that has been exercised
-    on these CPUs.
+    on these CPUs. An S7-1500 (key family 00) does it for every write-class
+    reply: a CPU 1512SP F-1 PN FW V2.6 answers a write with ``00 14 00000000``,
+    ReturnValue 0 before the IntegrityId, and its CreateObject, DeleteObject
+    and SetVariable replies the same way.
     """
     if family == KeyFamily.PLCSIM:
         return True
+    if family == KeyFamily.S7_1500:
+        return function_code in _WRITE_CLASS_FUNCTIONS
     return family == KeyFamily.S7_1200 and function_code in (FunctionCode.CREATE_OBJECT, FunctionCode.SET_MULTI_VARIABLES)
 
 
@@ -401,6 +413,7 @@ class SessionCore:
     _with_integrity_id: bool
     _integrity_id_read: int
     _integrity_id_write: int
+    _activation_key_qualifier: int
     _legacy_s7_1500: Optional[bool]
     _v1_session_key_family: KeyFamily
     _last_raw_response_payload: Optional[bytes]
@@ -850,6 +863,18 @@ class SessionCore:
         return True
 
     # --- Sorting the frames that arrive while a reply is awaited ---
+
+    def _skippable_system_event(self, frame: bytes) -> bool:
+        """Whether ``frame`` is a non-fatal SystemEvent, which a notification wait skips.
+
+        A V1 S7-1500 sends these unasked, for example ``LOGOUT`` when another
+        session ends. A fatal one raises, as it does while waiting for a reply.
+        """
+        version, data_length, consumed = decode_header(frame)
+        if version != ProtocolVersion.SYSTEM_EVENT:
+            return False
+        _check_system_event(bytes(frame[consumed : consumed + data_length]))
+        return True
 
     def _authenticated_data(self, frame: bytes) -> bytes:
         """Return a frame's application data, authenticated when a SessionKey is set.
@@ -1390,6 +1415,7 @@ class SessionCore:
     def _session_activate_payload(self) -> bytes:
         """The SetVariable that activates the V3 session after the SecurityKey handshake (address 323 = USINT(5))."""
         logger.debug("Session activation: SET_VARIABLE addr 323 = USINT(5)")
+        self._activation_key_qualifier = self._sequence_number
         return _build_session_activate_payload(self._session_id, self._sequence_number)
 
     def _session_activated(self) -> None:
@@ -1398,6 +1424,12 @@ class SessionCore:
             # Not fatal: no PLC is known to need it, and the emulator has no SetVariable.
             logger.warning("Session activation answered with the generic error function")
             return
+        if self.legacy_s7_1500 and self._v1_session_key_family == KeyFamily.S7_1500:
+            # The activation's ObjectQualifier carries its sequence number as KEY_QUALIFIER,
+            # and the PLC expects the next write-class IntegrityId to follow it: TIA Portal
+            # and a WinCC panel activate with 4 and write with 5. A CPU 1512SP F-1 PN FW V2.6
+            # answered any lower id with a fatal SERVICE_REQUEST_PARSING_ERROR.
+            self._integrity_id_write = (self._activation_key_qualifier + 1) & 0xFFFFFFFF
         logger.info("Session activation completed")
 
     def _encode_delete_session(self) -> bytes:
@@ -1452,6 +1484,7 @@ class SessionCore:
         self._with_integrity_id = False
         self._integrity_id_read = 0
         self._integrity_id_write = 0
+        self._activation_key_qualifier = 0
         self._protection_level = None
         self._notification_frames.clear()
         self._notification_frame_overflows = 0

@@ -1075,6 +1075,8 @@ class S7CommPlusAsyncClient(_ClientMethods):
                     frame: Optional[bytes] = self._connection._notification_frames.popleft()
                 else:
                     frame = await self._connection._recv_notification_frame(deadline, wait)
+                if frame is not None and self._connection._skippable_system_event(frame):
+                    frame = None
                 if frame is not None:
                     await self._connection._verified_incoming_data(frame)
             if frame is None:
@@ -1242,6 +1244,8 @@ class S7CommPlusAsyncClient(_ClientMethods):
                         frame = self._connection._notification_frames.popleft()
                     else:
                         frame = await self._connection._recv_notification_frame(deadline, wait)
+                    if frame is not None and self._connection._skippable_system_event(frame):
+                        frame = None
                     if frame is not None:
                         await self._connection._verified_incoming_data(frame)
                 if frame is None:
